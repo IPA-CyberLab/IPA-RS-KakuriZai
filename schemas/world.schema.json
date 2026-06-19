@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Kakurizai World",
+  "title": "KakuriZai World",
   "type": "object",
   "required": ["version", "id", "name", "status", "sourcePath", "backend", "paths", "sessions", "apply"],
   "properties": {

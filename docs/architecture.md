@@ -5,7 +5,7 @@
 - IsolatedAgent for existing native desktop and Linux lifecycle behavior.
 - CubeSandbox for MicroVM-backed execution.
 
-The Kakurizai layer owns World metadata and Studio API state. The Cube backend generates a `RunCubeSandboxRequest` with four host directory mounts:
+The KakuriZai layer owns World metadata and Studio API state. The Cube backend generates a `RunCubeSandboxRequest` with four host directory mounts:
 
 - lower: original source path, read-only
 - upper: per-World writable layer

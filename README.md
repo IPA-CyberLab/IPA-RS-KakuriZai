@@ -1,6 +1,6 @@
-# IPA-RS Kakurizai
+# IPA-RS KakuriZai
 
-Kakurizai is a World lifecycle control plane and compact Agent Studio UI for isolated workspaces. It imports IPA-RS IsolatedAgent and Tencent CubeSandbox as Git submodules, then adds a `cube-sandbox-overlay` backend that maps a host source folder to a writable per-World upper layer.
+KakuriZai is a World lifecycle control plane and compact Agent Studio UI for isolated workspaces. It imports IPA-RS IsolatedAgent and Tencent CubeSandbox as Git submodules, then adds a `cube-sandbox-overlay` backend that maps a host source folder to a writable per-World upper layer.
 
 ## Submodules
 
