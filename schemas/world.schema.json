@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Kakurizai World",
+  "type": "object",
+  "required": ["version", "id", "name", "status", "sourcePath", "backend", "paths", "sessions", "apply"],
+  "properties": {
+    "version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z0-9._-]+-[a-f0-9]{12}$" },
+    "name": { "type": "string", "minLength": 1 },
+    "status": {
+      "enum": ["creating", "created", "ready", "pending-cube", "pending-agentctl", "failed"]
+    },
+    "sourcePath": { "type": "string" },
+    "backend": {
+      "enum": [
+        "apfs-clone",
+        "windows-block-clone",
+        "linux-native",
+        "systemd-nspawn",
+        "btrfs",
+        "path-preserving-overlay",
+        "windows-minifilter-overlay",
+        "cube-sandbox-overlay"
+      ]
+    },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "paths": {
+      "type": "object",
+      "required": ["metadata", "upper", "workdir", "whiteouts", "logs", "exports"],
+      "properties": {
+        "metadata": { "type": "string" },
+        "upper": { "type": "string" },
+        "workdir": { "type": "string" },
+        "whiteouts": { "type": "string" },
+        "logs": { "type": "string" },
+        "exports": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "sandbox": {
+      "type": ["object", "null"],
+      "properties": {
+        "id": { "type": ["string", "null"] },
+        "containerId": { "type": ["string", "null"] },
+        "baseId": { "type": ["string", "null"] },
+        "runtime": { "type": "string" },
+        "mode": { "type": ["string", "null"] },
+        "status": { "type": "string" },
+        "reason": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "sessions": { "type": "array" },
+    "apply": {
+      "type": "object",
+      "required": ["state", "lastAppliedAt", "lastExportPath"],
+      "properties": {
+        "state": { "enum": ["clean", "dirty", "applying", "failed"] },
+        "lastAppliedAt": { "type": ["string", "null"], "format": "date-time" },
+        "lastExportPath": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "backendConfig": { "type": "object" }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "storeDir": ".kakurizai/store",
+  "defaultBackend": "cube-sandbox-overlay",
+  "studio": {
+    "host": "127.0.0.1",
+    "port": 38476
+  },
+  "auth": {
+    "provider": "self",
+    "issuer": "kakurizai",
+    "audience": "kakurizai-studio",
+    "secretFile": ".kakurizai/auth/self-secret"
+  },
+  "cube": {
+    "mode": "auto",
+    "cubecli": "cubecli",
+    "apiBaseUrl": null,
+    "template": "kakurizai-base",
+    "workspacePath": "/workspace"
+  },
+  "isolatedAgent": {
+    "agentctl": "agentctl",
+    "sourceTree": "vendor/IPA-RS-IsolatedAgent"
+  }
+}

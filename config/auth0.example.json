@@ -1,0 +1,7 @@
+{
+  "auth": {
+    "provider": "auth0",
+    "domain": "example.us.auth0.com",
+    "audience": "https://kakurizai.example/api"
+  }
+}

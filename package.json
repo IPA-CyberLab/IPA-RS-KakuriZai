@@ -1,0 +1,18 @@
+{
+  "name": "ipa-rs-kakurizai",
+  "version": "0.1.0",
+  "description": "World lifecycle control plane and Studio UI for isolated source overlays backed by CubeSandbox.",
+  "type": "module",
+  "bin": {
+    "agctl": "./bin/agctl.js"
+  },
+  "scripts": {
+    "agctl": "node ./bin/agctl.js",
+    "start": "node ./bin/agctl.js studio",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}

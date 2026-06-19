@@ -1,0 +1,6 @@
+[submodule "vendor/IPA-RS-IsolatedAgent"]
+	path = vendor/IPA-RS-IsolatedAgent
+	url = https://github.com/IPA-CyberLab/IPA-RS-IsolatedAgent.git
+[submodule "vendor/CubeSandbox"]
+	path = vendor/CubeSandbox
+	url = https://github.com/tencentcloud/CubeSandbox.git

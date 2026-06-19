@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Kakurizai Config",
+  "type": "object",
+  "properties": {
+    "version": { "const": 1 },
+    "home": { "type": "string" },
+    "storeDir": { "type": "string" },
+    "defaultBackend": {
+      "enum": [
+        "apfs-clone",
+        "windows-block-clone",
+        "linux-native",
+        "systemd-nspawn",
+        "btrfs",
+        "path-preserving-overlay",
+        "windows-minifilter-overlay",
+        "cube-sandbox-overlay"
+      ]
+    },
+    "studio": {
+      "type": "object",
+      "properties": {
+        "host": { "type": "string" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      },
+      "additionalProperties": false
+    },
+    "auth": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["provider"],
+          "properties": {
+            "provider": { "const": "self" },
+            "issuer": { "type": "string" },
+            "audience": { "type": "string" },
+            "secret": { "type": "string" },
+            "secretFile": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["provider", "domain", "audience"],
+          "properties": {
+            "provider": { "const": "auth0" },
+            "domain": { "type": "string" },
+            "audience": { "type": "string" },
+            "issuer": { "type": "string" },
+            "jwksUri": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["provider", "region", "userPoolId"],
+          "properties": {
+            "provider": { "const": "cognito" },
+            "region": { "type": "string" },
+            "userPoolId": { "type": "string" },
+            "clientId": { "type": "string" },
+            "audience": { "type": "string" },
+            "issuer": { "type": "string" },
+            "jwksUri": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["provider", "issuer", "jwksUri"],
+          "properties": {
+            "provider": { "const": "oidc" },
+            "issuer": { "type": "string" },
+            "audience": { "type": "string" },
+            "jwksUri": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "cube": {
+      "type": "object",
+      "properties": {
+        "mode": { "enum": ["auto", "cli", "api", "disabled"] },
+        "cubecli": { "type": "string" },
+        "apiBaseUrl": { "type": ["string", "null"] },
+        "template": { "type": "string" },
+        "workspacePath": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "isolatedAgent": {
+      "type": "object",
+      "properties": {
+        "agentctl": { "type": "string" },
+        "sourceTree": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": true
+}
