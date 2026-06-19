@@ -1,10 +1,20 @@
 import path from "node:path";
+import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { createAuthProvider } from "./auth/providers.js";
 import { commandExists } from "./core/fs.js";
 import { initConfigFile, loadConfig } from "./core/config.js";
 import { runCommand } from "./core/process.js";
-import { applyWorld, changedPaths, createWorld, execWorld, listWorlds, openWorld, removeWorld } from "./core/worlds.js";
+import {
+  applyWorld,
+  changedPaths,
+  createWorld,
+  execWorld,
+  getWorld,
+  listWorlds,
+  openWorld,
+  removeWorld
+} from "./core/worlds.js";
 import { startStudio } from "./server.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -16,8 +26,12 @@ export async function main(argv) {
   if (command === "init") return init();
   if (command === "create") return create(config, argv.slice(1));
   if (command === "list") return list(config, argv.slice(1));
+  if (command === "show" || command === "inspect" || command === "details") return show(config, argv.slice(1));
   if (command === "remove") return remove(config, argv.slice(1));
   if (command === "open") return open(config, argv.slice(1));
+  if (["file", "terminal", "vscode", "agent"].includes(command)) {
+    return open(config, [argv[1], command, ...argv.slice(2)]);
+  }
   if (command === "changed") return changed(config, argv.slice(1));
   if (command === "apply") return apply(config, argv.slice(1));
   if (command === "auth") return auth(config, argv.slice(1));
@@ -34,11 +48,16 @@ function help() {
 World commands:
   agctl create --source <folder> --name <name> [--backend cube-sandbox-overlay]
   agctl list [--json]
+  agctl show <world> [--json]
   agctl open <world> <file|terminal|vscode|agent>
+  agctl file <world>
+  agctl terminal <world>
+  agctl vscode <world>
+  agctl agent <world>
   agctl exec <world> -- <command...>
   agctl shell <world>
-  agctl changed <world>
-  agctl apply <world> [--dry-run]
+  agctl changed <world> [--json]
+  agctl apply <world> [--dry-run] [--json]
   agctl remove <world> --yes
   agctl studio [--host 127.0.0.1] [--port 38476]
   agctl auth token [--subject local-user]
@@ -71,15 +90,38 @@ async function list(config, args) {
     return;
   }
   for (const world of worlds) {
-    console.log(`${world.name}\t${world.status}\t${world.backend}\t${world.sourcePath}`);
+    console.log([
+      world.name,
+      world.status,
+      world.backend,
+      world.sandbox?.id || world.sandbox?.status || "none",
+      formatBytes(world.diskUsage?.upperBytes || 0),
+      String((world.sessions || []).length),
+      world.sourcePath
+    ].join("\t"));
   }
+}
+
+async function show(config, args) {
+  const ref = args.find((arg) => !arg.startsWith("-"));
+  if (!ref) throw new Error("show requires a world name or id");
+  const world = await getWorld(config, ref);
+  if (args.includes("--json")) {
+    console.log(JSON.stringify(world, null, 2));
+    return;
+  }
+  printDetails(world);
 }
 
 async function remove(config, args) {
   const ref = args.find((arg) => !arg.startsWith("-"));
   if (!ref) throw new Error("remove requires a world name or id");
-  if (!args.includes("--yes")) throw new Error("remove requires --yes");
+  if (!args.includes("--yes")) await confirmRemove(ref);
   const world = await removeWorld(config, ref);
+  if (args.includes("--json")) {
+    console.log(JSON.stringify(world, null, 2));
+    return;
+  }
   console.log(`removed ${world.name}`);
 }
 
@@ -87,6 +129,10 @@ async function open(config, args) {
   const [ref, target] = args;
   if (!ref || !target) throw new Error("open requires <world> <target>");
   const result = await openWorld(config, ref, target);
+  if (args.includes("--json")) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
   console.log(`opened ${target} for ${result.world.name}`);
 }
 
@@ -94,6 +140,10 @@ async function changed(config, args) {
   const [ref] = args;
   if (!ref) throw new Error("changed requires <world>");
   const changes = await changedPaths(config, ref);
+  if (args.includes("--json")) {
+    console.log(JSON.stringify(changes, null, 2));
+    return;
+  }
   for (const change of changes) {
     console.log(`${change.action}\t${change.path}`);
   }
@@ -103,6 +153,10 @@ async function apply(config, args) {
   const ref = args.find((arg) => !arg.startsWith("-"));
   if (!ref) throw new Error("apply requires <world>");
   const result = await applyWorld(config, ref, { dryRun: args.includes("--dry-run") });
+  if (args.includes("--json")) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
   for (const change of result.changes) {
     console.log(`${result.applied ? "applied" : "would-apply"}\t${change.action}\t${change.path}`);
   }
@@ -169,4 +223,44 @@ function printWorld(world) {
     sourcePath: world.sourcePath,
     sandbox: world.sandbox
   }, null, 2));
+}
+
+function printDetails(world) {
+  const rows = [
+    ["Name", world.name],
+    ["ID", world.id],
+    ["Status", world.status],
+    ["Source", world.sourcePath],
+    ["Backend", world.backend],
+    ["Sandbox", world.sandbox?.id || world.sandbox?.status || "none"],
+    ["Base", world.sandbox?.baseId || "none"],
+    ["Upper", world.paths?.upper || "none"],
+    ["Disk", `${formatBytes(world.diskUsage?.upperBytes || 0)} upper`],
+    ["Sessions", String((world.sessions || []).length)],
+    ["Updated", world.updatedAt]
+  ];
+  const width = Math.max(...rows.map(([label]) => label.length));
+  for (const [label, value] of rows) {
+    console.log(`${label.padEnd(width)}  ${value || ""}`);
+  }
+}
+
+async function confirmRemove(ref) {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error("remove requires --yes when not running interactively");
+  }
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = await rl.question(`Remove ${ref}? Type "yes" to confirm: `);
+    if (answer !== "yes") throw new Error("remove cancelled");
+  } finally {
+    rl.close();
+  }
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }

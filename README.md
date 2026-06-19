@@ -22,6 +22,24 @@ npm start
 
 When `cubecli` is not installed, Cube Worlds are still recorded with their metadata, upper/work/whiteout/log paths, and generated Cube request. Their sandbox status is `planned` until CubeSandbox is available.
 
+## CLI And Studio Parity
+
+Every Studio operation has a CLI equivalent:
+
+| Studio operation | CLI |
+| --- | --- |
+| Create World | `agctl create --source <folder> --name <name> --backend cube-sandbox-overlay` |
+| Refresh/list Worlds | `agctl list` or `agctl list --json` |
+| Select/show details | `agctl show <world>` or `agctl show <world> --json` |
+| File button | `agctl file <world>` or `agctl open <world> file` |
+| Terminal button | `agctl terminal <world>` or `agctl open <world> terminal` |
+| VS Code button | `agctl vscode <world>` or `agctl open <world> vscode` |
+| Agent button | `agctl agent <world>` or `agctl open <world> agent` |
+| Apply button | `agctl apply <world>` |
+| Remove button | `agctl remove <world>` with interactive confirmation, or `agctl remove <world> --yes` |
+
+Automation can use `--json` on `list`, `show`, `changed`, `apply`, and `remove`.
+
 ## Authentication
 
 Authentication is provider-based. Configure `auth.provider` in `KAKURIZAI_CONFIG` or `$KAKURIZAI_HOME/config.json`.

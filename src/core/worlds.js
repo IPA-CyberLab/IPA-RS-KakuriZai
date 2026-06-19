@@ -33,6 +33,10 @@ export async function listWorlds(config) {
   return new WorldStore(config).list();
 }
 
+export async function getWorld(config, ref) {
+  return new WorldStore(config).get(ref);
+}
+
 export async function removeWorld(config, ref) {
   const store = new WorldStore(config);
   const world = await store.get(ref);
