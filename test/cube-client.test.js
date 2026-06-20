@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 import { CubeSandboxClient } from "../dist/src/cube/client.js";
+
+const execFileAsync = promisify(execFile);
 
 test("cube client prefers cubemastercli in auto mode", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-client-"));
@@ -68,51 +73,58 @@ test("cube client passes namespace to cubecli exec", async () => {
   assert.deepEqual(args, ["--namespace", "kakurizai", "exec", "-w", "/workspace", "4fac1c9a074d", "id"]);
 });
 
-test("cube client pauses and resumes sandbox tasks", async () => {
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-pause-"));
-  const cubecli = path.join(tmp, "cubecli");
-  const argsFile = path.join(tmp, "args.txt");
-  await fs.writeFile(cubecli, `#!/bin/sh\nprintf '%s\\n' "$@" > "${argsFile}"\n`, "utf8");
-  await fs.chmod(cubecli, 0o755);
-  const client = new CubeSandboxClient({
-    cubecli,
-    namespace: "kakurizai"
-  });
+test("cube client pauses and resumes through CubeMaster update API", async () => {
+  const master = await createMasterApi();
+  try {
+    const client = new CubeSandboxClient({
+      apiBaseUrl: master.url,
+      fifoDir: path.join(os.tmpdir(), "missing-kakurizai-fifo")
+    });
 
-  const paused = await client.pauseSandboxById("4fac1c9a074d49bf8e29ee1d90592b22");
-  assert.equal(paused.applied, true);
-  let args = (await fs.readFile(argsFile, "utf8")).trim().split("\n");
-  assert.deepEqual(args, ["--namespace", "kakurizai", "containerd-ctr", "tasks", "pause", "4fac1c9a074d49bf8e29ee1d90592b22"]);
+    const paused = await client.pauseSandboxById("4fac1c9a074d49bf8e29ee1d90592b22");
+    assert.equal(paused.applied, true);
+    const resumed = await client.resumeSandboxById("4fac1c9a074d49bf8e29ee1d90592b22");
+    assert.equal(resumed.applied, true);
 
-  const resumed = await client.resumeSandboxById("4fac1c9a074d49bf8e29ee1d90592b22");
-  assert.equal(resumed.applied, true);
-  args = (await fs.readFile(argsFile, "utf8")).trim().split("\n");
-  assert.deepEqual(args, ["--namespace", "kakurizai", "containerd-ctr", "tasks", "resume", "4fac1c9a074d49bf8e29ee1d90592b22"]);
+    assert.deepEqual(master.requests.map((request) => request.body.action), ["pause", "resume"]);
+    assert.equal(master.requests[0].body.sandbox_id, "4fac1c9a074d49bf8e29ee1d90592b22");
+    assert.equal(master.requests[0].body.instance_type, "cubebox");
+  } finally {
+    await master.close();
+  }
 });
 
-test("cube client falls back to sudo for task pause when cubelet socket is restricted", async () => {
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-pause-sudo-"));
+test("cube client clears stale exec fifos before pause", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-pause-cleanup-"));
+  const fifoDir = path.join(tmp, "fifo", "session");
   const cubecli = path.join(tmp, "cubecli");
   const sudo = path.join(tmp, "sudo");
   const sudoArgsFile = path.join(tmp, "sudo-args.txt");
-  await fs.writeFile(cubecli, "#!/bin/sh\necho 'connect: permission denied' >&2\nexit 1\n", "utf8");
-  await fs.writeFile(sudo, `#!/bin/sh\nprintf '%s\\n' "$@" > "${sudoArgsFile}"\n`, "utf8");
+  await fs.mkdir(fifoDir, { recursive: true });
+  await execFileAsync("mkfifo", [path.join(fifoDir, "exec-stale123-stdin")]);
+  await fs.writeFile(cubecli, "#!/bin/sh\nexit 0\n", "utf8");
+  await fs.writeFile(sudo, `#!/bin/sh\nprintf '%s\\n' "$@" >> "${sudoArgsFile}"\nexit 0\n`, "utf8");
   await fs.chmod(cubecli, 0o755);
   await fs.chmod(sudo, 0o755);
+  const master = await createMasterApi();
   const originalPath = process.env.PATH;
   process.env.PATH = `${tmp}${path.delimiter}${originalPath || ""}`;
   try {
     const client = new CubeSandboxClient({
+      apiBaseUrl: master.url,
       cubecli,
-      namespace: "kakurizai"
+      namespace: "kakurizai",
+      fifoDir: path.join(tmp, "fifo")
     });
     const result = await client.pauseSandboxById("4fac1c9a074d49bf8e29ee1d90592b22");
     assert.equal(result.applied, true);
-    assert.equal(result.sudo, true);
-    const args = (await fs.readFile(sudoArgsFile, "utf8")).trim().split("\n");
-    assert.deepEqual(args, ["-n", cubecli, "--namespace", "kakurizai", "containerd-ctr", "tasks", "pause", "4fac1c9a074d49bf8e29ee1d90592b22"]);
+    assert.deepEqual(result.cleanup.execIds, ["exec-stale123"]);
+    const sudoArgs = await fs.readFile(sudoArgsFile, "utf8");
+    assert.match(sudoArgs, new RegExp(`-n\\n${escapeRegExp(cubecli)}\\n--namespace\\nkakurizai\\ncontainerd-ctr\\ntasks\\nkill\\n--exec-id\\nexec-stale123`));
+    assert.match(sudoArgs, new RegExp(`-n\\n${escapeRegExp(cubecli)}\\n--namespace\\nkakurizai\\ncontainerd-ctr\\ntasks\\ndelete\\n--exec-id\\nexec-stale123`));
   } finally {
     process.env.PATH = originalPath;
+    await master.close();
   }
 });
 
@@ -301,7 +313,38 @@ test("cube client starts sandbox dev access services", async () => {
   assert.match(sshArgsText, /Port \$\{ssh_port\}/);
 });
 
+async function createMasterApi() {
+  const requests = [];
+  const server = http.createServer((request, response) => {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("end", () => {
+      requests.push({
+        method: request.method,
+        url: request.url,
+        body: JSON.parse(Buffer.concat(chunks).toString("utf8"))
+      });
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ret: { ret_code: 200, ret_msg: "" } }));
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const { port } = server.address();
+  return {
+    url: `http://127.0.0.1:${port}`,
+    requests,
+    close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+  };
+}
+
 async function fakeBinary(file) {
   await fs.writeFile(file, "#!/bin/sh\nexit 0\n", "utf8");
   await fs.chmod(file, 0o755);
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

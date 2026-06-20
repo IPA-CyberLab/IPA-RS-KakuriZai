@@ -1,5 +1,7 @@
 // @ts-nocheck
 import fs from "node:fs/promises";
+import http from "node:http";
+import https from "node:https";
 import path from "node:path";
 import { commandExists } from "../core/fs.js";
 import { runCommand } from "../core/process.js";
@@ -156,8 +158,8 @@ export class CubeSandboxClient {
       capabilities: {
         destroy: Boolean(mastercli),
         logs: Boolean(cubecli),
-        pause: Boolean(cubecli && taskStatuses.ok),
-        resume: Boolean(cubecli && taskStatuses.ok)
+        pause: Boolean(mastercli || this.config.apiBaseUrl),
+        resume: Boolean(mastercli || this.config.apiBaseUrl)
       },
       config: {
         apiEndpoint: this.config.apiBaseUrl || null,
@@ -216,11 +218,13 @@ export class CubeSandboxClient {
   }
 
   async pauseSandboxById(sandboxId) {
-    return this.taskAction(sandboxId, "pause");
+    const cleanup = await this.cleanupExecTasks(sandboxId);
+    const result = await this.masterUpdateAction(sandboxId, "pause");
+    return { ...result, cleanup };
   }
 
   async resumeSandboxById(sandboxId) {
-    return this.taskAction(sandboxId, "resume");
+    return this.masterUpdateAction(sandboxId, "resume");
   }
 
   async pauseSandbox(world) {
@@ -235,26 +239,70 @@ export class CubeSandboxClient {
     return this.resumeSandboxById(sandboxId);
   }
 
-  async taskAction(sandboxId, action) {
-    const binary = commandExists(this.config.cubecli || "cubecli");
-    if (!binary) return { sandboxId, action, skipped: true, reason: "cubecli not found" };
-    const result = await runCubeCliCommand(binary, [
-      ...cubeCliGlobalArgs(this.config),
-      "containerd-ctr",
-      "tasks",
-      action,
-      sandboxId
-    ], { allowFailure: true });
-    const output = `${result.stdout}\n${result.stderr}`;
+  async masterUpdateAction(sandboxId, action) {
+    const response = await postJson(`${masterApiBaseUrl(this.config)}/cube/sandbox/update`, {
+      requestID: `kakurizai-${action}-${Date.now()}`,
+      sandbox_id: sandboxId,
+      instance_type: this.config.instanceType || "cubebox",
+      action
+    });
+    const ret = response?.ret || {};
+    const retCode = Number(ret.ret_code);
+    const applied = retCode === 0 || retCode === 200;
     return {
       sandboxId,
       action,
-      applied: result.code === 0,
-      code: result.code,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      sudo: Boolean(result.sudo),
-      reason: result.code === 0 ? null : parseFailure(output) || `cubecli task ${action} exited with ${result.code}`
+      applied,
+      code: retCode,
+      stdout: JSON.stringify(response),
+      stderr: "",
+      reason: applied ? null : ret.ret_msg || `CubeMaster ${action} returned ${ret.ret_code}`,
+      response
+    };
+  }
+
+  async cleanupExecTasks(sandboxId) {
+    const binary = commandExists(this.config.cubecli || "cubecli");
+    if (!binary) return { skipped: true, reason: "cubecli not found" };
+    const fifoRoot = this.config.fifoDir || "/data/cubelet/fifo";
+    const script = [
+      "set -eu",
+      `fifo_root=${shellQuote(fifoRoot)}`,
+      `cube_bin=${shellQuote(binary)}`,
+      "run_cube() { if command -v sudo >/dev/null 2>&1 && sudo -n \"$cube_bin\" \"$@\" >/dev/null 2>&1; then return 0; fi; \"$cube_bin\" \"$@\" >/dev/null 2>&1; }",
+      "if [ ! -d \"$fifo_root\" ]; then exit 0; fi",
+      "find \"$fifo_root\" -maxdepth 2 -type p -name 'exec-*-stdin' 2>/dev/null | sed -E 's#.*/(exec-[^-]+)-stdin#\\1#' | sort -u | while read -r exec_id; do",
+      "  [ -n \"$exec_id\" ] || continue",
+      `  run_cube ${cubeCliGlobalArgs(this.config).map(shellQuote).join(" ")} containerd-ctr tasks kill --exec-id "$exec_id" --signal SIGKILL ${shellQuote(sandboxId)} || true`,
+      `  run_cube ${cubeCliGlobalArgs(this.config).map(shellQuote).join(" ")} containerd-ctr tasks delete --exec-id "$exec_id" ${shellQuote(sandboxId)} || true`,
+      "  printf '%s\\n' \"$exec_id\"",
+      "done"
+    ].join("\n");
+    const result = await runCommand("sh", ["-lc", script], { allowFailure: true });
+    if (result.code === 0) {
+      return {
+        skipped: false,
+        code: result.code,
+        execIds: result.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+      };
+    }
+    const sudo = commandExists("sudo");
+    if (!sudo || !shouldRetryWithSudo(result)) {
+      return {
+        skipped: false,
+        code: result.code,
+        execIds: [],
+        reason: result.stderr || result.stdout || `exec cleanup exited with ${result.code}`
+      };
+    }
+    const sudoScript = script.replaceAll(shellQuote(binary), `${shellQuote(sudo)} -n ${shellQuote(binary)}`);
+    const sudoResult = await runCommand("sh", ["-lc", sudoScript], { allowFailure: true });
+    return {
+      skipped: false,
+      code: sudoResult.code,
+      sudo: true,
+      execIds: sudoResult.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
+      reason: sudoResult.code === 0 ? null : sudoResult.stderr || sudoResult.stdout || `sudo exec cleanup exited with ${sudoResult.code}`
     };
   }
 
@@ -651,6 +699,45 @@ async function runCubeCliCommand(command, args, options = {}) {
 function shouldRetryWithSudo(result) {
   const output = `${result.stdout || ""}\n${result.stderr || ""}`;
   return /permission denied|operation not permitted|connect: permission denied/i.test(output);
+}
+
+function masterApiBaseUrl(config = {}) {
+  return String(config.apiBaseUrl || "http://127.0.0.1:8089").replace(/\/+$/, "");
+}
+
+function postJson(url, body) {
+  const target = new URL(url);
+  const payload = `${JSON.stringify(body)}\n`;
+  const transport = target.protocol === "https:" ? https : http;
+  return new Promise((resolve, reject) => {
+    const request = transport.request({
+      hostname: target.hostname,
+      port: target.port || (target.protocol === "https:" ? 443 : 80),
+      method: "POST",
+      path: `${target.pathname}${target.search}`,
+      headers: {
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(payload)
+      }
+    }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("end", () => {
+        const text = Buffer.concat(chunks).toString("utf8");
+        if (response.statusCode && response.statusCode >= 400) {
+          reject(new Error(`CubeMaster API returned HTTP ${response.statusCode}: ${text}`));
+          return;
+        }
+        try {
+          resolve(text ? JSON.parse(text) : {});
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+    request.on("error", reject);
+    request.end(payload);
+  });
 }
 
 function parseTemplates(output) {
