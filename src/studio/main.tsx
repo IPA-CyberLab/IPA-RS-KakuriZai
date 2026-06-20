@@ -905,8 +905,7 @@ function App() {
               </DetailSection>
 
               <DetailSection icon={<Terminal size={16} />} title="Terminal">
-                <TerminalLauncher world={selected.world} token={token} />
-                <DevAccessLauncher world={selected.world} token={token} />
+                <SandboxAccessLauncher world={selected.world} token={token} />
               </DetailSection>
 
               <DetailSection icon={<Database size={16} />} title="Storage and Mounts">
@@ -1004,29 +1003,7 @@ function DetailSection({ icon, title, children }: { icon: React.ReactNode; title
   );
 }
 
-function TerminalLauncher({ world, token }: { world?: World; token: string }) {
-  if (!world) {
-    return <div className="sectionEmpty">Terminal is available for KakuriZai-managed sandboxes only.</div>;
-  }
-
-  const url = shellPageUrl(world.id, token);
-  return (
-    <div className="terminalLauncher">
-      <button
-        className="primary"
-        onClick={() => window.open(url, "_blank", "noopener,noreferrer")}
-        type="button"
-      >
-        <Terminal size={15} />
-        Open Terminal
-        <ExternalLink size={14} />
-      </button>
-      <span>{world.status}</span>
-    </div>
-  );
-}
-
-function DevAccessLauncher({ world, token }: { world?: World; token: string }) {
+function SandboxAccessLauncher({ world, token }: { world?: World; token: string }) {
   const [access, setAccess] = React.useState<DevAccess | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [message, setMessage] = React.useState("");
@@ -1037,7 +1014,7 @@ function DevAccessLauncher({ world, token }: { world?: World; token: string }) {
   }, [world?.id]);
 
   if (!world) {
-    return null;
+    return <div className="sectionEmpty">Terminal is available for KakuriZai-managed sandboxes only.</div>;
   }
 
   async function ensureAccess(openTarget?: "vscode" | "ssh") {
@@ -1046,7 +1023,7 @@ function DevAccessLauncher({ world, token }: { world?: World; token: string }) {
       setMessage("Opening VS Code Web");
       return;
     }
-    if (access) {
+    if (access && (openTarget !== "ssh" || access.sshUri)) {
       openAccess(access, openTarget);
       return;
     }
@@ -1071,11 +1048,13 @@ function DevAccessLauncher({ world, token }: { world?: World; token: string }) {
   }
 
   async function copySshCommand() {
-    const result = access || await api<DevAccess>(`/api/worlds/${encodeURIComponent(world.id)}/dev-access`, {
-      method: "POST",
-      body: { vscode: false, ssh: true },
-      token
-    });
+    const result = access?.sshCommand
+      ? access
+      : await api<DevAccess>(`/api/worlds/${encodeURIComponent(world.id)}/dev-access`, {
+          method: "POST",
+          body: { vscode: false, ssh: true },
+          token
+        });
     setAccess(result);
     if (!result.sshCommand) {
       setMessage("SSH is not ready");
@@ -1086,9 +1065,18 @@ function DevAccessLauncher({ world, token }: { world?: World; token: string }) {
   }
 
   return (
-    <div className="devAccessPanel">
-      <div className="terminalLauncher">
-        <button className="primary" onClick={() => void ensureAccess("vscode")} type="button" disabled={busy}>
+    <div className="accessPanel">
+      <div className="terminalLauncher accessLauncher">
+        <button
+          className="primary"
+          onClick={() => window.open(shellPageUrl(world.id, token), "_blank", "noopener,noreferrer")}
+          type="button"
+        >
+          <Terminal size={15} />
+          Open Terminal
+          <ExternalLink size={14} />
+        </button>
+        <button onClick={() => void ensureAccess("vscode")} type="button" disabled={busy}>
           <Code2 size={15} />
           VS Code Web
           <ExternalLink size={14} />
@@ -1102,6 +1090,7 @@ function DevAccessLauncher({ world, token }: { world?: World; token: string }) {
           <Copy size={15} />
           Copy SSH
         </button>
+        <span className="statusText">{world.status}</span>
         <span>{message || "VS Code Server and SSH are started on demand"}</span>
       </div>
       {access ? (
