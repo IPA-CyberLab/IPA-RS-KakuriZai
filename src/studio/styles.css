@@ -1011,6 +1011,10 @@ label {
   white-space: nowrap;
 }
 
+.dataRow.internalMount {
+  color: #8e9098;
+}
+
 .dataTable.narrow .dataRow {
   min-width: 260px;
   grid-template-columns: 1fr 1fr;

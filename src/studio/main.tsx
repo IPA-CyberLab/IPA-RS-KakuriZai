@@ -137,6 +137,7 @@ type CubeVolumeMount = {
   readonly?: boolean;
   host_path?: string;
   recursive_read_only?: boolean;
+  mode?: string;
 };
 
 type CubePortMapping = {
@@ -799,7 +800,7 @@ function App() {
                   busy={busy}
                   onSave={saveDiskSize}
                 />
-                <MountTable mounts={selected.runtime?.volumeMounts || mountsFromWorld(selected.world)} />
+                <MountTable row={selected} mounts={mountRowsForSelection(selected)} />
               </DetailSection>
 
               <DetailSection icon={<Route size={16} />} title="Network">
@@ -1300,7 +1301,7 @@ function Metric({ label, value, wide = false }: { label: string; value: string; 
   );
 }
 
-function MountTable({ mounts }: { mounts: CubeVolumeMount[] }) {
+function MountTable({ row, mounts }: { row: InventoryRow; mounts: CubeVolumeMount[] }) {
   if (!mounts.length) return <div className="sectionEmpty">No mounts reported.</div>;
   return (
     <div className="dataTable">
@@ -1311,11 +1312,11 @@ function MountTable({ mounts }: { mounts: CubeVolumeMount[] }) {
         <span>Mode</span>
       </div>
       {mounts.map((mount, index) => (
-        <div className="dataRow" key={`${mount.name || "mount"}-${index}`}>
+        <div className={`dataRow ${mount.name === "cube_rootfs_rw" ? "internalMount" : ""}`} key={`${mount.name || "mount"}-${index}`}>
           <span>{mount.name || "-"}</span>
           <span>{mount.container_path || "-"}</span>
           <span>{mount.host_path || "-"}</span>
-          <span>{mount.readonly || mount.recursive_read_only ? "read-only" : "read-write"}</span>
+          <span>{mountModeLabel(row, mount)}</span>
         </div>
       ))}
     </div>
@@ -1451,6 +1452,28 @@ function diskMinimumForSelection(selected: InventoryRow, template: CubeTemplate 
   ]) || "1G";
 }
 
+function mountRowsForSelection(row: InventoryRow): CubeVolumeMount[] {
+  const rawMounts = row.runtime?.volumeMounts?.length ? row.runtime.volumeMounts : mountsFromWorld(row.world);
+  const visibleMounts = rawMounts.filter((mount) => mount.name !== "cube_rootfs_rw");
+  const internalMounts = rawMounts.filter((mount) => mount.name === "cube_rootfs_rw");
+  if (row.mountMode === "agctl-overlay") {
+    const workspace = row.world?.backendConfig?.mounts?.workspace;
+    const workspacePath = typeof workspace === "string" ? workspace : "/workspace";
+    return [
+      {
+        name: "workspace",
+        container_path: workspacePath,
+        host_path: `${row.sourcePath || row.world?.sourcePath || "-"} + KakuriZai overlay`,
+        readonly: false,
+        mode: "overlay"
+      },
+      ...visibleMounts,
+      ...internalMounts
+    ];
+  }
+  return [...visibleMounts, ...internalMounts];
+}
+
 function mountsFromWorld(world?: World): CubeVolumeMount[] {
   const mounts = world?.backendConfig?.mounts;
   if (!mounts) return [];
@@ -1465,6 +1488,14 @@ function mountsFromWorld(world?: World): CubeVolumeMount[] {
       readonly: mount.readonly
     }];
   });
+}
+
+function mountModeLabel(row: InventoryRow, mount: CubeVolumeMount) {
+  if (mount.mode === "overlay") return "overlay";
+  if (mount.name === "cube_rootfs_rw") return "internal rootfs";
+  if (row.mountMode === "unsafe-rw" && mount.container_path === "/workspace") return "read-write direct";
+  if (row.mountMode === "cubesandbox-readonly" && mount.container_path === "/workspace") return "read-only direct";
+  return mount.readonly || mount.recursive_read_only ? "read-only" : "read-write";
 }
 
 function sameSandboxId(left?: string, right?: string) {
