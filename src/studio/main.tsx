@@ -312,6 +312,9 @@ function App() {
   const [busy, setBusy] = React.useState(false);
   const [actionMenuOpen, setActionMenuOpen] = React.useState(false);
   const [launchMenuOpen, setLaunchMenuOpen] = React.useState(false);
+  const activityMenuRef = React.useRef<HTMLButtonElement | null>(null);
+  const actionMenuRef = React.useRef<HTMLElement | null>(null);
+  const launchMenuRef = React.useRef<HTMLFormElement | null>(null);
   const [formMessage, setFormMessage] = React.useState("");
   const [search, setSearch] = React.useState("");
   const [stateFilter, setStateFilter] = React.useState<StateFilter>("all");
@@ -355,6 +358,35 @@ function App() {
     if (!authConfig.requiresToken || token) void refresh();
     else setStatus("Sign in required");
   }, [authConfig]);
+
+  React.useEffect(() => {
+    if (!actionMenuOpen && !launchMenuOpen) return;
+
+    function closeMenus() {
+      setActionMenuOpen(false);
+      setLaunchMenuOpen(false);
+    }
+
+    function onPointerDown(event: PointerEvent) {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (activityMenuRef.current?.contains(target)) return;
+      if (actionMenuRef.current?.contains(target)) return;
+      if (launchMenuRef.current?.contains(target)) return;
+      closeMenus();
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") closeMenus();
+    }
+
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [actionMenuOpen, launchMenuOpen]);
 
   async function refresh() {
     setBusy(true);
@@ -617,6 +649,7 @@ function App() {
     <main className="workbench">
       <aside className="activityBar">
         <button
+          ref={activityMenuRef}
           className={`activityButton ${actionMenuOpen || launchMenuOpen ? "active" : ""}`}
           onClick={() => {
             setLaunchMenuOpen(false);
@@ -630,7 +663,7 @@ function App() {
       </aside>
 
       {actionMenuOpen ? (
-        <section className="actionMenu">
+        <section className="actionMenu" ref={actionMenuRef}>
           <button className="actionMenuItem" onClick={() => void openCreateMenu()} type="button">
             <Plus size={16} />
             <span>Create Sandbox</span>
@@ -639,7 +672,7 @@ function App() {
       ) : null}
 
       {launchMenuOpen ? (
-        <form className="newSandboxMenu" onSubmit={createSandbox}>
+        <form className="newSandboxMenu" onSubmit={createSandbox} ref={launchMenuRef}>
           <header>
             <strong>New Sandbox</strong>
             <button className="iconButton ghost" onClick={() => setLaunchMenuOpen(false)} title="Close" type="button">
