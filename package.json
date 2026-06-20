@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.1.2",
+    "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
     "lucide-react": "^0.562.0",
     "node-pty": "^1.1.0",

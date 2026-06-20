@@ -1,5 +1,6 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
+import { FitAddon } from "@xterm/addon-fit";
 import { Terminal as XTerminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import {
@@ -7,6 +8,7 @@ import {
   Box,
   Cpu,
   Database,
+  ExternalLink,
   Folder,
   FolderOpen,
   Globe2,
@@ -268,6 +270,11 @@ const mountModes = [
     description: "Mount the host folder directly as writable inside the sandbox."
   }
 ];
+
+function Root() {
+  const shellWorldId = shellWorldIdFromLocation();
+  return shellWorldId ? <ShellPage worldId={shellWorldId} /> : <App />;
+}
 
 function App() {
   const [authConfig, setAuthConfig] = React.useState<AuthConfig | null>(null);
@@ -763,8 +770,8 @@ function App() {
                 </div>
               </DetailSection>
 
-              <DetailSection icon={<Terminal size={16} />} title="Web Shell">
-                <WebShell world={selected.world} token={token} />
+              <DetailSection icon={<Terminal size={16} />} title="Terminal">
+                <TerminalLauncher world={selected.world} token={token} />
               </DetailSection>
 
               <DetailSection icon={<Database size={16} />} title="Disk and Mounts">
@@ -861,80 +868,167 @@ function DetailSection({ icon, title, children }: { icon: React.ReactNode; title
   );
 }
 
-function WebShell({ world, token }: { world?: World; token: string }) {
+function TerminalLauncher({ world, token }: { world?: World; token: string }) {
+  if (!world) {
+    return <div className="sectionEmpty">Terminal is available for KakuriZai-managed sandboxes only.</div>;
+  }
+
+  const url = shellPageUrl(world.id, token);
+  return (
+    <div className="terminalLauncher">
+      <button
+        className="primary"
+        onClick={() => window.open(url, "_blank", "noopener,noreferrer")}
+        type="button"
+      >
+        <Terminal size={15} />
+        Open Terminal
+        <ExternalLink size={14} />
+      </button>
+      <span>{world.status}</span>
+    </div>
+  );
+}
+
+function ShellPage({ worldId }: { worldId: string }) {
   const terminalRef = React.useRef<HTMLDivElement | null>(null);
   const socketRef = React.useRef<WebSocket | null>(null);
   const terminalInstanceRef = React.useRef<XTerminal | null>(null);
-  const [session, setSession] = React.useState(0);
-  const [connected, setConnected] = React.useState(false);
+  const [token] = React.useState(() => shellTokenFromLocation());
+  const [session, setSession] = React.useState(1);
+  const [connectionState, setConnectionState] = React.useState("connecting");
+  const [worldName, setWorldName] = React.useState("");
 
   React.useEffect(() => {
-    if (!world || session === 0 || !terminalRef.current) return;
+    api<World[]>("/api/worlds", { token })
+      .then((worlds) => {
+        const world = worlds.find((candidate) => candidate.id === worldId);
+        setWorldName(world?.name || worldId);
+      })
+      .catch(() => setWorldName(worldId));
+  }, [token, worldId]);
+
+  React.useEffect(() => {
+    if (!terminalRef.current) return;
+    let disposed = false;
     const term = new XTerminal({
       cursorBlink: true,
       convertEol: true,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-      fontSize: 12,
-      rows: 18,
-      cols: 100,
+      fontSize: 13,
+      scrollback: 10000,
       theme: {
         background: "#07080a",
         foreground: "#e5e5e8",
         cursor: "#1493ff"
       }
     });
+    const fitAddon = new FitAddon();
+    term.loadAddon(fitAddon);
     terminalRef.current.innerHTML = "";
     term.open(terminalRef.current);
-    term.writeln(`Connecting to ${world.name}...`);
-    const url = new URL(`/api/worlds/${encodeURIComponent(world.id)}/shell`, window.location.href);
+    term.writeln(`Connecting to ${worldName || worldId}...`);
+    const url = new URL(`/api/worlds/${encodeURIComponent(worldId)}/shell`, window.location.href);
     url.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     if (token) url.searchParams.set("token", token);
     const socket = new WebSocket(url);
     socketRef.current = socket;
     terminalInstanceRef.current = term;
+    const send = (payload: Record<string, unknown>) => {
+      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
+    };
+    const sendResize = () => {
+      send({ type: "resize", cols: term.cols, rows: term.rows });
+    };
+    const fit = () => {
+      if (disposed) return;
+      try {
+        fitAddon.fit();
+        sendResize();
+      } catch {
+        // xterm can throw before the font metrics are ready.
+      }
+    };
     const disposable = term.onData((data) => {
-      if (socket.readyState === WebSocket.OPEN) socket.send(data);
+      send({ type: "input", data });
     });
-    socket.addEventListener("open", () => setConnected(true));
+    const resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(fit);
+    resizeObserver?.observe(terminalRef.current);
+    window.addEventListener("resize", fit);
+    socket.addEventListener("open", () => {
+      if (disposed) return;
+      setConnectionState("connected");
+      window.requestAnimationFrame(() => {
+        fit();
+        term.focus();
+      });
+    });
     socket.addEventListener("message", (event) => term.write(String(event.data)));
     socket.addEventListener("close", () => {
-      setConnected(false);
+      if (disposed) return;
+      setConnectionState("disconnected");
       term.writeln("\r\nDisconnected.");
     });
     socket.addEventListener("error", () => {
+      if (disposed) return;
+      setConnectionState("error");
       term.writeln("\r\nShell connection error.");
     });
+    window.requestAnimationFrame(fit);
     return () => {
+      disposed = true;
       disposable.dispose();
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", fit);
       socket.close();
       term.dispose();
       socketRef.current = null;
       terminalInstanceRef.current = null;
-      setConnected(false);
     };
-  }, [session, token, world?.id]);
+  }, [session, token, worldId]);
 
   function disconnect() {
     socketRef.current?.close();
   }
 
-  if (!world) {
-    return <div className="sectionEmpty">Web Shell is available for KakuriZai-managed sandboxes only.</div>;
-  }
-
   return (
-    <div className="webShell">
-      <div className="shellToolbar">
-        <button className="primary" onClick={() => setSession((value) => value + 1)} type="button">
-          <Terminal size={15} />
-          {connected ? "Reconnect shell" : "Connect shell"}
-        </button>
-        <button className="ghost" onClick={disconnect} type="button" disabled={!connected}>Disconnect</button>
-        <span>{connected ? "connected" : "disconnected"}</span>
-      </div>
-      <div className="terminalSurface" ref={terminalRef} />
-    </div>
+    <main className="terminalPage">
+      <header className="terminalTopbar">
+        <div>
+          <strong>{worldName || "Sandbox Terminal"}</strong>
+          <span>{worldId}</span>
+        </div>
+        <div className="toolbarActions">
+          <span className={`terminalStatus ${statusTone(connectionState)}`}>{connectionState}</span>
+          <button className="ghost" onClick={() => window.location.assign("/")} type="button">Console</button>
+          <button className="primary" onClick={() => setSession((value) => value + 1)} type="button">
+            <RefreshCcw size={15} />
+            Reconnect
+          </button>
+          <button className="danger" onClick={disconnect} type="button" disabled={connectionState !== "connected"}>Disconnect</button>
+        </div>
+      </header>
+      <div className="terminalFrame" ref={terminalRef} />
+    </main>
   );
+}
+
+function shellWorldIdFromLocation() {
+  const match = /^\/shell\/(.+)$/.exec(window.location.pathname);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function shellTokenFromLocation() {
+  const url = new URL(window.location.href);
+  const token = url.searchParams.get("token") || localStorage.getItem("kakurizai.token") || "";
+  if (token) localStorage.setItem("kakurizai.token", token);
+  return token;
+}
+
+function shellPageUrl(worldId: string, token: string) {
+  const url = new URL(`/shell/${encodeURIComponent(worldId)}`, window.location.href);
+  if (token) url.searchParams.set("token", token);
+  return url.toString();
 }
 
 function DiskEditor({
@@ -1305,8 +1399,8 @@ function sameSandboxId(left?: string, right?: string) {
 
 function statusTone(status: string): "ok" | "warn" | "muted" {
   const normalized = status.toLowerCase();
-  if (["ready", "running", "active", "up", "healthy"].includes(normalized)) return "ok";
-  if (normalized.startsWith("pending") || normalized.includes("creating") || normalized.includes("starting") || normalized.includes("paused")) return "warn";
+  if (["ready", "running", "active", "up", "healthy", "connected"].includes(normalized)) return "ok";
+  if (normalized.startsWith("pending") || normalized.includes("creating") || normalized.includes("starting") || normalized.includes("paused") || normalized === "connecting" || normalized === "error") return "warn";
   return "muted";
 }
 
@@ -1391,4 +1485,4 @@ function effectiveNetworkForWorld(world?: World, fallbackType = "tap"): NetworkC
   };
 }
 
-createRoot(document.getElementById("root")!).render(<App />);
+createRoot(document.getElementById("root")!).render(<Root />);

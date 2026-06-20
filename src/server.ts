@@ -78,12 +78,40 @@ function attachShell(config, world, ws) {
     }
   });
   ws.on("message", (message) => {
-    shellProcess.write(message.toString());
+    const text = message.toString();
+    const envelope = parseShellEnvelope(text);
+    if (envelope?.type === "resize") {
+      shellProcess.resize(envelope.cols, envelope.rows);
+      return;
+    }
+    if (envelope?.type === "input") {
+      shellProcess.write(envelope.data);
+      return;
+    }
+    shellProcess.write(text);
   });
   ws.on("close", () => {
     shellProcess.kill("SIGTERM");
   });
   ws.send(`Connected to ${world.name}\r\n`);
+}
+
+function parseShellEnvelope(text) {
+  if (!text.startsWith("{")) return null;
+  try {
+    const value = JSON.parse(text);
+    if (value?.type === "input" && typeof value.data === "string") return value;
+    if (value?.type === "resize") {
+      const cols = Number(value.cols);
+      const rows = Number(value.rows);
+      if (Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0) {
+        return { type: "resize", cols, rows };
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }
 
 async function route(config, auth, request, response) {
@@ -176,12 +204,22 @@ async function browseHost(target) {
 }
 
 async function staticFile(_request, response, url) {
-  const requested = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
+  const requested = url.pathname === "/" ? "index.html" : decodeURIComponent(url.pathname.slice(1));
   const filePath = path.resolve(STATIC_ROOT, requested);
   if (!filePath.startsWith(STATIC_ROOT)) return sendJson(response, { error: "not found" }, 404);
-  const data = await fs.readFile(filePath);
-  response.writeHead(200, { "content-type": contentType(filePath) });
-  response.end(data);
+  const result = await readStaticOrSpaFallback(filePath);
+  response.writeHead(200, { "content-type": contentType(result.filePath) });
+  response.end(result.content);
+}
+
+async function readStaticOrSpaFallback(filePath) {
+  try {
+    return { filePath, content: await fs.readFile(filePath) };
+  } catch (error) {
+    if (error.code !== "ENOENT" || path.extname(filePath)) throw error;
+  }
+  const indexPath = path.join(STATIC_ROOT, "index.html");
+  return { filePath: indexPath, content: await fs.readFile(indexPath) };
 }
 
 function contentType(filePath) {
