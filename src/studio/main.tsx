@@ -66,6 +66,20 @@ type BrowseResult = {
   entries: Array<{ name: string; path: string; type: "directory" }>;
 };
 
+type RuntimeVm = CubeInspect["sandboxes"][number];
+
+type InventoryRow = {
+  key: string;
+  name: string;
+  status: string;
+  origin: string;
+  sourcePath: string;
+  mountMode: string;
+  vmId: string;
+  world?: World;
+  runtime?: RuntimeVm;
+};
+
 const mountModes = [
   {
     id: "agctl-overlay",
@@ -101,7 +115,8 @@ function App() {
     memory: "2000Mi"
   });
   const [browser, setBrowser] = React.useState<BrowseResult | null>(null);
-  const selected = worlds.find((world) => world.id === selectedId) || worlds[0] || null;
+  const inventory = React.useMemo(() => buildInventory(worlds, cube), [worlds, cube]);
+  const selected = inventory.find((row) => row.key === selectedId) || inventory[0] || null;
 
   React.useEffect(() => {
     api<AuthConfig>("/api/auth/config", { token: null })
@@ -123,11 +138,12 @@ function App() {
         api<World[]>("/api/worlds", { token }),
         api<CubeInspect>("/api/cube/inspect", { token })
       ]);
+      const nextInventory = buildInventory(worldsResult, cubeResult);
       setSession(sessionResult.user.subject);
       setWorlds(worldsResult);
       setCube(cubeResult);
-      setSelectedId((current) => current || worldsResult[0]?.id || null);
-      setStatus(`${worldsResult.length} VM${worldsResult.length === 1 ? "" : "s"}`);
+      setSelectedId((current) => nextInventory.some((row) => row.key === current) ? current : nextInventory[0]?.key || null);
+      setStatus(`${nextInventory.length} VM${nextInventory.length === 1 ? "" : "s"} · ${cubeResult.sandboxes.length} CubeSandbox`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
     } finally {
@@ -163,7 +179,7 @@ function App() {
           memory: launch.memory
         }
       });
-      setSelectedId(world.id);
+      setSelectedId(`world:${world.id}`);
       await refresh();
     } finally {
       setBusy(false);
@@ -241,17 +257,18 @@ function App() {
               <Badge tone={cube?.available ? "ok" : "warn"}>{cube?.available ? "ready" : "offline"}</Badge>
             </div>
             <table className="data-table">
-              <thead><tr><th>Name</th><th>Status</th><th>Mount</th><th>VM ID</th></tr></thead>
+              <thead><tr><th>Name</th><th>Status</th><th>Origin</th><th>Mount</th><th>VM ID</th></tr></thead>
               <tbody>
-                {worlds.map((world) => (
-                  <tr key={world.id} className={world.id === selected?.id ? "selected" : ""} onClick={() => setSelectedId(world.id)}>
-                    <td><strong>{world.name}</strong><span>{world.sourcePath}</span></td>
-                    <td><Badge tone={world.status === "ready" ? "ok" : world.status?.startsWith("pending") ? "warn" : "muted"}>{world.status}</Badge></td>
-                    <td>{world.backendConfig?.mountMode || world.sandbox?.mountMode || "-"}</td>
-                    <td>{shortId(world.sandbox?.id)}</td>
+                {inventory.map((row) => (
+                  <tr key={row.key} className={row.key === selected?.key ? "selected" : ""} onClick={() => setSelectedId(row.key)}>
+                    <td><strong>{row.name}</strong><span>{row.sourcePath}</span></td>
+                    <td><Badge tone={statusTone(row.status)}>{row.status}</Badge></td>
+                    <td>{row.origin}</td>
+                    <td>{row.mountMode}</td>
+                    <td>{shortId(row.vmId)}</td>
                   </tr>
                 ))}
-                {worlds.length === 0 && <tr><td colSpan={4} className="empty-cell">No VMs</td></tr>}
+                {inventory.length === 0 && <tr><td colSpan={5} className="empty-cell">No VMs</td></tr>}
               </tbody>
             </table>
           </section>
@@ -302,9 +319,9 @@ function App() {
           <section className="panel detail-panel">
             <div className="panel-head">
               <h2>VM Details</h2>
-              {selected && <button className="button danger" onClick={() => removeWorld(selected)}><Trash2 size={15} /> Delete</button>}
+              {selected?.world && <button className="button danger" onClick={() => removeWorld(selected.world!)}><Trash2 size={15} /> Delete</button>}
             </div>
-            {selected ? <VmDetails world={selected} /> : <div className="empty-state">Select a VM</div>}
+            {selected ? <VmDetails row={selected} /> : <div className="empty-state">Select a VM</div>}
           </section>
         </section>
       </main>
@@ -312,17 +329,22 @@ function App() {
   );
 }
 
-function VmDetails({ world }: { world: World }) {
+function VmDetails({ row }: { row: InventoryRow }) {
+  const world = row.world;
+  const runtime = row.runtime;
   return (
     <div className="details-grid">
-      <Info label="ID" value={world.id} />
-      <Info label="Status" value={world.status} />
-      <Info label="Source" value={world.sourcePath} />
-      <Info label="Mount mode" value={world.backendConfig?.mountMode || world.sandbox?.mountMode || "-"} />
-      <Info label="VM ID" value={world.sandbox?.id || "-"} />
-      <Info label="Base template" value={world.sandbox?.baseId || "-"} />
-      <Info label="Reason" value={world.sandbox?.reason || "-"} />
-      <Info label="Upper bytes" value={formatBytes(world.diskUsage?.upperBytes || 0)} />
+      <Info label="Name" value={row.name} />
+      <Info label="Status" value={row.status} />
+      <Info label="Origin" value={row.origin} />
+      <Info label="VM ID" value={row.vmId || "-"} />
+      <Info label="Host" value={runtime?.hostId || "-"} />
+      <Info label="Created" value={runtime?.createdAt || world?.createdAt || "-"} />
+      <Info label="Source" value={world?.sourcePath || "-"} />
+      <Info label="Mount mode" value={row.mountMode} />
+      <Info label="Base template" value={world?.sandbox?.baseId || "-"} />
+      <Info label="Reason" value={world?.sandbox?.reason || "-"} />
+      <Info label="Upper bytes" value={formatBytes(world?.diskUsage?.upperBytes || 0)} />
     </div>
   );
 }
@@ -333,6 +355,52 @@ function Info({ label, value }: { label: string; value: string }) {
 
 function Badge({ children, tone }: { children: React.ReactNode; tone: "ok" | "warn" | "muted" }) {
   return <span className={`badge ${tone}`}>{children}</span>;
+}
+
+function buildInventory(worlds: World[], cube: CubeInspect | null): InventoryRow[] {
+  const runtimes = cube?.sandboxes || [];
+  const matchedRuntimeIds = new Set<string>();
+  const rows = worlds.map((world) => {
+    const runtime = runtimes.find((candidate) => sameVmId(candidate.id, world.sandbox?.id));
+    if (runtime) matchedRuntimeIds.add(runtime.id);
+    return {
+      key: `world:${world.id}`,
+      name: world.name,
+      status: runtime?.status || world.status,
+      origin: runtime ? "KakuriZai + CubeSandbox" : "KakuriZai",
+      sourcePath: world.sourcePath,
+      mountMode: world.backendConfig?.mountMode || world.sandbox?.mountMode || "-",
+      vmId: world.sandbox?.id || runtime?.id || "",
+      world,
+      runtime
+    };
+  });
+  for (const runtime of runtimes) {
+    if (matchedRuntimeIds.has(runtime.id)) continue;
+    rows.push({
+      key: `runtime:${runtime.id}`,
+      name: `vm-${shortId(runtime.id)}`,
+      status: runtime.status || "unknown",
+      origin: "CubeSandbox",
+      sourcePath: runtime.hostId ? `host ${runtime.hostId}` : "runtime-only",
+      mountMode: "-",
+      vmId: runtime.id,
+      runtime
+    });
+  }
+  return rows;
+}
+
+function sameVmId(left?: string, right?: string) {
+  if (!left || !right) return false;
+  return left === right || shortId(left) === shortId(right);
+}
+
+function statusTone(status: string): "ok" | "warn" | "muted" {
+  const normalized = status.toLowerCase();
+  if (["ready", "running", "active"].includes(normalized)) return "ok";
+  if (normalized.startsWith("pending") || normalized.includes("creating") || normalized.includes("starting")) return "warn";
+  return "muted";
 }
 
 async function api<T>(path: string, options: { method?: string; token?: string | null; body?: unknown } = {}): Promise<T> {
