@@ -55,19 +55,19 @@ test("cli covers studio world operations", async () => {
   const remove = JSON.parse((await runCli(home, ["remove", "cli-world", "--yes", "--json"])).stdout);
   assert.equal(remove.name, "cli-world");
   const afterRemove = await runCli(home, ["list"]);
-  assert.match(afterRemove.stdout, /no VMs/);
+  assert.match(afterRemove.stdout, /no sandboxes/);
 });
 
 test("help exposes CLI equivalents for Studio buttons", async () => {
   const result = await runCli(await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-help-")), ["help"]);
   for (const command of [
-    "agctl show <vm>",
-    "agctl file <vm>",
-    "agctl terminal <vm>",
-    "agctl vscode <vm>",
-    "agctl agent <vm>",
-    "agctl apply <vm>",
-    "agctl remove <vm>"
+    "agctl show <sandbox>",
+    "agctl file <sandbox>",
+    "agctl terminal <sandbox>",
+    "agctl vscode <sandbox>",
+    "agctl agent <sandbox>",
+    "agctl apply <sandbox>",
+    "agctl remove <sandbox>"
   ]) {
     assert.match(result.stdout, new RegExp(escapeRegExp(command)));
   }

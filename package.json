@@ -1,7 +1,7 @@
 {
   "name": "ipa-rs-kakurizai",
   "version": "0.1.0",
-  "description": "VM lifecycle control plane and Studio UI backed by the CubeSandbox runtime.",
+  "description": "Sandbox lifecycle control plane and Studio UI backed by the CubeSandbox runtime.",
   "type": "module",
   "bin": {
     "agctl": "./dist/bin/agctl.js"

@@ -84,17 +84,17 @@ const mountModes = [
   {
     id: "agctl-overlay",
     label: "agctl overlay",
-    description: "Read-only host folder plus KakuriZai upper/work layers inside the VM."
+    description: "Read-only host folder plus KakuriZai upper/work layers inside the sandbox."
   },
   {
     id: "cubesandbox-readonly",
     label: "Default read-only",
-    description: "Mount the selected host folder directly as read-only inside the VM."
+    description: "Mount the selected host folder directly as read-only inside the sandbox."
   },
   {
     id: "unsafe-rw",
     label: "Unsafe read-write",
-    description: "Mount the host folder directly as writable inside the VM."
+    description: "Mount the host folder directly as writable inside the sandbox."
   }
 ];
 
@@ -108,7 +108,7 @@ function App() {
   const [status, setStatus] = React.useState("Loading");
   const [busy, setBusy] = React.useState(false);
   const [launch, setLaunch] = React.useState({
-    name: "kakurizai-vm",
+    name: "kakurizai-sandbox",
     sourcePath: "",
     mountMode: "agctl-overlay",
     cpu: "2000m",
@@ -143,7 +143,7 @@ function App() {
       setWorlds(worldsResult);
       setCube(cubeResult);
       setSelectedId((current) => nextInventory.some((row) => row.key === current) ? current : nextInventory[0]?.key || null);
-      setStatus(`${nextInventory.length} VM${nextInventory.length === 1 ? "" : "s"} · ${cubeResult.sandboxes.length} CubeSandbox`);
+      setStatus(`${nextInventory.length} Sandbox${nextInventory.length === 1 ? "" : "es"} · ${cubeResult.sandboxes.length} CubeSandbox`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
     } finally {
@@ -187,7 +187,7 @@ function App() {
   }
 
   async function removeWorld(world: World) {
-    if (!confirm(`Delete VM ${world.name}?`)) return;
+    if (!confirm(`Delete sandbox ${world.name}?`)) return;
     setBusy(true);
     try {
       await api(`/api/worlds/${encodeURIComponent(world.id)}`, { method: "DELETE", token });
@@ -228,23 +228,23 @@ function App() {
           <div className="brand-icon"><Server size={18} /></div>
           <div>
             <strong>KakuriZai</strong>
-            <span>VM Console</span>
+            <span>Sandbox Console</span>
           </div>
         </div>
         <nav>
-          <button className="nav-item active"><Monitor size={16} /> Virtual Machines</button>
+          <button className="nav-item active"><Monitor size={16} /> Sandboxes</button>
         </nav>
         <div className="node-card">
           <span>Node</span>
           <strong>100.105.153.15</strong>
-          <small>{cube?.available ? "VM runtime online" : cube?.reason || "Unknown"}</small>
+          <small>{cube?.available ? "Sandbox runtime online" : cube?.reason || "Unknown"}</small>
         </div>
       </aside>
 
       <main className="workbench">
         <header className="topbar">
           <div>
-            <h1>Virtual Machines</h1>
+            <h1>Sandboxes</h1>
             <p>{status} · {session || "anonymous"}</p>
           </div>
           <button className="button" onClick={refresh} disabled={busy}><RefreshCcw size={15} /> Refresh</button>
@@ -257,7 +257,7 @@ function App() {
               <Badge tone={cube?.available ? "ok" : "warn"}>{cube?.available ? "ready" : "offline"}</Badge>
             </div>
             <table className="data-table">
-              <thead><tr><th>Name</th><th>Status</th><th>Origin</th><th>Mount</th><th>VM ID</th></tr></thead>
+              <thead><tr><th>Name</th><th>Status</th><th>Origin</th><th>Mount</th><th>Sandbox ID</th></tr></thead>
               <tbody>
                 {inventory.map((row) => (
                   <tr key={row.key} className={row.key === selected?.key ? "selected" : ""} onClick={() => setSelectedId(row.key)}>
@@ -268,14 +268,14 @@ function App() {
                     <td>{shortId(row.vmId)}</td>
                   </tr>
                 ))}
-                {inventory.length === 0 && <tr><td colSpan={5} className="empty-cell">No VMs</td></tr>}
+                {inventory.length === 0 && <tr><td colSpan={5} className="empty-cell">No sandboxes</td></tr>}
               </tbody>
             </table>
           </section>
 
           <section className="panel launch-panel">
             <div className="panel-head">
-              <h2>Launch VM</h2>
+              <h2>Launch Sandbox</h2>
               <Badge tone={cube?.available ? "ok" : "warn"}>{cube?.available ? "ready" : "offline"}</Badge>
             </div>
             <form onSubmit={launchVm} className="form-grid">
@@ -312,16 +312,16 @@ function App() {
                 <label className="field-label">CPU<input value={launch.cpu} onChange={(event) => setLaunch({ ...launch, cpu: event.target.value })} /></label>
                 <label className="field-label">Memory<input value={launch.memory} onChange={(event) => setLaunch({ ...launch, memory: event.target.value })} /></label>
               </div>
-              <button className="button primary" type="submit" disabled={busy}><Play size={16} /> Start VM</button>
+              <button className="button primary" type="submit" disabled={busy}><Play size={16} /> Start Sandbox</button>
             </form>
           </section>
 
           <section className="panel detail-panel">
             <div className="panel-head">
-              <h2>VM Details</h2>
+              <h2>Sandbox Details</h2>
               {selected?.world && <button className="button danger" onClick={() => removeWorld(selected.world!)}><Trash2 size={15} /> Delete</button>}
             </div>
-            {selected ? <VmDetails row={selected} /> : <div className="empty-state">Select a VM</div>}
+            {selected ? <SandboxDetails row={selected} /> : <div className="empty-state">Select a sandbox</div>}
           </section>
         </section>
       </main>
@@ -329,7 +329,7 @@ function App() {
   );
 }
 
-function VmDetails({ row }: { row: InventoryRow }) {
+function SandboxDetails({ row }: { row: InventoryRow }) {
   const world = row.world;
   const runtime = row.runtime;
   return (
@@ -337,7 +337,7 @@ function VmDetails({ row }: { row: InventoryRow }) {
       <Info label="Name" value={row.name} />
       <Info label="Status" value={row.status} />
       <Info label="Origin" value={row.origin} />
-      <Info label="VM ID" value={row.vmId || "-"} />
+      <Info label="Sandbox ID" value={row.vmId || "-"} />
       <Info label="Host" value={runtime?.hostId || "-"} />
       <Info label="Created" value={runtime?.createdAt || world?.createdAt || "-"} />
       <Info label="Source" value={world?.sourcePath || "-"} />
@@ -379,7 +379,7 @@ function buildInventory(worlds: World[], cube: CubeInspect | null): InventoryRow
     if (matchedRuntimeIds.has(runtime.id)) continue;
     rows.push({
       key: `runtime:${runtime.id}`,
-      name: `vm-${shortId(runtime.id)}`,
+      name: `sandbox-${shortId(runtime.id)}`,
       status: runtime.status || "unknown",
       origin: "CubeSandbox",
       sourcePath: runtime.hostId ? `host ${runtime.hostId}` : "runtime-only",
