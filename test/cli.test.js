@@ -40,7 +40,9 @@ test("cli covers studio world operations", async () => {
   assert.equal(showJson.id, world.id);
   assert.ok(showJson.paths.upper.startsWith(home));
 
-  await fs.writeFile(path.join(showJson.paths.upper, "new.txt"), "new\n");
+  const mountUpper = path.join(showJson.paths.upper, showJson.backendConfig.mounts[0].id);
+  await fs.mkdir(mountUpper, { recursive: true });
+  await fs.writeFile(path.join(mountUpper, "new.txt"), "new\n");
   const changed = JSON.parse((await runCli(home, ["changed", "cli-world", "--json"])).stdout);
   assert.deepEqual(changed.map((change) => `${change.action}:${change.path}`), ["upsert:new.txt"]);
 

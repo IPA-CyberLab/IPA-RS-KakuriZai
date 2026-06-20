@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { normalizeHostMounts } from "../core/mounts.js";
 import {
   cubeNetworkPolicy,
   effectiveNetworkConfig,
@@ -8,21 +9,19 @@ import {
 
 export function buildCubeSandboxRequest(world, cubeConfig = {}) {
   const workspace = cubeConfig.workspacePath || "/workspace";
-  const mountMode = cubeConfig.mountMode || world.backendConfig?.mountMode || "agctl-overlay";
+  const mounts = mountSpecsForWorld(world, cubeConfig);
+  const mountMode = summarizeMountMode(mounts);
   const network = normalizeNetworkConfig({
     type: cubeConfig.networkType || world.backendConfig?.networkType || "tap",
     ...(world.backendConfig?.network || {}),
     ...(cubeConfig.network || {})
   });
   const kubernetes = normalizeKubernetesConfig(cubeConfig.kubernetes || world.backendConfig?.kubernetes || {});
-  const lower = "/kakurizai/lower";
-  const upper = "/kakurizai/upper";
-  const work = "/kakurizai/work";
-  const whiteouts = "/kakurizai/whiteouts";
   const workspaceArg = shellQuote(workspace);
-  const setup = setupCommandForMountMode(mountMode, { workspaceArg, lower, upper, work, whiteouts });
-  const volumes = volumesForMountMode(mountMode, world);
-  const volumeMounts = volumeMountsForMountMode(mountMode, world, { workspace, lower, upper, work, whiteouts });
+  const setup = setupCommandForMounts(mounts, { workspaceArg });
+  const volumes = volumesForMounts(mounts, world);
+  const volumeMounts = volumeMountsForMounts(mounts, world);
+  const primaryMount = mounts[0] || null;
   const request = {
     requestID: `kakurizai-${world.id}`,
     volumes,
@@ -51,11 +50,13 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
     annotations: {
       "kakurizai.backend": "cube-sandbox-overlay",
       "kakurizai.world": world.id,
-      "kakurizai.source": world.sourcePath,
+      "kakurizai.source": primaryMount?.sourcePath || world.sourcePath,
       "kakurizai.upper": world.paths.upper,
       "kakurizai.workspace": workspace,
       "kakurizai.mountMode": mountMode,
-      "kakurizai.hostMount": String(mountMode !== "none"),
+      "kakurizai.hostMount": String(mounts.length > 0),
+      "kakurizai.mounts": JSON.stringify(mounts.map(publicMountSpec)),
+      "kakurizai.overlayMounts": String(mounts.filter((mount) => mount.mode === "agctl-overlay").length),
       "kakurizai.kubernetes": String(kubernetes.enabled),
       "kakurizai.kubernetes.profile": kubernetes.profile,
       "cube.master.appsnapshot.template.id": cubeConfig.template || "kakurizai-base",
@@ -71,6 +72,24 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
     namespace: cubeConfig.namespace || "kakurizai"
   };
   return applyNetworkToCubeRequest(request, network, kubernetes);
+}
+
+export function mountSpecsForWorld(world, cubeConfig = {}) {
+  const workspace = cubeConfig.workspacePath || "/workspace";
+  return normalizeHostMounts({
+    hostMount: world.backendConfig?.hostMount,
+    sourcePath: world.sourcePath,
+    mountMode: cubeConfig.mountMode || world.backendConfig?.mountMode || "agctl-overlay",
+    mounts: world.backendConfig?.mounts
+  }, {
+    workspacePath: workspace
+  }).map((mount) => ({
+    ...mount,
+    lower: `/kakurizai/mounts/${mount.id}/lower`,
+    upper: `/kakurizai/upper/${mount.id}`,
+    work: `/kakurizai/work/${mount.id}`,
+    whiteouts: `/kakurizai/whiteouts/${mount.id}`
+  }));
 }
 
 export function applyNetworkToCubeRequest(request, networkInput = {}, kubernetesInput = {}) {
@@ -123,52 +142,66 @@ export function applyNetworkToCubeRequest(request, networkInput = {}, kubernetes
   return request;
 }
 
-function setupCommandForMountMode(mountMode, paths) {
-  if (mountMode === "agctl-overlay") {
-    return [
-      "set -eu",
-      `mkdir -p ${paths.workspaceArg} ${paths.lower} ${paths.upper} ${paths.work} ${paths.whiteouts}`,
-      "tail -f /dev/null"
-    ].join("; ");
-  }
-  return ["set -eu", `mkdir -p ${paths.workspaceArg}`, "tail -f /dev/null"].join("; ");
+function setupCommandForMounts(mounts, paths) {
+  const agctlMounts = mounts.filter((mount) => mount.mode === "agctl-overlay");
+  const dirs = [
+    paths.workspaceArg,
+    ...agctlMounts.flatMap((mount) => [
+      shellQuote(mount.sandboxPath),
+      shellQuote(mount.lower),
+      shellQuote(mount.upper),
+      shellQuote(mount.work),
+      shellQuote(mount.whiteouts)
+    ])
+  ];
+  return ["set -eu", `mkdir -p ${dirs.join(" ")}`, "tail -f /dev/null"].join("; ");
 }
 
-function volumesForMountMode(mountMode, world) {
-  if (mountMode === "none") {
-    return [];
+function volumesForMounts(mounts, world) {
+  if (!mounts.length) return [];
+  const volumes = [];
+  if (mounts.some((mount) => mount.mode === "agctl-overlay")) {
+    volumes.push(
+      hostDirVolume("upper", world.paths.upper),
+      hostDirVolume("work", world.paths.workdir),
+      hostDirVolume("whiteouts", world.paths.whiteouts)
+    );
   }
-  if (mountMode === "cubesandbox-readonly" || mountMode === "unsafe-rw") {
-    return [hostDirVolume("workspace", world.sourcePath)];
+  for (const mount of mounts) {
+    const volumeName = mount.mode === "agctl-overlay" ? `lower-${mount.id}` : `mount-${mount.id}`;
+    volumes.push(hostDirVolume(volumeName, mount.sourcePath));
   }
-  return [
-    hostDirVolume("lower", world.sourcePath),
-    hostDirVolume("upper", world.paths.upper),
-    hostDirVolume("work", world.paths.workdir),
-    hostDirVolume("whiteouts", world.paths.whiteouts)
-  ];
+  return volumes;
 }
 
-function volumeMountsForMountMode(mountMode, world, paths) {
-  if (mountMode === "none") {
-    return [];
+function volumeMountsForMounts(mounts, world) {
+  if (!mounts.length) return [];
+  const volumeMounts = [];
+  if (mounts.some((mount) => mount.mode === "agctl-overlay")) {
+    volumeMounts.push(
+      { name: "upper", container_path: "/kakurizai/upper", readonly: false, host_path: world.paths.upper },
+      { name: "work", container_path: "/kakurizai/work", readonly: false, host_path: world.paths.workdir },
+      { name: "whiteouts", container_path: "/kakurizai/whiteouts", readonly: false, host_path: world.paths.whiteouts }
+    );
   }
-  if (mountMode === "cubesandbox-readonly" || mountMode === "unsafe-rw") {
-    return [
-      {
-        name: "workspace",
-        container_path: paths.workspace,
-        readonly: mountMode === "cubesandbox-readonly",
-        host_path: world.sourcePath
-      }
-    ];
+  for (const mount of mounts) {
+    if (mount.mode === "agctl-overlay") {
+      volumeMounts.push({
+        name: `lower-${mount.id}`,
+        container_path: mount.lower,
+        readonly: true,
+        host_path: mount.sourcePath
+      });
+    } else {
+      volumeMounts.push({
+        name: `mount-${mount.id}`,
+        container_path: mount.sandboxPath,
+        readonly: mount.mode === "cubesandbox-readonly",
+        host_path: mount.sourcePath
+      });
+    }
   }
-  return [
-    { name: "lower", container_path: paths.lower, readonly: true, host_path: world.sourcePath },
-    { name: "upper", container_path: paths.upper, readonly: false, host_path: world.paths.upper },
-    { name: "work", container_path: paths.work, readonly: false, host_path: world.paths.workdir },
-    { name: "whiteouts", container_path: paths.whiteouts, readonly: false, host_path: world.paths.whiteouts }
-  ];
+  return volumeMounts;
 }
 
 function hostDirVolume(name, hostPath) {
@@ -189,4 +222,20 @@ function hostDirVolume(name, hostPath) {
 
 function shellQuote(value) {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
+}
+
+function summarizeMountMode(mounts) {
+  if (!mounts.length) return "none";
+  const modes = [...new Set(mounts.map((mount) => mount.mode))];
+  return modes.length === 1 ? modes[0] : "mixed";
+}
+
+function publicMountSpec(mount) {
+  return {
+    id: mount.id,
+    name: mount.name,
+    sourcePath: mount.sourcePath,
+    sandboxPath: mount.sandboxPath,
+    mode: mount.mode
+  };
 }

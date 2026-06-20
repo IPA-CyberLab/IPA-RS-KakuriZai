@@ -88,6 +88,7 @@ async function init() {
 
 async function create(config, args) {
   const sourcePath = takeOption(args, "--source") || takeOption(args, "-s");
+  const mountOptions = takeRepeatedOption(args, "--mount").map(parseMountOption);
   const name = takeOption(args, "--name") || takeOption(args, "-n");
   const backend = takeOption(args, "--backend") || config.defaultBackend;
   const noHostMount = takeFlag(args, "--no-host-mount");
@@ -97,9 +98,14 @@ async function create(config, args) {
   const allowInternet = takeOption(args, "--allow-internet-access");
   const kubernetes = takeFlag(args, "--kubernetes") || takeFlag(args, "--k8s");
   if (!name) throw new Error("create requires --name");
-  if (!sourcePath && !noHostMount) throw new Error("create requires --source unless --no-host-mount is set");
+  if (!sourcePath && mountOptions.length === 0 && !noHostMount) throw new Error("create requires --source or --mount unless --no-host-mount is set");
+  const mounts = [
+    ...mountOptions,
+    ...(sourcePath ? [{ sourcePath, mode: undefined }] : [])
+  ].map((mount) => ({ ...mount, mode: mount.mode || undefined }));
   const world = await createWorld(config, {
     sourcePath,
+    mounts: mounts.length ? mounts : undefined,
     name,
     backend,
     hostMount: !noHostMount,
@@ -317,6 +323,24 @@ function takeFlag(args, name) {
   if (index < 0) return false;
   args.splice(index, 1);
   return true;
+}
+
+function parseMountOption(value) {
+  const input = String(value || "").trim();
+  const modeMatch = /:(agctl-overlay|cubesandbox-readonly|unsafe-rw)$/.exec(input);
+  const withoutMode = modeMatch ? input.slice(0, -modeMatch[0].length) : input;
+  const equals = withoutMode.indexOf("=");
+  if (equals > 0) {
+    return {
+      name: withoutMode.slice(0, equals),
+      sourcePath: withoutMode.slice(equals + 1),
+      mode: modeMatch?.[1]
+    };
+  }
+  return {
+    sourcePath: withoutMode,
+    mode: modeMatch?.[1]
+  };
 }
 
 function printWorld(world) {

@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { CubeSandboxClient } from "../cube/client.js";
-import { buildCubeSandboxRequest } from "../cube/request.js";
+import { buildCubeSandboxRequest, mountSpecsForWorld } from "../cube/request.js";
 
 export class CubeSandboxOverlayBackend {
   name = "cube-sandbox-overlay";
@@ -24,11 +24,19 @@ export class CubeSandboxOverlayBackend {
       mountMode
     };
     const request = buildCubeSandboxRequest(world, cubeConfig);
+    const mountSpecs = mountSpecsForWorld(world, cubeConfig);
     world.backendConfig.cubeRequest = request;
     world.backendConfig.mountMode = mountMode;
-    world.backendConfig.mounts = mountMapForMode(world, mountMode, this.config.cube.workspacePath || "/workspace");
+    world.backendConfig.mounts = mountSpecs.map((mount) => ({
+      id: mount.id,
+      name: mount.name,
+      sourcePath: mount.sourcePath,
+      sandboxPath: mount.sandboxPath,
+      mode: mount.mode
+    }));
+    world.backendConfig.mountMap = mountMapForMode(world, mountSpecs);
     const provision = await this.client.createSandbox(world, request);
-    const overlayPending = mountMode === "agctl-overlay" && provision.provisioned && provision.overlay?.mounted === false;
+    const overlayPending = provision.provisioned && provision.overlay?.mounted === false;
     world.sandbox = {
       id: provision.sandboxId || null,
       containerId: provision.containerId || null,
@@ -91,25 +99,27 @@ export class CubeSandboxOverlayBackend {
   }
 }
 
-function mountMapForMode(world, mountMode, workspacePath) {
-  if (mountMode === "none") {
-    return {};
-  }
-  if (mountMode === "cubesandbox-readonly" || mountMode === "unsafe-rw") {
-    return {
-      workspace: {
-        hostPath: world.sourcePath,
-        sandboxPath: workspacePath,
-        readonly: mountMode === "cubesandbox-readonly",
-        mode: mountMode
-      }
+function mountMapForMode(world, mounts) {
+  const result = {};
+  for (const mount of mounts) {
+    result[mount.id] = {
+      name: mount.name,
+      hostPath: mount.sourcePath,
+      sandboxPath: mount.sandboxPath,
+      readonly: mount.mode !== "unsafe-rw",
+      mode: mount.mode,
+      lower: mount.mode === "agctl-overlay" ? mount.lower : null,
+      upper: mount.mode === "agctl-overlay" ? mount.upper : null,
+      workdir: mount.mode === "agctl-overlay" ? mount.work : null,
+      whiteouts: mount.mode === "agctl-overlay" ? mount.whiteouts : null
     };
   }
-  return {
-    lower: { hostPath: world.sourcePath, sandboxPath: "/kakurizai/lower", readonly: true },
-    upper: { hostPath: world.paths.upper, sandboxPath: "/kakurizai/upper", readonly: false },
-    workdir: { hostPath: world.paths.workdir, sandboxPath: "/kakurizai/work", readonly: false },
-    whiteouts: { hostPath: world.paths.whiteouts, sandboxPath: "/kakurizai/whiteouts", readonly: false },
-    workspace: workspacePath
-  };
+  if (mounts.some((mount) => mount.mode === "agctl-overlay")) {
+    result.kakurizaiStorage = {
+      upper: world.paths.upper,
+      workdir: world.paths.workdir,
+      whiteouts: world.paths.whiteouts
+    };
+  }
+  return result;
 }

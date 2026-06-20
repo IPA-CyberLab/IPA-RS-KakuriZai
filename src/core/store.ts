@@ -14,6 +14,7 @@ import {
   walkFiles,
   writeJsonAtomic
 } from "./fs.js";
+import { normalizeHostMounts, primaryMount } from "./mounts.js";
 
 export class WorldStore {
   constructor(config) {
@@ -47,14 +48,23 @@ export class WorldStore {
       exports: path.join(dir, "exports")
     };
     await Promise.all(Object.values(paths).filter((value) => value !== paths.metadata).map(ensureDir));
-    const hostMount = input.backendConfig?.hostMount !== false && Boolean(input.sourcePath);
-    const sourcePath = hostMount ? path.resolve(input.sourcePath) : paths.source;
-    if (hostMount) {
-      const sourceStat = await fs.stat(sourcePath);
+    const mountConfig = normalizeHostMounts({
+      hostMount: input.backendConfig?.hostMount,
+      sourcePath: input.sourcePath,
+      mountMode: input.backendConfig?.mountMode,
+      mounts: input.backendConfig?.mounts
+    }, {
+      workspacePath: this.config.cube?.workspacePath
+    });
+    const hostMount = mountConfig.length > 0;
+    const sourcePath = hostMount ? primaryMount(mountConfig).sourcePath : paths.source;
+    for (const mount of mountConfig) {
+      const sourceStat = await fs.stat(mount.sourcePath);
       if (!sourceStat.isDirectory()) {
-        throw new Error(`source path is not a directory: ${sourcePath}`);
+        throw new Error(`source path is not a directory: ${mount.sourcePath}`);
       }
     }
+    const mountModes = [...new Set(mountConfig.map((mount) => mount.mode))];
     const now = nowIso();
     const world = {
       version: 1,
@@ -74,7 +84,12 @@ export class WorldStore {
         lastExportPath: null
       },
       labels: input.labels || {},
-      backendConfig: input.backendConfig || {}
+      backendConfig: {
+        ...(input.backendConfig || {}),
+        hostMount,
+        mountMode: hostMount ? (mountModes.length === 1 ? mountModes[0] : "mixed") : "none",
+        mounts: mountConfig
+      }
     };
     await this.save(world);
     return world;
@@ -128,32 +143,35 @@ export class WorldStore {
 
   async changedPaths(ref) {
     const world = typeof ref === "string" ? await this.get(ref) : ref;
+    const mounts = structuredMountsForWorld(world, this.config);
+    if (mounts.length) {
+      const changed = [];
+      for (const mount of mounts) {
+        if (mount.mode !== "agctl-overlay") continue;
+        await collectUpperChanges({
+          changed,
+          upperRoot: path.join(world.paths.upper, mount.id),
+          whiteoutsRoot: path.join(world.paths.whiteouts, mount.id),
+          mount
+        });
+      }
+      return dedupeChanges(changed);
+    }
     const changed = [];
-    for await (const entry of walkFiles(world.paths.upper)) {
-      const unionfsWhiteout = unionfsFuseWhiteoutTarget(entry.relativePath);
-      if (unionfsWhiteout) {
-        changed.push({ action: "delete", path: unionfsWhiteout, source: "unionfs-fuse-whiteout" });
-        continue;
-      }
-      if (isUnionfsFuseControlPath(entry.relativePath)) continue;
-      if (entry.type === "directory") continue;
-      const overlayWhiteout = overlayWhiteoutTarget(entry.relativePath);
-      if (overlayWhiteout) {
-        changed.push({ action: "delete", path: overlayWhiteout, source: "overlay-whiteout" });
-        continue;
-      }
-      changed.push({ action: "upsert", path: entry.relativePath, source: "upper" });
-    }
-    for await (const entry of walkFiles(world.paths.whiteouts)) {
-      if (entry.type === "directory") continue;
-      changed.push({ action: "delete", path: entry.relativePath, source: "whiteouts" });
-    }
+    await collectUpperChanges({
+      changed,
+      upperRoot: world.paths.upper,
+      whiteoutsRoot: world.paths.whiteouts,
+      mount: { id: null, name: "workspace", sourcePath: world.sourcePath }
+    });
     return dedupeChanges(changed);
   }
 
   async markWhiteout(ref, relativePath) {
     const world = typeof ref === "string" ? await this.get(ref) : ref;
-    const marker = resolveInside(world.paths.whiteouts, relativePath);
+    const mount = structuredMountsForWorld(world, this.config)[0] || null;
+    const whiteoutsRoot = mount ? path.join(world.paths.whiteouts, mount.id) : world.paths.whiteouts;
+    const marker = resolveInside(whiteoutsRoot, relativePath);
     await ensureDir(path.dirname(marker));
     await fs.writeFile(marker, "", "utf8");
     world.apply.state = "dirty";
@@ -166,15 +184,15 @@ export class WorldStore {
     const changes = await this.changedPaths(world);
     if (options.dryRun) return { world, changes, applied: false };
     for (const change of changes) {
-      const target = resolveInside(world.sourcePath, change.path);
+      const target = resolveInside(change.sourcePath || world.sourcePath, change.path);
       if (change.action === "delete") {
         await fs.rm(target, { recursive: true, force: true });
       }
     }
     for (const change of changes) {
       if (change.action !== "upsert") continue;
-      const source = resolveInside(world.paths.upper, change.path);
-      const target = resolveInside(world.sourcePath, change.path);
+      const source = resolveInside(change.upperRoot || world.paths.upper, change.path);
+      const target = resolveInside(change.sourcePath || world.sourcePath, change.path);
       await copyTreeEntry(source, target);
     }
     world.apply.state = "clean";
@@ -182,6 +200,52 @@ export class WorldStore {
     await this.save(world);
     return { world, changes, applied: true };
   }
+}
+
+async function collectUpperChanges({ changed, upperRoot, whiteoutsRoot, mount }) {
+  for await (const entry of walkFiles(upperRoot)) {
+    const unionfsWhiteout = unionfsFuseWhiteoutTarget(entry.relativePath);
+    if (unionfsWhiteout) {
+      changed.push(changeForMount("delete", unionfsWhiteout, "unionfs-fuse-whiteout", mount, upperRoot));
+      continue;
+    }
+    if (isUnionfsFuseControlPath(entry.relativePath)) continue;
+    if (entry.type === "directory") continue;
+    const overlayWhiteout = overlayWhiteoutTarget(entry.relativePath);
+    if (overlayWhiteout) {
+      changed.push(changeForMount("delete", overlayWhiteout, "overlay-whiteout", mount, upperRoot));
+      continue;
+    }
+    changed.push(changeForMount("upsert", entry.relativePath, "upper", mount, upperRoot));
+  }
+  for await (const entry of walkFiles(whiteoutsRoot)) {
+    if (entry.type === "directory") continue;
+    changed.push(changeForMount("delete", entry.relativePath, "whiteouts", mount, upperRoot));
+  }
+}
+
+function changeForMount(action, relativePath, source, mount, upperRoot) {
+  return {
+    action,
+    path: relativePath,
+    source,
+    mount: mount.name,
+    mountId: mount.id,
+    sourcePath: mount.sourcePath,
+    upperRoot
+  };
+}
+
+function structuredMountsForWorld(world, config) {
+  if (!Array.isArray(world.backendConfig?.mounts)) return [];
+  return normalizeHostMounts({
+    hostMount: world.backendConfig?.hostMount,
+    sourcePath: world.sourcePath,
+    mountMode: world.backendConfig?.mountMode,
+    mounts: world.backendConfig.mounts
+  }, {
+    workspacePath: config.cube?.workspacePath
+  });
 }
 
 function overlayWhiteoutTarget(relativePath) {
@@ -210,7 +274,7 @@ function isUnionfsFuseControlPath(relativePath) {
 function dedupeChanges(changes) {
   const map = new Map();
   for (const change of changes) {
-    map.set(`${change.action}:${change.path}`, change);
+    map.set(`${change.mountId || "legacy"}:${change.action}:${change.path}`, change);
   }
   return [...map.values()].sort((a, b) => a.path.localeCompare(b.path));
 }

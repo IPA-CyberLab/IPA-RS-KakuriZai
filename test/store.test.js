@@ -18,9 +18,11 @@ test("apply copies upper changes only when requested", async () => {
     sourcePath: source,
     backend: "cube-sandbox-overlay"
   });
-  await fs.writeFile(path.join(world.paths.upper, "keep.txt"), "new\n");
-  await fs.mkdir(path.join(world.paths.upper, "nested"));
-  await fs.writeFile(path.join(world.paths.upper, "nested", "file.txt"), "nested\n");
+  const upper = path.join(world.paths.upper, world.backendConfig.mounts[0].id);
+  await fs.mkdir(upper, { recursive: true });
+  await fs.writeFile(path.join(upper, "keep.txt"), "new\n");
+  await fs.mkdir(path.join(upper, "nested"));
+  await fs.writeFile(path.join(upper, "nested", "file.txt"), "nested\n");
   assert.equal(await fs.readFile(path.join(source, "keep.txt"), "utf8"), "old\n");
   const dryRun = await store.apply(world, { dryRun: true });
   assert.equal(dryRun.applied, false);
@@ -63,10 +65,11 @@ test("unionfs-fuse whiteouts delete host paths during apply", async () => {
     sourcePath: source,
     backend: "cube-sandbox-overlay"
   });
-  await fs.mkdir(path.join(world.paths.upper, ".unionfs-fuse", "src"), { recursive: true });
-  await fs.writeFile(path.join(world.paths.upper, ".unionfs-fuse", "src", "cli.ts_HIDDEN~"), "");
-  await fs.mkdir(path.join(world.paths.upper, ".unionfs-fuse", "docs_HIDDEN~"), { recursive: true });
-  await fs.writeFile(path.join(world.paths.upper, ".unionfs-fuse", "ignored-control-file"), "ignored\n");
+  const upper = path.join(world.paths.upper, world.backendConfig.mounts[0].id);
+  await fs.mkdir(path.join(upper, ".unionfs-fuse", "src"), { recursive: true });
+  await fs.writeFile(path.join(upper, ".unionfs-fuse", "src", "cli.ts_HIDDEN~"), "");
+  await fs.mkdir(path.join(upper, ".unionfs-fuse", "docs_HIDDEN~"), { recursive: true });
+  await fs.writeFile(path.join(upper, ".unionfs-fuse", "ignored-control-file"), "ignored\n");
 
   const dryRun = await store.apply(world, { dryRun: true });
   assert.deepEqual(

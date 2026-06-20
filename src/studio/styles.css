@@ -214,6 +214,10 @@ label {
   padding: 0;
 }
 
+.dangerIcon {
+  color: #f0b4ab;
+}
+
 .ghost {
   border-color: transparent;
   background: transparent;
@@ -226,6 +230,12 @@ label {
 
 .wide {
   width: 100%;
+}
+
+.smallButton {
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
 }
 
 .actionMenu {
@@ -398,6 +408,44 @@ label {
 .mountModes {
   display: grid;
   gap: 7px;
+}
+
+.fieldHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.fieldHeader label {
+  margin: 0;
+}
+
+.mountEditorList {
+  display: grid;
+  gap: 10px;
+}
+
+.mountEditorRow {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #15161a;
+}
+
+.compactFields {
+  gap: 8px;
+}
+
+.compactMountModes {
+  gap: 5px;
+}
+
+.compactMountModes .mountChoice {
+  padding: 7px 8px;
 }
 
 .mountChoice {

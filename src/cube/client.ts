@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { commandExists } from "../core/fs.js";
 import { runCommand } from "../core/process.js";
+import { mountSpecsForWorld } from "./request.js";
 
 export class CubeSandboxClient {
   constructor(config = {}) {
@@ -67,8 +68,8 @@ export class CubeSandboxClient {
       };
     }
     const sandboxId = parseMasterSandboxId(output) || world.id;
-    const mountMode = request.annotations?.["kakurizai.mountMode"] || world.backendConfig?.mountMode || "agctl-overlay";
-    const overlay = mountMode === "agctl-overlay" ? await this.setupOverlay(world, sandboxId) : null;
+    const overlayMounts = Number(request.annotations?.["kakurizai.overlayMounts"] || 0);
+    const overlay = overlayMounts > 0 ? await this.setupOverlay(world, sandboxId) : null;
     return {
       provisioned: true,
       mode: "master",
@@ -273,31 +274,27 @@ export class CubeSandboxClient {
     const binary = commandExists(this.config.cubecli || "cubecli");
     if (!binary) return { mounted: false, reason: "cubecli not found" };
     const workspace = shellQuote(this.config.workspacePath || "/workspace");
+    const mounts = mountSpecsForWorld(world, this.config).filter((mount) => mount.mode === "agctl-overlay");
+    if (!mounts.length) return { mounted: true, driver: null, reason: null, output: "" };
+    const setupCalls = mounts.map((mount) => [
+      "setup_mount",
+      shellQuote(mount.name),
+      shellQuote(mount.lower),
+      shellQuote(mount.upper),
+      shellQuote(mount.work),
+      shellQuote(mount.sandboxPath)
+    ].join(" ")).join("; ");
     const script = [
       "set -eu",
-      "lower=/kakurizai/lower",
-      "upper=/kakurizai/upper",
-      "work=/kakurizai/work",
-      "whiteouts=/kakurizai/whiteouts",
       `workspace=${workspace}`,
-      "mkdir -p \"$lower\" \"$upper\" \"$work\" \"$whiteouts\"",
-      "probe_workspace() { sample_file=$(find \"$lower\" -mindepth 1 -maxdepth 4 -type f -print -quit 2>/dev/null || true); if [ -n \"$sample_file\" ]; then rel=${sample_file#\"$lower\"/}; head -c 1 \"$workspace/$rel\" >/dev/null || return 1; fi; sample_dir=$(find \"$lower\" -mindepth 1 -maxdepth 4 -type d -print -quit 2>/dev/null || true); if [ -n \"$sample_dir\" ]; then rel=${sample_dir#\"$lower\"/}; (cd \"$workspace/$rel\") || return 1; fi; probe=\".kakurizai-overlay-probe-$$\"; printf kakurizai > \"$workspace/$probe\" || return 1; test -f \"$upper/$probe\" || return 1; rm -f \"$upper/$probe\"; return 0; }",
+      "driver_file=/kakurizai/work/.kakurizai-overlay-driver",
+      "mkdir -p \"$workspace\" /kakurizai/work",
+      ": > \"$driver_file\"",
+      "probe_mount() { lower=$1; upper=$2; target=$3; sample_file=$(find \"$lower\" -mindepth 1 -maxdepth 4 -type f -print -quit 2>/dev/null || true); if [ -n \"$sample_file\" ]; then rel=${sample_file#\"$lower\"/}; head -c 1 \"$target/$rel\" >/dev/null || return 1; fi; sample_dir=$(find \"$lower\" -mindepth 1 -maxdepth 4 -type d -print -quit 2>/dev/null || true); if [ -n \"$sample_dir\" ]; then rel=${sample_dir#\"$lower\"/}; (cd \"$target/$rel\") || return 1; fi; probe=\".kakurizai-overlay-probe-$$\"; printf kakurizai > \"$target/$probe\" || return 1; test -f \"$upper/$probe\" || return 1; rm -f \"$upper/$probe\"; return 0; }",
       "install_unionfs_fuse() { command -v unionfs-fuse >/dev/null 2>&1 && return 0; if command -v apt-get >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y --no-install-recommends unionfs-fuse fuse3; return 0; fi; if command -v apk >/dev/null 2>&1; then apk add --no-cache unionfs-fuse fuse3; return 0; fi; if command -v dnf >/dev/null 2>&1; then dnf install -y unionfs-fuse fuse3; return 0; fi; if command -v yum >/dev/null 2>&1; then yum install -y unionfs-fuse fuse3; return 0; fi; return 1; }",
       "install_fuse_overlayfs() { command -v fuse-overlayfs >/dev/null 2>&1 && return 0; if command -v apt-get >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y --no-install-recommends fuse-overlayfs fuse3; return 0; fi; if command -v apk >/dev/null 2>&1; then apk add --no-cache fuse-overlayfs fuse3; return 0; fi; if command -v dnf >/dev/null 2>&1; then dnf install -y fuse-overlayfs fuse3; return 0; fi; if command -v yum >/dev/null 2>&1; then yum install -y fuse-overlayfs fuse3; return 0; fi; return 1; }",
-      "if mountpoint -q \"$workspace\" && probe_workspace; then printf mounted > \"$work/.kakurizai-overlay-driver\"; exit 0; fi",
-      "if mountpoint -q \"$workspace\"; then umount -l \"$workspace\" || true; fi",
-      "if [ -L \"$workspace\" ]; then rm -f \"$workspace\"; fi",
-      "mkdir -p \"$workspace\"",
-      "if mount -t overlay overlay -o lowerdir=\"$lower\",upperdir=\"$upper\",workdir=\"$work\" \"$workspace\" 2>/tmp/kakurizai-overlay.err && probe_workspace; then printf kernel-overlay > \"$work/.kakurizai-overlay-driver\"; exit 0; fi",
-      "if mountpoint -q \"$workspace\"; then umount -l \"$workspace\" || true; fi",
-      "install_unionfs_fuse",
-      "if unionfs-fuse -o cow \"$upper=RW:$lower=RO\" \"$workspace\" && probe_workspace; then printf unionfs-fuse > \"$work/.kakurizai-overlay-driver\"; exit 0; fi",
-      "if mountpoint -q \"$workspace\"; then fusermount3 -uz \"$workspace\" || fusermount -uz \"$workspace\" || umount -l \"$workspace\" || true; fi",
-      "install_fuse_overlayfs",
-      "if fuse-overlayfs -o lowerdir=\"$lower\",upperdir=\"$upper\",workdir=\"$work\" \"$workspace\" && probe_workspace; then printf fuse-overlayfs > \"$work/.kakurizai-overlay-driver\"; exit 0; fi",
-      "if mountpoint -q \"$workspace\"; then fusermount3 -uz \"$workspace\" || fusermount -uz \"$workspace\" || umount -l \"$workspace\" || true; fi",
-      "echo 'KakuriZai agctl overlay mount failed: no usable overlay driver could read, cd, and write /workspace' >&2",
-      "exit 1"
+      "setup_mount() { name=$1; lower=$2; upper=$3; work=$4; target=$5; mkdir -p \"$lower\" \"$upper\" \"$work\" \"$target\"; if mountpoint -q \"$target\" && probe_mount \"$lower\" \"$upper\" \"$target\"; then printf '%s=%s\\n' \"$name\" mounted >> \"$driver_file\"; return 0; fi; if mountpoint -q \"$target\"; then umount -l \"$target\" || true; fi; if [ -L \"$target\" ]; then rm -f \"$target\"; fi; mkdir -p \"$target\"; if mount -t overlay overlay -o lowerdir=\"$lower\",upperdir=\"$upper\",workdir=\"$work\" \"$target\" 2>/tmp/kakurizai-overlay.err && probe_mount \"$lower\" \"$upper\" \"$target\"; then printf '%s=%s\\n' \"$name\" kernel-overlay >> \"$driver_file\"; return 0; fi; if mountpoint -q \"$target\"; then umount -l \"$target\" || true; fi; install_unionfs_fuse; if unionfs-fuse -o cow \"$upper=RW:$lower=RO\" \"$target\" && probe_mount \"$lower\" \"$upper\" \"$target\"; then printf '%s=%s\\n' \"$name\" unionfs-fuse >> \"$driver_file\"; return 0; fi; if mountpoint -q \"$target\"; then fusermount3 -uz \"$target\" || fusermount -uz \"$target\" || umount -l \"$target\" || true; fi; install_fuse_overlayfs; if fuse-overlayfs -o lowerdir=\"$lower\",upperdir=\"$upper\",workdir=\"$work\" \"$target\" && probe_mount \"$lower\" \"$upper\" \"$target\"; then printf '%s=%s\\n' \"$name\" fuse-overlayfs >> \"$driver_file\"; return 0; fi; if mountpoint -q \"$target\"; then fusermount3 -uz \"$target\" || fusermount -uz \"$target\" || umount -l \"$target\" || true; fi; echo \"KakuriZai agctl overlay mount failed for $name: no usable overlay driver could read, cd, and write $target\" >&2; return 1; }",
+      setupCalls
     ].join("; ");
     const result = await runCommand(binary, [
       ...cubeCliGlobalArgs(this.config),

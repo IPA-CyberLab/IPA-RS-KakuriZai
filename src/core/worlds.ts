@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { getBackend } from "../backends/index.js";
 import { applyNetworkToCubeRequest } from "../cube/request.js";
+import { normalizeHostMounts, primaryMount } from "./mounts.js";
 import { normalizeKubernetesConfig, normalizeNetworkConfig } from "./network.js";
 import { WorldStore } from "./store.js";
 import { openTarget } from "./openers.js";
@@ -11,7 +12,12 @@ export async function createWorld(config, input) {
   const store = new WorldStore(config);
   const backendName = input.backend || config.defaultBackend;
   const backend = getBackend(config, backendName);
-  const hostMount = input.hostMount !== false && Boolean(input.sourcePath);
+  const requestedMounts = Array.isArray(input.mounts) && input.mounts.length
+    ? input.mounts
+    : input.sourcePath
+      ? [{ sourcePath: input.sourcePath, name: input.mountName, mode: input.mountMode }]
+      : [];
+  const hostMount = input.hostMount !== false && requestedMounts.length > 0;
   const mountMode = hostMount ? input.mountMode || config.cube?.mountMode || "agctl-overlay" : "none";
   const network = normalizeNetworkConfig({
     ...(input.network || {}),
@@ -21,7 +27,7 @@ export async function createWorld(config, input) {
   const writableLayerSize = input.writableLayerSize || config.cube?.writableLayerSize || null;
   const world = await store.create({
     name: input.name,
-    sourcePath: input.sourcePath,
+    sourcePath: input.sourcePath || requestedMounts[0]?.sourcePath,
     backend: backendName,
     status: "creating",
     labels: {
@@ -34,6 +40,7 @@ export async function createWorld(config, input) {
     backendConfig: {
       hostMount,
       mountMode,
+      mounts: hostMount ? requestedMounts : [],
       template: input.template || config.cube?.template || null,
       cpu: input.cpu || config.cube?.cpu || null,
       memory: input.memory || config.cube?.memory || null,
@@ -110,6 +117,28 @@ export async function updateWorldConfig(config, ref, input = {}) {
   if (input.hostMount !== undefined) {
     world.backendConfig.hostMount = Boolean(input.hostMount);
   }
+  if (input.mounts !== undefined) {
+    const mounts = normalizeHostMounts({
+      hostMount: input.hostMount ?? world.backendConfig.hostMount,
+      sourcePath: input.sourcePath ?? world.sourcePath,
+      mountMode: input.mountMode ?? world.backendConfig.mountMode,
+      mounts: input.mounts
+    }, {
+      workspacePath: config.cube?.workspacePath
+    });
+    for (const mount of mounts) {
+      const sourceStat = await fs.stat(mount.sourcePath);
+      if (!sourceStat.isDirectory()) {
+        throw new Error(`source path is not a directory: ${mount.sourcePath}`);
+      }
+    }
+    const modes = [...new Set(mounts.map((mount) => mount.mode))];
+    world.backendConfig.mounts = mounts;
+    world.backendConfig.hostMount = mounts.length > 0;
+    world.backendConfig.mountMode = mounts.length ? (modes.length === 1 ? modes[0] : "mixed") : "none";
+    const primary = primaryMount(mounts);
+    if (primary) world.sourcePath = primary.sourcePath;
+  }
   if (input.sourcePath !== undefined && input.hostMount !== false) {
     const sourcePath = path.resolve(input.sourcePath);
     const sourceStat = await fs.stat(sourcePath);
@@ -120,6 +149,12 @@ export async function updateWorldConfig(config, ref, input = {}) {
   }
   if (input.mountMode !== undefined) {
     world.backendConfig.mountMode = String(input.mountMode || "none").trim() || "none";
+    if (Array.isArray(world.backendConfig.mounts)) {
+      world.backendConfig.mounts = world.backendConfig.mounts.map((mount) => ({
+        ...mount,
+        mode: world.backendConfig.mountMode === "mixed" ? mount.mode : world.backendConfig.mountMode
+      }));
+    }
   }
   await store.save(world);
   if (input.recreate === true) {

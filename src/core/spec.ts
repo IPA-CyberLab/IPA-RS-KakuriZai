@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import YAML from "yaml";
 import { ensureDir } from "./fs.js";
+import { normalizeHostMounts } from "./mounts.js";
 import { normalizeKubernetesConfig, normalizeNetworkConfig } from "./network.js";
 
 export async function readSandboxManifest(filePath) {
@@ -52,6 +53,7 @@ export function manifestToCreateInput(manifest) {
     name: normalized.metadata.name,
     backend: spec.backend,
     sourcePath: spec.hostMount.enabled ? spec.hostMount.path : undefined,
+    mounts: spec.hostMount.enabled ? spec.hostMount.mounts : [],
     hostMount: spec.hostMount.enabled,
     mountMode: spec.hostMount.enabled ? spec.hostMount.mode : "none",
     template: spec.template,
@@ -67,7 +69,8 @@ export function manifestToCreateInput(manifest) {
 
 export function worldToManifest(world) {
   const backendConfig = world.backendConfig || {};
-  const hostMount = backendConfig.hostMount !== false && backendConfig.mountMode !== "none";
+  const mounts = Array.isArray(backendConfig.mounts) ? backendConfig.mounts : [];
+  const hostMount = backendConfig.hostMount !== false && (backendConfig.mountMode !== "none" || mounts.length > 0);
   return normalizeSandboxManifest({
     apiVersion: "kakurizai.dev/v1",
     kind: "Sandbox",
@@ -81,7 +84,8 @@ export function worldToManifest(world) {
       hostMount: {
         enabled: hostMount,
         path: hostMount ? world.sourcePath : null,
-        mode: hostMount ? backendConfig.mountMode || world.sandbox?.mountMode || "agctl-overlay" : "none"
+        mode: hostMount ? backendConfig.mountMode || world.sandbox?.mountMode || "agctl-overlay" : "none",
+        mounts
       },
       resources: {
         cpu: backendConfig.cpu || "2000m",
@@ -150,20 +154,36 @@ output "sandbox_name" {
 
 function normalizeHostMount(spec) {
   const hostMount = spec.hostMount;
+  const mounts = normalizeHostMounts({
+    hostMount: hostMount === false ? false : undefined,
+    sourcePath: spec.sourcePath || spec.source || hostMount?.path,
+    mountMode: hostMount?.mode || spec.mountMode || "agctl-overlay",
+    mounts: spec.mounts || hostMount?.mounts
+  });
+  if (mounts.length) {
+    return {
+      enabled: true,
+      path: mounts[0].sourcePath,
+      mode: [...new Set(mounts.map((mount) => mount.mode))].length === 1 ? mounts[0].mode : "mixed",
+      mounts
+    };
+  }
   if (hostMount === false) return { enabled: false, path: null, mode: "none" };
   if (hostMount && typeof hostMount === "object") {
     const enabled = hostMount.enabled !== false && Boolean(hostMount.path || spec.sourcePath || spec.source);
     return {
       enabled,
       path: enabled ? hostMount.path || spec.sourcePath || spec.source : null,
-      mode: enabled ? hostMount.mode || spec.mountMode || "agctl-overlay" : "none"
+      mode: enabled ? hostMount.mode || spec.mountMode || "agctl-overlay" : "none",
+      mounts: enabled ? mounts : []
     };
   }
   const pathValue = spec.sourcePath || spec.source;
   return {
     enabled: Boolean(pathValue),
     path: pathValue || null,
-    mode: pathValue ? spec.mountMode || "agctl-overlay" : "none"
+    mode: pathValue ? spec.mountMode || "agctl-overlay" : "none",
+    mounts
   };
 }
 

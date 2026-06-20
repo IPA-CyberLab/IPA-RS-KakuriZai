@@ -69,7 +69,7 @@ type World = {
     network?: NetworkConfig | null;
     kubernetes?: KubernetesConfig | null;
     hostMount?: boolean | null;
-    mounts?: Record<string, unknown>;
+    mounts?: HostMountConfig[] | Record<string, unknown>;
   };
   diskUsage?: {
     upperBytes: number;
@@ -242,6 +242,21 @@ type BrowseResult = {
   entries: Array<{ name: string; path: string; type: "directory" }>;
 };
 
+type HostMountConfig = {
+  id?: string;
+  name?: string;
+  sourcePath?: string;
+  hostPath?: string;
+  sandboxPath?: string;
+  mode?: string;
+};
+
+type LaunchMount = {
+  name: string;
+  sourcePath: string;
+  mode: string;
+};
+
 type InventoryRow = {
   key: string;
   name: string;
@@ -304,6 +319,7 @@ function App() {
     hostMount: false,
     sourcePath: "",
     mountMode: "agctl-overlay",
+    mounts: [{ name: "project", sourcePath: "", mode: "agctl-overlay" }] as LaunchMount[],
     cpu: "2000m",
     memory: "2000Mi",
     writableLayerSize: "1G",
@@ -316,6 +332,7 @@ function App() {
     kubernetesEnabled: false
   });
   const [browser, setBrowser] = React.useState<BrowseResult | null>(null);
+  const [browserMountIndex, setBrowserMountIndex] = React.useState(0);
 
   const inventory = React.useMemo(() => buildInventory(worlds, cube), [worlds, cube]);
   const filteredInventory = React.useMemo(
@@ -371,28 +388,45 @@ function App() {
     setFormMessage("");
     if (launch.hostMount && !browser) {
       try {
-        await browse(launch.sourcePath || "/home/mizuame");
+        await browse(activeLaunchMount().sourcePath || "/home/mizuame", browserMountIndex);
       } catch (error) {
         setFormMessage(error instanceof Error ? error.message : String(error));
       }
     }
   }
 
-  async function browse(path: string) {
+  async function browse(path: string, mountIndex = browserMountIndex) {
     const result = await api<BrowseResult>(`/api/host/browse?path=${encodeURIComponent(path || "/")}`, { token });
     setBrowser(result);
-    setLaunch((current) => ({ ...current, sourcePath: result.path }));
+    setBrowserMountIndex(mountIndex);
+    setLaunch((current) => {
+      const mounts = ensureLaunchMounts(current.mounts).map((mount, index) => index === mountIndex
+        ? {
+            ...mount,
+            sourcePath: result.path,
+            name: mount.name.trim() ? mount.name : suggestMountName(result.path)
+          }
+        : mount
+      );
+      return {
+        ...current,
+        mounts,
+        sourcePath: mounts[0]?.sourcePath || "",
+        mountMode: mounts[0]?.mode || current.mountMode
+      };
+    });
   }
 
   async function toggleHostMount(enabled: boolean) {
     setLaunch((current) => ({
       ...current,
       hostMount: enabled,
-      mountMode: enabled && current.mountMode === "none" ? "agctl-overlay" : current.mountMode
+      mountMode: enabled && current.mountMode === "none" ? "agctl-overlay" : current.mountMode,
+      mounts: ensureLaunchMounts(current.mounts)
     }));
     if (enabled && !browser) {
       try {
-        await browse(launch.sourcePath || "/home/mizuame");
+        await browse(activeLaunchMount().sourcePath || "/home/mizuame", 0);
       } catch (error) {
         setFormMessage(error instanceof Error ? error.message : String(error));
       }
@@ -405,8 +439,15 @@ function App() {
       setFormMessage("Enter a sandbox name.");
       return;
     }
-    if (launch.hostMount && !launch.sourcePath.trim()) {
-      setFormMessage("Choose a host folder first.");
+    const launchMounts = ensureLaunchMounts(launch.mounts)
+      .filter((mount) => mount.sourcePath.trim())
+      .map((mount) => ({
+        name: mount.name.trim() || suggestMountName(mount.sourcePath),
+        sourcePath: mount.sourcePath.trim(),
+        mode: mount.mode
+      }));
+    if (launch.hostMount && launchMounts.length === 0) {
+      setFormMessage("Choose at least one host folder.");
       return;
     }
     setBusy(true);
@@ -417,10 +458,11 @@ function App() {
         token,
         body: {
           name: launch.name.trim(),
-          sourcePath: launch.hostMount ? launch.sourcePath.trim() : undefined,
+          sourcePath: launch.hostMount ? launchMounts[0]?.sourcePath : undefined,
+          mounts: launch.hostMount ? launchMounts : undefined,
           backend: "cube-sandbox-overlay",
           hostMount: launch.hostMount,
-          mountMode: launch.hostMount ? launch.mountMode : "none",
+          mountMode: launch.hostMount ? launchMounts[0]?.mode || launch.mountMode : "none",
           cpu: launch.cpu,
           memory: launch.memory,
           writableLayerSize: launch.writableLayerSize,
@@ -449,6 +491,47 @@ function App() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function activeLaunchMount() {
+    return ensureLaunchMounts(launch.mounts)[browserMountIndex] || ensureLaunchMounts(launch.mounts)[0];
+  }
+
+  function updateLaunchMount(index: number, patch: Partial<LaunchMount>) {
+    setLaunch((current) => {
+      const mounts = ensureLaunchMounts(current.mounts).map((mount, mountIndex) => mountIndex === index ? { ...mount, ...patch } : mount);
+      return {
+        ...current,
+        mounts,
+        sourcePath: mounts[0]?.sourcePath || "",
+        mountMode: mounts[0]?.mode || current.mountMode
+      };
+    });
+  }
+
+  function addLaunchMount() {
+    setLaunch((current) => ({
+      ...current,
+      hostMount: true,
+      mounts: [
+        ...ensureLaunchMounts(current.mounts),
+        { name: `mount-${ensureLaunchMounts(current.mounts).length + 1}`, sourcePath: "", mode: "agctl-overlay" }
+      ]
+    }));
+  }
+
+  function removeLaunchMount(index: number) {
+    setLaunch((current) => {
+      const mounts = ensureLaunchMounts(current.mounts).filter((_, mountIndex) => mountIndex !== index);
+      const nextMounts = mounts.length ? mounts : [{ name: "project", sourcePath: "", mode: "agctl-overlay" }];
+      return {
+        ...current,
+        mounts: nextMounts,
+        sourcePath: nextMounts[0]?.sourcePath || "",
+        mountMode: nextMounts[0]?.mode || current.mountMode
+      };
+    });
+    setBrowserMountIndex(0);
   }
 
   async function saveDiskSize(world: World, writableLayerSize: string, recreate = false) {
@@ -582,23 +665,62 @@ function App() {
 
           {launch.hostMount ? (
             <>
-              <label>Host folder</label>
-              <div className="inputRow">
-                <input value={launch.sourcePath} onChange={(event) => setLaunch({ ...launch, sourcePath: event.target.value })} placeholder="/home/mizuame/project" />
-                <button className="iconButton" type="button" onClick={() => browse(launch.sourcePath || "/home/mizuame")} title="Browse">
-                  <FolderOpen size={16} />
+              <div className="fieldHeader">
+                <label>Host mounts</label>
+                <button className="ghost smallButton" type="button" onClick={addLaunchMount}>
+                  <Plus size={14} />
+                  Add
                 </button>
+              </div>
+              <div className="mountEditorList">
+                {ensureLaunchMounts(launch.mounts).map((mount, index) => (
+                  <div className="mountEditorRow" key={index}>
+                    <div className="splitFields compactFields">
+                      <div>
+                        <label>Name</label>
+                        <input value={mount.name} onChange={(event) => updateLaunchMount(index, { name: event.target.value })} placeholder="project" />
+                      </div>
+                      <div>
+                        <label>Sandbox path</label>
+                        <input value={`/workspace/${slugMountName(mount.name || `mount-${index + 1}`)}`} readOnly />
+                      </div>
+                    </div>
+                    <label>Host folder</label>
+                    <div className="inputRow">
+                      <input value={mount.sourcePath} onChange={(event) => updateLaunchMount(index, { sourcePath: event.target.value })} placeholder="/home/mizuame/project" />
+                      <button className="iconButton" type="button" onClick={() => browse(mount.sourcePath || "/home/mizuame", index)} title="Browse">
+                        <FolderOpen size={16} />
+                      </button>
+                      <button className="iconButton dangerIcon" type="button" onClick={() => removeLaunchMount(index)} title="Remove mount" disabled={ensureLaunchMounts(launch.mounts).length <= 1}>
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                    <div className="mountModes compactMountModes">
+                      {mountModes.map((mode) => (
+                        <button
+                          key={mode.id}
+                          type="button"
+                          className={`mountChoice ${mount.mode === mode.id ? "active" : ""}`}
+                          onClick={() => updateLaunchMount(index, { mode: mode.id })}
+                        >
+                          <strong>{mode.label}</strong>
+                          <span>{mode.description}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
               </div>
 
               {browser ? (
                 <div className="folderBrowser">
                   <div className="folderHeader">
-                    <button className="ghost" type="button" disabled={!browser.parent} onClick={() => browser.parent && browse(browser.parent)}>Up</button>
+                    <button className="ghost" type="button" disabled={!browser.parent} onClick={() => browser.parent && browse(browser.parent, browserMountIndex)}>Up</button>
                     <strong>{browser.path}</strong>
                   </div>
                   <div className="folderList">
                     {browser.entries.map((entry) => (
-                      <button type="button" key={entry.path} onClick={() => browse(entry.path)}>
+                      <button type="button" key={entry.path} onClick={() => browse(entry.path, browserMountIndex)}>
                         <Folder size={14} />
                         <span>{entry.name}</span>
                       </button>
@@ -606,21 +728,6 @@ function App() {
                   </div>
                 </div>
               ) : null}
-
-              <label>Mount</label>
-              <div className="mountModes">
-                {mountModes.map((mode) => (
-                  <button
-                    key={mode.id}
-                    type="button"
-                    className={`mountChoice ${launch.mountMode === mode.id ? "active" : ""}`}
-                    onClick={() => setLaunch({ ...launch, mountMode: mode.id })}
-                  >
-                    <strong>{mode.label}</strong>
-                    <span>{mode.description}</span>
-                  </button>
-                ))}
-              </div>
             </>
           ) : null}
 
@@ -1453,30 +1560,26 @@ function diskMinimumForSelection(selected: InventoryRow, template: CubeTemplate 
 }
 
 function mountRowsForSelection(row: InventoryRow): CubeVolumeMount[] {
-  const rawMounts = row.runtime?.volumeMounts?.length ? row.runtime.volumeMounts : mountsFromWorld(row.world);
+  const hasRuntimeMounts = Boolean(row.runtime?.volumeMounts?.length);
+  const rawMounts = hasRuntimeMounts ? row.runtime!.volumeMounts : mountsFromWorld(row.world);
   const visibleMounts = rawMounts.filter((mount) => mount.name !== "cube_rootfs_rw");
   const internalMounts = rawMounts.filter((mount) => mount.name === "cube_rootfs_rw");
-  if (row.mountMode === "agctl-overlay") {
-    const workspace = row.world?.backendConfig?.mounts?.workspace;
-    const workspacePath = typeof workspace === "string" ? workspace : "/workspace";
-    return [
-      {
-        name: "workspace",
-        container_path: workspacePath,
-        host_path: `${row.sourcePath || row.world?.sourcePath || "-"} + KakuriZai overlay`,
-        readonly: false,
-        mode: "overlay"
-      },
-      ...visibleMounts,
-      ...internalMounts
-    ];
-  }
-  return [...visibleMounts, ...internalMounts];
+  const configuredMounts = hasRuntimeMounts ? mountsFromWorld(row.world).filter((mount) => mount.mode === "overlay") : [];
+  return [...configuredMounts, ...visibleMounts, ...internalMounts];
 }
 
 function mountsFromWorld(world?: World): CubeVolumeMount[] {
   const mounts = world?.backendConfig?.mounts;
   if (!mounts) return [];
+  if (Array.isArray(mounts)) {
+    return mounts.map((mount) => ({
+      name: mount.name || mount.id || "mount",
+      container_path: mount.sandboxPath || `/workspace/${slugMountName(mount.name || mount.id || "mount")}`,
+      host_path: `${mount.sourcePath || mount.hostPath || "-"}${mount.mode === "agctl-overlay" ? " + KakuriZai overlay" : ""}`,
+      readonly: mount.mode !== "unsafe-rw",
+      mode: mount.mode === "agctl-overlay" ? "overlay" : mount.mode
+    }));
+  }
   return Object.entries(mounts).flatMap(([name, value]) => {
     if (!value || typeof value !== "object") return [];
     const mount = value as { sandboxPath?: string; hostPath?: string; readonly?: boolean };
@@ -1493,8 +1596,8 @@ function mountsFromWorld(world?: World): CubeVolumeMount[] {
 function mountModeLabel(row: InventoryRow, mount: CubeVolumeMount) {
   if (mount.mode === "overlay") return "overlay";
   if (mount.name === "cube_rootfs_rw") return "internal rootfs";
-  if (row.mountMode === "unsafe-rw" && mount.container_path === "/workspace") return "read-write direct";
-  if (row.mountMode === "cubesandbox-readonly" && mount.container_path === "/workspace") return "read-only direct";
+  if (row.mountMode === "unsafe-rw" || mount.mode === "unsafe-rw") return "read-write direct";
+  if (row.mountMode === "cubesandbox-readonly" || mount.mode === "cubesandbox-readonly") return "read-only direct";
   return mount.readonly || mount.recursive_read_only ? "read-only" : "read-write";
 }
 
@@ -1621,6 +1724,24 @@ function parsePortList(value: string) {
     }
     return port;
   });
+}
+
+function ensureLaunchMounts(mounts?: LaunchMount[]) {
+  return mounts?.length ? mounts : [{ name: "project", sourcePath: "", mode: "agctl-overlay" }];
+}
+
+function suggestMountName(sourcePath: string) {
+  const parts = String(sourcePath || "").split(/[\\/]+/).filter(Boolean);
+  return slugMountName(parts.at(-1) || "project");
+}
+
+function slugMountName(value: string) {
+  return String(value || "mount")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48) || "mount";
 }
 
 function effectiveNetworkForWorld(world?: World, fallbackType = "tap"): NetworkConfig {

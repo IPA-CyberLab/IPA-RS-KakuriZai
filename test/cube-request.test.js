@@ -29,14 +29,16 @@ test("cube request mounts source readonly and upper writable", async () => {
   assert.equal(request.network_type, "tap");
   const volumes = new Map(request.volumes.map((volume) => [volume.name, volume]));
   assert.equal(volumes.size, 4);
-  assert.equal(volumes.get("lower").volume_source.host_dir_volumes.volume_sources[0].host_path, world.sourcePath);
+  assert.equal(volumes.get("lower-source").volume_source.host_dir_volumes.volume_sources[0].host_path, world.sourcePath);
   assert.equal(volumes.get("upper").volume_source.host_dir_volumes.volume_sources[0].host_path, world.paths.upper);
   assert.equal(volumes.get("work").volume_source.host_dir_volumes.volume_sources[0].host_path, world.paths.workdir);
   assert.equal(volumes.get("whiteouts").volume_source.host_dir_volumes.volume_sources[0].host_path, world.paths.whiteouts);
   const mounts = request.containers[0].volume_mounts;
   assert.deepEqual(request.containers[0].resources, { cpu: "2000m", mem: "2000Mi" });
-  assert.equal(mounts.find((mount) => mount.name === "lower").readonly, true);
+  assert.equal(mounts.find((mount) => mount.name === "lower-source").readonly, true);
+  assert.equal(mounts.find((mount) => mount.name === "lower-source").container_path, "/kakurizai/mounts/source/lower");
   assert.equal(mounts.find((mount) => mount.name === "upper").readonly, false);
+  assert.match(request.containers[0].args[0], /\/workspace\/source/);
   assert.match(request.containers[0].args[0], /tail -f \/dev\/null/);
   assert.doesNotMatch(request.containers[0].args[0], /mount -t overlay/);
 });
@@ -56,15 +58,47 @@ test("cube request supports CubeSandbox direct mount modes", async () => {
 
   const readonlyRequest = buildCubeSandboxRequest(world, { template: "base", workspacePath: "/workspace" });
   assert.equal(readonlyRequest.volumes.length, 1);
-  assert.equal(readonlyRequest.volumes[0].name, "workspace");
-  assert.equal(readonlyRequest.containers[0].volume_mounts[0].container_path, "/workspace");
+  assert.equal(readonlyRequest.volumes[0].name, "mount-source");
+  assert.equal(readonlyRequest.containers[0].volume_mounts[0].container_path, "/workspace/source");
   assert.equal(readonlyRequest.containers[0].volume_mounts[0].readonly, true);
   assert.doesNotMatch(readonlyRequest.containers[0].args[0], /mount -t overlay/);
 
   world.backendConfig.mountMode = "unsafe-rw";
+  world.backendConfig.mounts[0].mode = "unsafe-rw";
   const unsafeRequest = buildCubeSandboxRequest(world, { template: "base", workspacePath: "/workspace" });
   assert.equal(unsafeRequest.containers[0].volume_mounts[0].readonly, false);
   assert.equal(unsafeRequest.annotations["kakurizai.mountMode"], "unsafe-rw");
+});
+
+test("cube request supports multiple workspace subfolder mounts", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-multi-"));
+  const sourceA = path.join(tmp, "alpha");
+  const sourceB = path.join(tmp, "beta");
+  await fs.mkdir(sourceA);
+  await fs.mkdir(sourceB);
+  const config = await loadConfig({ home: path.join(tmp, "home"), createSecrets: false });
+  const store = new WorldStore(config);
+  const world = await store.create({
+    name: "cube-multi",
+    backend: "cube-sandbox-overlay",
+    backendConfig: {
+      mounts: [
+        { name: "repo", sourcePath: sourceA, mode: "agctl-overlay" },
+        { name: "data", sourcePath: sourceB, mode: "cubesandbox-readonly" }
+      ]
+    }
+  });
+
+  const request = buildCubeSandboxRequest(world, { template: "base", workspacePath: "/workspace" });
+  const mounts = request.containers[0].volume_mounts;
+
+  assert.equal(request.annotations["kakurizai.mountMode"], "mixed");
+  assert.equal(request.annotations["kakurizai.overlayMounts"], "1");
+  assert.equal(mounts.find((mount) => mount.name === "lower-repo").container_path, "/kakurizai/mounts/repo/lower");
+  assert.equal(mounts.find((mount) => mount.name === "mount-data").container_path, "/workspace/data");
+  assert.equal(mounts.find((mount) => mount.name === "mount-data").readonly, true);
+  assert.match(request.containers[0].args[0], /\/workspace\/repo/);
+  assert.doesNotMatch(request.containers[0].volume_mounts.map((mount) => mount.container_path).join(","), /(^|,)\/workspace(,|$)/);
 });
 
 test("cube request carries writable layer and network settings", async () => {

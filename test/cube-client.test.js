@@ -116,7 +116,15 @@ test("cube client mounts agctl overlay with a probed unionfs driver", async () =
   });
 
   const result = await client.setupOverlay(
-    { name: "cube", paths: { logs: tmp, workdir: tmp } },
+    {
+      name: "cube",
+      sourcePath: tmp,
+      paths: { logs: tmp, workdir: tmp },
+      backendConfig: {
+        hostMount: true,
+        mounts: [{ name: "repo", sourcePath: tmp, mode: "agctl-overlay" }]
+      }
+    },
     "4fac1c9a074d49bf8e29ee1d90592b22"
   );
 
@@ -124,7 +132,8 @@ test("cube client mounts agctl overlay with a probed unionfs driver", async () =
   const args = (await fs.readFile(argsFile, "utf8")).trim().split("\n");
   const script = args.at(-1);
   assert.deepEqual(args.slice(0, 5), ["--namespace", "kakurizai", "exec", "4fac1c9a074d", "/bin/sh"]);
-  assert.match(script, /probe_workspace/);
+  assert.match(script, /probe_mount/);
+  assert.match(script, /\/workspace\/repo/);
   assert.match(script, /unionfs-fuse -o cow/);
   assert.match(script, /fuse-overlayfs/);
   assert.match(script, /no usable overlay driver/);
