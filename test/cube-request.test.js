@@ -26,6 +26,7 @@ test("cube request mounts source readonly and upper writable", async () => {
   const volumes = new Map(request.volumes.map((volume) => [volume.name, volume]));
   assert.equal(volumes.size, 5);
   assert.equal(volumes.get("tmp").volume_source.empty_dir.medium, 0);
+  assert.equal(volumes.get("tmp").volume_source.empty_dir.size_limit, "1G");
   assert.equal(volumes.get("lower").volume_source.host_dir_volumes.volume_sources[0].host_path, world.sourcePath);
   assert.equal(volumes.get("upper").volume_source.host_dir_volumes.volume_sources[0].host_path, world.paths.upper);
   assert.equal(volumes.get("work").volume_source.host_dir_volumes.volume_sources[0].host_path, world.paths.workdir);

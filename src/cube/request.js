@@ -12,7 +12,7 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
     "tail -f /dev/null"
   ].join("; ");
   const volumes = [
-    emptyDirVolume("tmp"),
+    emptyDirVolume("tmp", cubeConfig.rootVolumeSize || "1G"),
     hostDirVolume("lower", world.sourcePath),
     hostDirVolume("upper", world.paths.upper),
     hostDirVolume("work", world.paths.workdir),
@@ -59,12 +59,13 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
   };
 }
 
-function emptyDirVolume(name) {
+function emptyDirVolume(name, sizeLimit) {
   return {
     name,
     volume_source: {
       empty_dir: {
-        medium: 0
+        medium: 0,
+        size_limit: sizeLimit
       }
     }
   };
