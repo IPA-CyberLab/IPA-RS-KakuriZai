@@ -45,6 +45,7 @@ export function defaultConfig(home = defaultHome()) {
           "dnsutils",
           "fuse-overlayfs",
           "fuse3",
+          "git",
           "iproute2",
           "iputils-ping",
           "less",
@@ -59,7 +60,7 @@ export function defaultConfig(home = defaultHome()) {
           "unionfs-fuse",
           "vim-tiny"
         ],
-        commands: ["bash", "curl", "ip", "nano", "ping", "ps", "sudo", "tmux"]
+        commands: ["bash", "curl", "git", "ip", "nano", "ping", "ps", "sudo", "tmux"]
       }
     },
     isolatedAgent: {

@@ -424,6 +424,7 @@ function normalizeBootstrapConfig(config = {}) {
       "dnsutils",
       "fuse-overlayfs",
       "fuse3",
+      "git",
       "iproute2",
       "iputils-ping",
       "less",
@@ -438,7 +439,7 @@ function normalizeBootstrapConfig(config = {}) {
       "unionfs-fuse",
       "vim-tiny"
     ],
-    commands: ["bash", "curl", "ip", "nano", "ping", "ps", "sudo", "tmux"]
+    commands: ["bash", "curl", "git", "ip", "nano", "ping", "ps", "sudo", "tmux"]
   };
   if (config === false) return { ...defaults, enabled: false };
   return {
@@ -525,9 +526,12 @@ function buildDevAccessScript(options) {
     "bash",
     "ca-certificates",
     "curl",
+    "git",
     "procps",
     ...(enableSsh ? ["openssh-server"] : [])
   ];
+  const vscodeExtensions = ["GitHub.vscode-pull-request-github"];
+  const vscodeExtensionArgs = vscodeExtensions.map(shellQuote).join(" ");
   const aptPackages = packages.map(shellQuote).join(" ");
   const apkPackages = packages.map((pkg) => pkg === "openssh-server" ? "openssh-server" : pkg).map(shellQuote).join(" ");
   const rpmPackages = packages.map((pkg) => pkg === "procps" ? "procps-ng" : pkg).map(shellQuote).join(" ");
@@ -545,10 +549,11 @@ function buildDevAccessScript(options) {
     "install_packages() { if command -v apt-get >/dev/null 2>&1; then apt-get update; apt-get install -y --no-install-recommends " + aptPackages + "; return 0; fi; if command -v apk >/dev/null 2>&1; then apk add --no-cache " + apkPackages + "; return 0; fi; if command -v dnf >/dev/null 2>&1; then dnf install -y " + rpmPackages + "; return 0; fi; if command -v yum >/dev/null 2>&1; then yum install -y " + rpmPackages + "; return 0; fi; return 1; }",
     "need_packages=0",
     "[ \"$enable_vscode\" = \"0\" ] || command -v curl >/dev/null 2>&1 || need_packages=1",
+    "[ \"$enable_vscode\" = \"0\" ] || command -v git >/dev/null 2>&1 || need_packages=1",
     "[ \"$enable_ssh\" = \"0\" ] || command -v sshd >/dev/null 2>&1 || need_packages=1",
     "[ \"$need_packages\" = \"0\" ] || install_packages",
     "if [ \"$enable_ssh\" = \"1\" ]; then mkdir -p /run/sshd /root/.ssh; chmod 700 /root/.ssh; ssh-keygen -A >/tmp/kakurizai-dev-access/ssh-keygen.log 2>&1 || true; if [ -n \"$ssh_password\" ] && command -v chpasswd >/dev/null 2>&1; then printf 'root:%s\\n' \"$ssh_password\" | chpasswd; fi; cat > /tmp/kakurizai-dev-access/sshd_config <<KAKURIZAI_SSHD\nPort ${ssh_port}\nListenAddress 0.0.0.0\nPermitRootLogin yes\nPasswordAuthentication yes\nPubkeyAuthentication yes\nUsePAM no\nPidFile /tmp/kakurizai-dev-access/sshd.pid\nAuthorizedKeysFile .ssh/authorized_keys\nSubsystem sftp internal-sftp\nKAKURIZAI_SSHD\nsshd_binary=$(command -v sshd || printf /usr/sbin/sshd); sshd_pid_file=/tmp/kakurizai-dev-access/sshd.pid; sshd_running=0; if [ -f \"$sshd_pid_file\" ]; then sshd_pid=$(cat \"$sshd_pid_file\" 2>/dev/null || true); if [ -n \"$sshd_pid\" ] && kill -0 \"$sshd_pid\" 2>/dev/null; then sshd_running=1; fi; fi; if [ \"$sshd_running\" = \"0\" ]; then \"$sshd_binary\" -f /tmp/kakurizai-dev-access/sshd_config -E /tmp/kakurizai-dev-access/sshd.log; fi; fi",
-    "if [ \"$enable_vscode\" = \"1\" ]; then if [ -z \"$vscode_hashed_password\" ]; then echo 'missing code-server hashed password' >&2; exit 1; fi; install_code_server() { command -v code-server >/dev/null 2>&1 && return 0; if command -v npm >/dev/null 2>&1; then npm install -g code-server && return 0; fi; curl -fsSL https://code-server.dev/install.sh | sh; }; stop_code_server() { code_pid_file=/tmp/kakurizai-dev-access/code-server.pid; if [ -f \"$code_pid_file\" ]; then code_pid=$(cat \"$code_pid_file\" 2>/dev/null || true); if [ -n \"$code_pid\" ] && kill -0 \"$code_pid\" 2>/dev/null; then kill \"$code_pid\" 2>/dev/null || true; fi; fi; if command -v fuser >/dev/null 2>&1; then fuser -k \"${vscode_port}/tcp\" >/dev/null 2>&1 || true; fi; if command -v lsof >/dev/null 2>&1; then lsof -ti tcp:\"$vscode_port\" | xargs -r kill 2>/dev/null || true; fi; if command -v ss >/dev/null 2>&1; then ss -ltnp 2>/dev/null | awk -v port=\":$vscode_port\" '$4 ~ port {print $NF}' | sed -n 's/.*pid=\\([0-9][0-9]*\\).*/\\1/p' | xargs -r kill 2>/dev/null || true; fi; if command -v ps >/dev/null 2>&1; then code_server_port=:$vscode_port; ps -eo pid=,comm=,args= 2>/dev/null | while read -r pid comm args; do if [ \"$comm\" = node ]; then case \"$args\" in *code-server*$code_server_port*) [ \"$pid\" = \"$$\" ] || kill \"$pid\" 2>/dev/null || true ;; esac; fi; done; fi; sleep 1; }; command -v code-server >/dev/null 2>&1 || install_code_server; stop_code_server; code_pid_file=/tmp/kakurizai-dev-access/code-server.pid; HASHED_PASSWORD=\"$vscode_hashed_password\" nohup code-server --bind-addr \"0.0.0.0:$vscode_port\" --auth password --disable-telemetry --disable-update-check \"$workspace\" >/tmp/kakurizai-dev-access/code-server.log 2>&1 & echo $! > \"$code_pid_file\"; fi",
+    "if [ \"$enable_vscode\" = \"1\" ]; then if [ -z \"$vscode_hashed_password\" ]; then echo 'missing code-server hashed password' >&2; exit 1; fi; install_code_server() { command -v code-server >/dev/null 2>&1 && return 0; if command -v npm >/dev/null 2>&1; then npm install -g code-server && return 0; fi; curl -fsSL https://code-server.dev/install.sh | sh; }; install_vscode_extensions() { mkdir -p /tmp/kakurizai-dev-access; for extension_id in " + vscodeExtensionArgs + "; do code-server --list-extensions 2>/dev/null | grep -Fqi \"$extension_id\" && continue; code-server --install-extension \"$extension_id\" --force >>/tmp/kakurizai-dev-access/extensions.log 2>&1 || true; done; }; stop_code_server() { code_pid_file=/tmp/kakurizai-dev-access/code-server.pid; if [ -f \"$code_pid_file\" ]; then code_pid=$(cat \"$code_pid_file\" 2>/dev/null || true); if [ -n \"$code_pid\" ] && kill -0 \"$code_pid\" 2>/dev/null; then kill \"$code_pid\" 2>/dev/null || true; fi; fi; if command -v fuser >/dev/null 2>&1; then fuser -k \"${vscode_port}/tcp\" >/dev/null 2>&1 || true; fi; if command -v lsof >/dev/null 2>&1; then lsof -ti tcp:\"$vscode_port\" | xargs -r kill 2>/dev/null || true; fi; if command -v ss >/dev/null 2>&1; then ss -ltnp 2>/dev/null | awk -v port=\":$vscode_port\" '$4 ~ port {print $NF}' | sed -n 's/.*pid=\\([0-9][0-9]*\\).*/\\1/p' | xargs -r kill 2>/dev/null || true; fi; if command -v ps >/dev/null 2>&1; then code_server_port=:$vscode_port; ps -eo pid=,comm=,args= 2>/dev/null | while read -r pid comm args; do if [ \"$comm\" = node ]; then case \"$args\" in *code-server*$code_server_port*) [ \"$pid\" = \"$$\" ] || kill \"$pid\" 2>/dev/null || true ;; esac; fi; done; fi; sleep 1; }; command -v code-server >/dev/null 2>&1 || install_code_server; install_vscode_extensions; stop_code_server; code_pid_file=/tmp/kakurizai-dev-access/code-server.pid; HASHED_PASSWORD=\"$vscode_hashed_password\" nohup code-server --bind-addr \"0.0.0.0:$vscode_port\" --auth password --disable-telemetry --disable-update-check \"$workspace\" >/tmp/kakurizai-dev-access/code-server.log 2>&1 & echo $! > \"$code_pid_file\"; fi",
     "sleep 1",
     "printf 'workspace=%s\\nvscode_port=%s\\nssh_port=%s\\n' \"$workspace\" \"$vscode_port\" \"$ssh_port\""
   ].join("\n");

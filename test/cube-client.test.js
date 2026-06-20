@@ -213,8 +213,11 @@ test("cube client starts sandbox dev access services", async () => {
   assert.match(argsText, /enable_vscode=1/);
   assert.match(argsText, /enable_ssh=0/);
   assert.match(argsText, /vscode_hashed_password='?\$argon2id/);
+  assert.match(argsText, /git/);
   assert.doesNotMatch(argsText, /openssh-server/);
   assert.match(argsText, /code-server/);
+  assert.match(argsText, /--install-extension "\$extension_id" --force/);
+  assert.match(argsText, /GitHub\.vscode-pull-request-github/);
   assert.match(argsText, /--auth password/);
   assert.match(argsText, /HASHED_PASSWORD="\$vscode_hashed_password"/);
   assert.doesNotMatch(argsText, /PASSWORD="\$vscode_password"/);
