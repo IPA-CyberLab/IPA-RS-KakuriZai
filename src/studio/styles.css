@@ -813,21 +813,50 @@ label {
 
 .diskEditor {
   display: grid;
-  grid-template-columns: minmax(220px, 360px) minmax(160px, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 10px;
-  align-items: end;
+  align-items: stretch;
+}
+
+.diskInputCard,
+.diskActionCard {
+  min-width: 0;
+  min-height: 70px;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  margin: 0;
+  padding: 10px;
   border: 1px solid var(--line-soft);
   border-radius: 6px;
   background: #0d0e12;
-  padding: 10px;
 }
 
-.diskEditor label {
-  margin-top: 0;
+.diskInputCard > span,
+.diskActionCard > span {
+  overflow: hidden;
+  color: #9a9ba4;
+  font-size: 11px;
+  font-weight: 680;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.diskEditor .metric {
-  min-height: 54px;
+.diskSizeControl {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px;
+  gap: 8px;
+}
+
+.diskSizeControl input,
+.diskSizeControl select {
+  min-height: 34px;
+}
+
+.diskActionCard {
+  align-content: space-between;
 }
 
 .networkEditor {

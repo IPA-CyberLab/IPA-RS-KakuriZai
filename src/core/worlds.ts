@@ -78,7 +78,7 @@ export async function updateWorldConfig(config, ref, input = {}) {
   }
   if (input.writableLayerSize !== undefined) {
     const writableLayerSize = normalizeSize(input.writableLayerSize, "writableLayerSize");
-    assertWritableLayerCanGrow(world, writableLayerSize);
+    assertWritableLayerCanGrow(world, writableLayerSize, { requireIncrease: input.recreate === true });
     world.backendConfig.writableLayerMinimumSize = maxSizeLabel([
       world.backendConfig.writableLayerMinimumSize,
       world.backendConfig.writableLayerSize,
@@ -218,7 +218,7 @@ function normalizeSize(value, name) {
   return normalized;
 }
 
-function assertWritableLayerCanGrow(world, nextSize) {
+function assertWritableLayerCanGrow(world, nextSize, options = {}) {
   const minimumSize = maxSizeLabel([
     world.backendConfig?.writableLayerMinimumSize,
     world.backendConfig?.writableLayerSize,
@@ -227,8 +227,8 @@ function assertWritableLayerCanGrow(world, nextSize) {
   if (!minimumSize) return;
   const nextBytes = sizeToBytes(nextSize);
   const minimumBytes = sizeToBytes(minimumSize);
-  if (nextBytes < minimumBytes) {
-    throw statusError(`writableLayerSize cannot be smaller than the current/original size ${minimumSize}`, 400);
+  if (nextBytes < minimumBytes || (options.requireIncrease && nextBytes <= minimumBytes)) {
+    throw statusError(`writableLayerSize must be larger than the current/original size ${minimumSize}`, 400);
   }
 }
 

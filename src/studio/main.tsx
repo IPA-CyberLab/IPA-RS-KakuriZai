@@ -277,6 +277,7 @@ const mountModes = [
     description: "Mount the host folder directly as writable inside the sandbox."
   }
 ];
+const diskUnits = ["M", "G", "T"] as const;
 
 function Root() {
   const shellWorldId = shellWorldIdFromLocation();
@@ -635,7 +636,7 @@ function App() {
 
           <div className="splitFields">
             <div>
-              <label>Writable layer</label>
+              <label>Disk size</label>
               <input value={launch.writableLayerSize} onChange={(event) => setLaunch({ ...launch, writableLayerSize: event.target.value })} placeholder="1G" />
             </div>
             <div>
@@ -758,7 +759,7 @@ function App() {
                 <Kpi icon={<Activity size={16} />} label="Status" value={selected.status} tone={statusTone(selected.status)} />
                 <Kpi icon={<Cpu size={16} />} label="CPU" value={selected.cpu || selectedTemplate?.cpu || "-"} />
                 <Kpi icon={<HardDrive size={16} />} label="Memory" value={selected.memory || selectedTemplate?.memory || "-"} />
-                <Kpi icon={<Database size={16} />} label="Writable layer" value={selected.runtime?.writableLayerSize || selected.world?.backendConfig?.writableLayerSize || selectedTemplate?.writableLayerSize || "-"} />
+                <Kpi icon={<Database size={16} />} label="Disk size" value={selected.runtime?.writableLayerSize || selected.world?.backendConfig?.writableLayerSize || selectedTemplate?.writableLayerSize || "-"} />
                 <Kpi icon={<Server size={16} />} label="Node" value={selected.host || "-"} tone={selectedNode?.healthy === false ? "warn" : "ok"} />
                 <Kpi icon={<Network size={16} />} label="Network" value={selectedTemplate?.networkType || cube?.config?.networkType || "-"} />
               </div>
@@ -782,12 +783,12 @@ function App() {
                 <TerminalLauncher world={selected.world} token={token} />
               </DetailSection>
 
-              <DetailSection icon={<Database size={16} />} title="Disk and Mounts">
+              <DetailSection icon={<Database size={16} />} title="Storage and Mounts">
                 <div className="metricStrip compact">
-                  <Metric label="Writable layer" value={selected.runtime?.writableLayerSize || selected.world?.backendConfig?.writableLayerSize || selectedTemplate?.writableLayerSize || "-"} />
+                  <Metric label="Disk size" value={selected.runtime?.writableLayerSize || selected.world?.backendConfig?.writableLayerSize || selectedTemplate?.writableLayerSize || "-"} />
                   <Metric label="System disk" value={selected.runtime?.systemDiskSize || "-"} />
                   <Metric label="Artifact" value={formatBytesNullable(selected.runtime?.artifactSizeBytes ?? selectedTemplate?.artifactSizeBytes)} />
-                  <Metric label="Upper" value={formatBytes(selected.world?.diskUsage?.upperBytes || 0)} />
+                  <Metric label="Overlay usage" value={formatBytes(selected.world?.diskUsage?.upperBytes || 0)} />
                   <Metric label="Logs" value={formatBytes(selected.world?.diskUsage?.logsBytes || 0)} />
                   <Metric label="Host data disk" value={formatDiskMb(selected.runtime?.hostDataDiskMB)} />
                 </div>
@@ -1071,19 +1072,36 @@ function DiskEditor({
   onSave: (world: World, writableLayerSize: string, recreate?: boolean) => Promise<void>;
 }) {
   const configuredSize = world?.backendConfig?.writableLayerSize || runtimeSize || "1G";
-  const [value, setValue] = React.useState(configuredSize);
   const minimumBytes = parseSizeToBytes(minimumSize);
-  const valueBytes = parseSizeToBytes(value);
-  const shrinkError = minimumBytes != null && valueBytes != null && valueBytes < minimumBytes
-    ? `Minimum is ${minimumSize}`
-    : "";
+  const initialParts = nextDiskInputParts(minimumSize || configuredSize);
+  const [amount, setAmount] = React.useState(String(initialParts.amount));
+  const [unit, setUnit] = React.useState(initialParts.unit);
+  const minimumAmount = minimumDiskAmountForUnit(minimumBytes, unit);
+  const nextSize = `${amount || minimumAmount}${unit}`;
 
   React.useEffect(() => {
-    setValue(configuredSize);
-  }, [configuredSize, world?.id]);
+    const next = nextDiskInputParts(minimumSize || configuredSize);
+    setAmount(String(next.amount));
+    setUnit(next.unit);
+  }, [configuredSize, minimumSize, world?.id]);
 
   if (!world) {
     return <div className="sectionEmpty">Disk settings are read-only for runtime-only sandboxes.</div>;
+  }
+
+  function setSafeAmount(value: string) {
+    const parsed = Math.floor(Number(value));
+    if (!Number.isFinite(parsed)) {
+      setAmount(String(minimumAmount));
+      return;
+    }
+    setAmount(String(Math.max(parsed, minimumAmount)));
+  }
+
+  function setSafeUnit(nextUnit: string) {
+    const nextMinimum = minimumDiskAmountForUnit(minimumBytes, nextUnit);
+    setUnit(nextUnit);
+    setAmount(String(nextMinimum));
   }
 
   return (
@@ -1091,27 +1109,32 @@ function DiskEditor({
       className="diskEditor"
       onSubmit={(event) => {
         event.preventDefault();
-        if (!shrinkError) void onSave(world, value, false);
+        void onSave(world, nextSize, true);
       }}
     >
-      <div>
-        <label>Writable layer</label>
-        <div className="inputRow">
-          <input value={value} onChange={(event) => setValue(event.target.value)} placeholder="1G" />
-          <button className="primary" disabled={busy || !value.trim() || Boolean(shrinkError)} type="submit">Save</button>
-          <button
-            className="primary"
-            disabled={busy || !value.trim() || Boolean(shrinkError)}
-            onClick={() => void onSave(world, value, true)}
-            type="button"
-          >
-            Apply recreate
-          </button>
+      <Metric label="Current disk" value={minimumSize || runtimeSize || configuredSize || "-"} />
+      <label className="diskInputCard">
+        <span>New disk</span>
+        <div className="diskSizeControl">
+          <input
+            min={minimumAmount}
+            step={1}
+            type="number"
+            value={amount}
+            onBlur={(event) => setSafeAmount(event.target.value)}
+            onChange={(event) => setSafeAmount(event.target.value)}
+          />
+          <select value={unit} onChange={(event) => setSafeUnit(event.target.value)}>
+            {diskUnits.map((candidate) => <option key={candidate} value={candidate}>{candidate}</option>)}
+          </select>
         </div>
-        {shrinkError ? <div className="fieldError">{shrinkError}</div> : null}
+      </label>
+      <div className="diskActionCard">
+        <span>Apply</span>
+        <button className="primary wide" disabled={busy || !amount.trim()} type="submit">
+          Apply resize
+        </button>
       </div>
-      <Metric label="Runtime size" value={runtimeSize || "-"} />
-      <Metric label="Minimum size" value={minimumSize || "-"} />
     </form>
   );
 }
@@ -1525,6 +1548,24 @@ function maxSizeLabel(values: Array<string | null | undefined>) {
     if (!best || bytes > (parseSizeToBytes(best) || 0)) best = String(value);
   }
   return best;
+}
+
+function nextDiskInputParts(value: string) {
+  const match = /^(\d+(?:\.\d+)?)([KMGTP])i?B?$/i.exec(String(value || "1G").trim());
+  const unit = diskUnits.includes(match?.[2]?.toUpperCase() as (typeof diskUnits)[number])
+    ? match![2].toUpperCase()
+    : "G";
+  const bytes = parseSizeToBytes(value) || 1024 ** 3;
+  return {
+    unit,
+    amount: minimumDiskAmountForUnit(bytes, unit)
+  };
+}
+
+function minimumDiskAmountForUnit(minimumBytes: number | null, unit: string) {
+  if (!minimumBytes) return 1;
+  const power = { M: 2, G: 3, T: 4 }[unit as "M" | "G" | "T"] || 3;
+  return Math.max(1, Math.floor(minimumBytes / 1024 ** power) + 1);
 }
 
 function parseSizeToBytes(value: string) {

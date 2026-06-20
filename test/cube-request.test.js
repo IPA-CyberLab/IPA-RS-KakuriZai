@@ -156,7 +156,11 @@ test("world disk size cannot shrink below current or original size", async () =>
 
   await assert.rejects(
     () => updateWorldConfig(config, world.id, { writableLayerSize: "1G" }),
-    /cannot be smaller/
+    /must be larger/
+  );
+  await assert.rejects(
+    () => updateWorldConfig(config, world.id, { writableLayerSize: "2G", recreate: true }),
+    /must be larger/
   );
 });
 
