@@ -38,7 +38,8 @@ export class CubeSandboxOverlayBackend {
       mountMode,
       status: overlayPending ? "running-overlay-pending" : provision.provisioned ? "running" : "planned",
       reason: provision.reason || provision.overlay?.reason || null,
-      overlay: provision.overlay || null
+      overlay: provision.overlay || null,
+      bootstrap: provision.bootstrap || null
     };
     world.status = overlayPending ? "pending-overlay" : provision.provisioned ? "ready" : "pending-cube";
     return store.save(world);

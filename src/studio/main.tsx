@@ -51,6 +51,11 @@ type World = {
     status?: string;
     reason?: string;
     mountMode?: string;
+    bootstrap?: {
+      applied?: boolean;
+      skipped?: boolean;
+      reason?: string | null;
+    } | null;
   } | null;
   backendConfig?: {
     mountMode?: string;
@@ -763,6 +768,7 @@ function App() {
                   <Metric label="Namespace" value={selected.runtime?.namespace || cube?.namespace || "-"} />
                   <Metric label="Created" value={formatDate(selected.createdAt)} />
                   <Metric label="Host mount" value={hasHostMount(selected) ? "enabled" : "disabled"} />
+                  <Metric label="Terminal tools" value={formatBootstrapStatus(selected.world?.sandbox?.bootstrap)} />
                   <Metric label="Sandbox ID" value={selected.sandboxId || "-"} wide />
                   <Metric label="Source" value={hasHostMount(selected) ? selected.world?.sourcePath || selected.sourcePath || "-" : "-"} wide />
                   <Metric label="Base template" value={selected.templateId || selected.world?.sandbox?.baseId || cube?.template || "-"} wide />
@@ -1449,6 +1455,13 @@ function formatDate(value?: string | null) {
 function formatBool(value?: boolean | null) {
   if (value == null) return "-";
   return value ? "allowed" : "blocked";
+}
+
+function formatBootstrapStatus(value?: { applied?: boolean; skipped?: boolean; reason?: string | null } | null) {
+  if (!value) return "-";
+  if (value.applied) return "installed";
+  if (value.skipped) return value.reason || "skipped";
+  return value.reason || "failed";
 }
 
 function formatList(value?: Array<string | number> | string | null) {

@@ -69,6 +69,7 @@ export class CubeSandboxClient {
     const sandboxId = parseMasterSandboxId(output) || world.id;
     const mountMode = request.annotations?.["kakurizai.mountMode"] || world.backendConfig?.mountMode || "agctl-overlay";
     const overlay = mountMode === "agctl-overlay" ? await this.setupOverlay(world, sandboxId) : null;
+    const bootstrap = await this.bootstrapSandboxTools(world, sandboxId);
     return {
       provisioned: true,
       mode: "master",
@@ -76,7 +77,8 @@ export class CubeSandboxClient {
       containerId: sandboxId,
       requestPath,
       output,
-      overlay
+      overlay,
+      bootstrap
     };
   }
 
@@ -98,13 +100,15 @@ export class CubeSandboxClient {
       };
     }
     const sandboxId = parseSandboxId(output) || world.id;
+    const bootstrap = await this.bootstrapSandboxTools(world, sandboxId);
     return {
       provisioned: true,
       mode: "cli",
       sandboxId,
       containerId: sandboxId,
       requestPath,
-      output
+      output,
+      bootstrap
     };
   }
 
@@ -296,6 +300,99 @@ export class CubeSandboxClient {
       output
     };
   }
+
+  async bootstrapSandboxTools(world, sandboxId) {
+    const config = normalizeBootstrapConfig(this.config.bootstrapTools);
+    if (!config.enabled) {
+      return { skipped: true, reason: "terminal tool bootstrap disabled" };
+    }
+    const binary = commandExists(this.config.cubecli || "cubecli");
+    if (!binary) return { skipped: true, reason: "cubecli not found" };
+    const script = buildBootstrapToolsScript(config);
+    const result = await runCommand(binary, [
+      ...cubeCliGlobalArgs(this.config),
+      "exec",
+      sandboxIdForCubeCli(sandboxId),
+      "/bin/sh",
+      "-lc",
+      script
+    ], {
+      allowFailure: true
+    });
+    const output = `${result.stdout}\n${result.stderr}`;
+    await fs.writeFile(path.join(world.paths.logs, "cube-terminal-bootstrap.log"), output, "utf8");
+    return {
+      skipped: false,
+      applied: result.code === 0,
+      packages: config.packages,
+      commands: config.commands,
+      code: result.code,
+      reason: result.code === 0 ? null : parseFailure(output) || `cubecli exec exited with ${result.code}`,
+      output
+    };
+  }
+}
+
+function normalizeBootstrapConfig(config = {}) {
+  const defaults = {
+    enabled: true,
+    packages: [
+      "bash",
+      "ca-certificates",
+      "curl",
+      "dnsutils",
+      "iproute2",
+      "iputils-ping",
+      "less",
+      "nano",
+      "net-tools",
+      "procps",
+      "sudo",
+      "vim-tiny"
+    ],
+    commands: ["bash", "curl", "ip", "nano", "ping", "ps", "sudo"]
+  };
+  if (config === false) return { ...defaults, enabled: false };
+  return {
+    enabled: config.enabled !== false,
+    packages: Array.isArray(config.packages) && config.packages.length ? config.packages.map(String) : defaults.packages,
+    commands: Array.isArray(config.commands) && config.commands.length ? config.commands.map(String) : defaults.commands
+  };
+}
+
+function buildBootstrapToolsScript(config) {
+  const commands = config.commands.map(shellQuote).join(" ");
+  const aptPackages = config.packages.map(shellQuote).join(" ");
+  const apkPackages = config.packages.map((pkg) => apkPackageName(pkg)).map(shellQuote).join(" ");
+  const rpmPackages = config.packages.map((pkg) => rpmPackageName(pkg)).map(shellQuote).join(" ");
+  return [
+    "set -eu",
+    "need_install=0",
+    `for command_name in ${commands}; do command -v \"$command_name\" >/dev/null 2>&1 || need_install=1; done`,
+    "[ \"$need_install\" = \"0\" ] && exit 0",
+    "if command -v apt-get >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y --no-install-recommends " + aptPackages + "; exit 0; fi",
+    "if command -v apk >/dev/null 2>&1; then apk add --no-cache " + apkPackages + "; exit 0; fi",
+    "if command -v dnf >/dev/null 2>&1; then dnf install -y " + rpmPackages + "; exit 0; fi",
+    "if command -v yum >/dev/null 2>&1; then yum install -y " + rpmPackages + "; exit 0; fi",
+    "echo 'No supported package manager found for KakuriZai terminal bootstrap' >&2",
+    "exit 0"
+  ].join("; ");
+}
+
+function apkPackageName(pkg) {
+  return {
+    dnsutils: "bind-tools",
+    "iputils-ping": "iputils",
+    "vim-tiny": "vim"
+  }[pkg] || pkg;
+}
+
+function rpmPackageName(pkg) {
+  return {
+    dnsutils: "bind-utils",
+    "iputils-ping": "iputils",
+    "vim-tiny": "vim-minimal"
+  }[pkg] || pkg;
 }
 
 function parseSandboxId(output) {

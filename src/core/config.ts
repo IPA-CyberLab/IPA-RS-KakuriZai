@@ -35,7 +35,25 @@ export function defaultConfig(home = defaultHome()) {
       apiBaseUrl: process.env.KAKURIZAI_CUBE_API || null,
       template: process.env.KAKURIZAI_CUBE_TEMPLATE || "kakurizai-base",
       namespace: process.env.KAKURIZAI_CUBE_NAMESPACE || "kakurizai",
-      workspacePath: "/workspace"
+      workspacePath: "/workspace",
+      bootstrapTools: {
+        enabled: process.env.KAKURIZAI_CUBE_BOOTSTRAP_TOOLS !== "false",
+        packages: [
+          "bash",
+          "ca-certificates",
+          "curl",
+          "dnsutils",
+          "iproute2",
+          "iputils-ping",
+          "less",
+          "nano",
+          "net-tools",
+          "procps",
+          "sudo",
+          "vim-tiny"
+        ],
+        commands: ["bash", "curl", "ip", "nano", "ping", "ps", "sudo"]
+      }
     },
     isolatedAgent: {
       agentctl: process.env.AGCTL_AGENTCTL || process.env.AGENTCTL || "agentctl",
