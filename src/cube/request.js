@@ -12,7 +12,6 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
     "tail -f /dev/null"
   ].join("; ");
   const volumes = [
-    emptyDirVolume("tmp", cubeConfig.rootVolumeSize || "1G"),
     hostDirVolume("lower", world.sourcePath),
     hostDirVolume("upper", world.paths.upper),
     hostDirVolume("work", world.paths.workdir),
@@ -56,18 +55,6 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
     instance_type: cubeConfig.instanceType || "cubebox",
     network_type: cubeConfig.networkType || "tap",
     namespace: cubeConfig.namespace || "kakurizai"
-  };
-}
-
-function emptyDirVolume(name, sizeLimit) {
-  return {
-    name,
-    volume_source: {
-      empty_dir: {
-        medium: 0,
-        size_limit: sizeLimit
-      }
-    }
   };
 }
 
