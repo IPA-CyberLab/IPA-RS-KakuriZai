@@ -73,6 +73,48 @@ test("help exposes CLI equivalents for Studio buttons", async () => {
   }
 });
 
+test("cli applies sandbox yaml and exports terraform bundle", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cli-yaml-"));
+  const home = path.join(tmp, "home");
+  const manifest = path.join(tmp, "sandbox.yaml");
+  await fs.writeFile(manifest, `
+apiVersion: kakurizai.dev/v1
+kind: Sandbox
+metadata:
+  name: yaml-lab
+spec:
+  hostMount: false
+  resources:
+    cpu: 3000m
+    memory: 3072Mi
+    writableLayerSize: 3G
+  network:
+    type: tap
+    exposedPorts: [6443, 30000]
+    dns:
+      servers: [8.8.8.8]
+    allowInternetAccess: false
+  kubernetes:
+    enabled: true
+    profile: k3s
+`, "utf8");
+
+  const apply = JSON.parse((await runCli(home, ["apply", "-f", manifest, "--json"])).stdout);
+  assert.equal(apply.action, "created");
+  assert.equal(apply.world.name, "yaml-lab");
+  assert.equal(apply.world.backendConfig.network.exposedPorts[0], 6443);
+  assert.equal(apply.world.backendConfig.kubernetes.enabled, true);
+
+  const exported = await runCli(home, ["export", "yaml-lab", "--yaml"]);
+  assert.match(exported.stdout, /name: yaml-lab/);
+  assert.match(exported.stdout, /kubernetes:/);
+
+  const tfDir = path.join(tmp, "tf");
+  const terraform = await runCli(home, ["terraform", "export", "yaml-lab", "--out", tfDir]);
+  assert.match(terraform.stdout, /main\.tf/);
+  assert.match(await fs.readFile(path.join(tfDir, "main.tf"), "utf8"), /terraform_data/);
+});
+
 async function runCli(home, args) {
   return execFileAsync(process.execPath, ["./dist/bin/agctl.js", ...args], {
     cwd: process.cwd(),

@@ -116,11 +116,21 @@ export class CubeSandboxClient {
     const status = this.available();
     const cubecli = commandExists(this.config.cubecli || "cubecli");
     const mastercli = commandExists(this.config.mastercli || "cubemastercli");
-    const [cubeVersion, masterTemplates, masterSandboxes] = await Promise.all([
+    const [cubeVersion, masterTemplates, masterSandboxes, masterNodes, storageStatus] = await Promise.all([
       cubecli ? commandSummary(cubecli, ["--version"]) : Promise.resolve({ ok: false, reason: "cubecli not found" }),
       mastercli ? commandSummary(mastercli, ["tpl", "list"], parseTemplates) : Promise.resolve({ ok: false, reason: "cubemastercli not found" }),
-      mastercli ? commandSummary(mastercli, ["list"], parseSandboxes) : Promise.resolve({ ok: false, reason: "cubemastercli not found" })
+      mastercli ? commandSummary(mastercli, ["list", "--all", "--wide"], parseSandboxesWide) : Promise.resolve({ ok: false, reason: "cubemastercli not found" }),
+      mastercli ? commandSummary(mastercli, ["node", "list", "--json"], parseNodesJson) : Promise.resolve({ ok: false, reason: "cubemastercli not found" }),
+      mastercli ? commandSummary(mastercli, ["storage", "status"], parseStorageStatus) : Promise.resolve({ ok: false, reason: "cubemastercli not found" })
     ]);
+    const templates = masterTemplates.ok ? masterTemplates.value : [];
+    const templateDetails = mastercli
+      ? await Promise.all(templates.map((template) => this.inspectTemplate(template, mastercli)))
+      : templates;
+    const sandboxes = masterSandboxes.ok ? masterSandboxes.value : [];
+    const sandboxDetails = await Promise.all(
+      sandboxes.map((sandbox) => this.inspectSandbox(sandbox, { mastercli, cubecli }))
+    );
     return {
       available: status.available,
       mode: status.mode || this.config.mode || "auto",
@@ -129,10 +139,87 @@ export class CubeSandboxClient {
       template: this.config.template || null,
       cubecli: cubecli ? { path: cubecli, version: cubeVersion.stdout?.trim() || null } : null,
       mastercli: mastercli ? { path: mastercli } : null,
-      templates: masterTemplates.ok ? masterTemplates.value : [],
+      templates: templateDetails,
       templatesError: masterTemplates.ok ? null : masterTemplates.reason,
-      sandboxes: masterSandboxes.ok ? masterSandboxes.value : [],
-      sandboxesError: masterSandboxes.ok ? null : masterSandboxes.reason
+      sandboxes: sandboxDetails,
+      sandboxesError: masterSandboxes.ok ? null : masterSandboxes.reason,
+      nodes: masterNodes.ok ? masterNodes.value : [],
+      nodesError: masterNodes.ok ? null : masterNodes.reason,
+      storage: storageStatus.ok ? storageStatus.value : [],
+      storageError: storageStatus.ok ? null : storageStatus.reason,
+      capabilities: {
+        destroy: Boolean(mastercli),
+        logs: Boolean(cubecli),
+        pause: false,
+        resume: false
+      },
+      config: {
+        apiEndpoint: this.config.apiBaseUrl || null,
+        authEnabled: Boolean(this.config.authEnabled),
+        sandboxDomain: this.config.sandboxDomain || null,
+        instanceType: this.config.instanceType || "cubebox",
+        networkType: this.config.networkType || "tap"
+      }
+    };
+  }
+
+  async inspectTemplate(template, mastercli) {
+    const result = await commandSummary(
+      mastercli,
+      ["tpl", "info", "--template-id", template.id, "--include-request", "--json"],
+      parseJson
+    );
+    if (!result.ok) return { ...template, detailError: result.reason };
+    return { ...template, ...templateDetailFromRaw(result.value) };
+  }
+
+  async inspectSandbox(sandbox, binaries = {}) {
+    const [info, rawInspect, logs] = await Promise.all([
+      binaries.mastercli
+        ? commandSummary(binaries.mastercli, ["info", "--sandboxid", sandbox.id], parseSandboxInfo)
+        : Promise.resolve({ ok: false, reason: "cubemastercli not found" }),
+      binaries.cubecli
+        ? commandSummary(binaries.cubecli, [...cubeCliGlobalArgs(this.config), "cubebox", "inspect", sandboxIdForCubeCli(sandbox.id)], parseJson)
+        : Promise.resolve({ ok: false, reason: "cubecli not found" }),
+      binaries.cubecli
+        ? commandSummary(binaries.cubecli, [...cubeCliGlobalArgs(this.config), "logs", "--tail", "80", sandboxIdForCubeCli(sandbox.id)])
+        : Promise.resolve({ ok: false, reason: "cubecli not found" })
+    ]);
+    const inspect = rawInspect.ok ? rawInspect.value : null;
+    return sandboxDetailFromRaw({
+      base: sandbox,
+      info: info.ok ? info.value : null,
+      inspect,
+      inspectError: rawInspect.ok ? null : rawInspect.reason,
+      logs: logs.ok ? logs.stdout : "",
+      logsError: logs.ok ? null : logs.reason
+    });
+  }
+
+  async logs(sandboxId, options = {}) {
+    const cubecli = commandExists(this.config.cubecli || "cubecli");
+    if (!cubecli) return { sandboxId, logs: "", error: "cubecli not found" };
+    const tail = String(options.tail || 120);
+    const result = await commandSummary(cubecli, [...cubeCliGlobalArgs(this.config), "logs", "--tail", tail, sandboxIdForCubeCli(sandboxId)]);
+    return {
+      sandboxId,
+      logs: result.stdout || "",
+      stderr: result.stderr || "",
+      error: result.ok ? null : result.reason
+    };
+  }
+
+  async destroySandboxById(sandboxId) {
+    const masterBinary = commandExists(this.config.mastercli || "cubemastercli");
+    if (!masterBinary) return { skipped: true, reason: "cubemastercli not found" };
+    const result = await runCommand(masterBinary, ["cubebox", "destroy", sandboxId], { allowFailure: true });
+    return {
+      sandboxId,
+      destroyed: result.code === 0,
+      code: result.code,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      reason: result.code === 0 ? null : parseFailure(`${result.stdout}\n${result.stderr}`) || `cubemastercli exited with ${result.code}`
     };
   }
 
@@ -157,7 +244,28 @@ export class CubeSandboxClient {
     const args = [...cubeCliGlobalArgs(this.config), "exec"];
     if (options.tty) args.push("-i", "-t");
     args.push("-w", this.config.workspacePath || "/workspace", sandboxIdForCubeCli(sandboxId), ...command);
-    return runCommand(binary, args, { inherit: options.inherit });
+    return runCommand(binary, args, { inherit: options.inherit, allowFailure: options.allowFailure });
+  }
+
+  shellCommand(world) {
+    const sandboxId = world.sandbox?.containerId || world.sandbox?.id;
+    if (!sandboxId) throw new Error(`world ${world.name} is not provisioned in CubeSandbox`);
+    const binary = commandExists(this.config.cubecli || "cubecli");
+    if (!binary) throw new Error("CubeSandbox is unavailable: cubecli not found");
+    return {
+      command: binary,
+      args: [
+        ...cubeCliGlobalArgs(this.config),
+        "exec",
+        "-i",
+        "-t",
+        "-w",
+        this.config.workspacePath || "/workspace",
+        sandboxIdForCubeCli(sandboxId),
+        "/bin/sh",
+        "-l"
+      ]
+    };
   }
 
   async setupOverlay(world, sandboxId) {
@@ -231,6 +339,222 @@ function parseSandboxes(output) {
     createdAt: columns[3],
     pausedAt: columns[4] || "-"
   }));
+}
+
+function parseSandboxesWide(output) {
+  const rows = tableRows(output, "sandbox_id");
+  if (rows.length === 0) return parseSandboxes(output);
+  return rows.map((columns) => {
+    const labels = parseJsonObject(columns.slice(8).join(" "));
+    return {
+      id: columns[0],
+      status: columns[1],
+      hostId: columns[2],
+      createdAt: columns[3],
+      pausedAt: columns[4] || "-",
+      templateId: columns[5] || null,
+      namespace: columns[6] || null,
+      hostIp: columns[7] || null,
+      labels
+    };
+  });
+}
+
+function parseJson(output) {
+  return JSON.parse(output);
+}
+
+function parseNodesJson(output) {
+  const raw = parseJson(output);
+  const items = Array.isArray(raw?.data) ? raw.data : [];
+  return items.map((node) => ({
+    id: node.InstanceID || node.uuid || node.IP,
+    nodeId: node.InstanceID || node.uuid || node.IP,
+    ip: node.IP || null,
+    instanceType: node.InstanceType || null,
+    status: node.HostStatus || (node.Healthy ? "RUNNING" : "DEGRADED"),
+    healthy: Boolean(node.Healthy),
+    clusterLabel: node.ClusterLabel || null,
+    cpuTotal: numberOrNull(node.CpuTotal),
+    memTotalMB: numberOrNull(node.MemMBTotal),
+    quotaCpu: numberOrNull(node.QuotaCpu),
+    quotaMemMB: numberOrNull(node.QuotaMem),
+    quotaCpuUsage: numberOrNull(node.QuotaCpuUsage),
+    quotaMemUsage: numberOrNull(node.QuotaMemUsage),
+    maxMvmLimit: numberOrNull(node.MaxMvmLimit),
+    mvmNum: numberOrNull(node.mvm_num),
+    dataDiskUsagePer: numberOrNull(node.DataDiskUsagePer),
+    storageDiskUsagePer: numberOrNull(node.StorageDiskUsagePer),
+    sysDiskUsagePer: numberOrNull(node.SysDiskUsagePer),
+    metadataUpdatedAt: node.MetaDataUpdateAt || null,
+    metricUpdatedAt: node.MetricUpdateAt || null,
+    labels: node.NodeLabels || {}
+  }));
+}
+
+function parseStorageStatus(output) {
+  const rows = tableRows(output, "NODE_ID");
+  return rows.map((columns) => ({
+    nodeId: columns[0],
+    nodeIp: columns[1],
+    mode: columns[2],
+    usagePct: numberOrNull(columns[3]),
+    lastError: columns[4] && !isTimestamp(columns[4]) ? columns[4] : "",
+    updatedAt: columns[5] || (isTimestamp(columns[4]) ? columns[4] : "")
+  }));
+}
+
+function parseSandboxInfo(output) {
+  const info = {};
+  const lines = output.split(/\r?\n/);
+  for (const line of lines) {
+    const match = /^([A-Z_]+)\s{2,}(.*)$/.exec(line.trim());
+    if (!match) continue;
+    const key = sandboxInfoKey(match[1]);
+    if (!key || key === "containers") continue;
+    info[key] = parseInfoValue(match[1], match[2]);
+  }
+  const containers = tableRows(output, "NAME");
+  info.containers = containers.map((columns) => ({
+    name: columns[0],
+    id: columns[1],
+    image: columns[2],
+    status: columns[3],
+    createdAt: columns[4],
+    cpu: columns[5],
+    memory: columns[6],
+    type: columns[7]
+  }));
+  return info;
+}
+
+function sandboxInfoKey(key) {
+  return {
+    SANDBOX_ID: "id",
+    STATUS: "status",
+    HOST_ID: "hostId",
+    HOST_IP: "hostIp",
+    SANDBOX_IP: "sandboxIp",
+    TEMPLATE_ID: "templateId",
+    NAMESPACE: "namespace",
+    ANNOTATIONS: "annotations",
+    LABELS: "labels",
+    EXPOSED_PORT_MODE: "exposedPortMode",
+    EXPOSED_ENDPOINT: "exposedEndpoint",
+    REQUESTED_CONTAINER_PORT: "requestedContainerPort",
+    CONTAINERS: "containers"
+  }[key];
+}
+
+function parseInfoValue(key, value) {
+  if (key === "ANNOTATIONS" || key === "LABELS") return parseJsonObject(value);
+  if (key === "REQUESTED_CONTAINER_PORT") return numberOrNull(value);
+  return value;
+}
+
+function templateDetailFromRaw(raw) {
+  const request = raw?.create_request || raw?.createRequest || {};
+  const container = request.containers?.[0] || {};
+  const image = container.image || {};
+  const imageAnnotations = image.annotations || {};
+  const annotations = request.annotations || {};
+  const env = Array.isArray(container.envs)
+    ? container.envs.map((item) => `${item.key || ""}=${item.value || ""}`).filter((line) => !line.startsWith("="))
+    : [];
+  return {
+    id: raw.template_id || raw.templateID,
+    instanceType: raw.instance_type || raw.instanceType || request.instance_type || null,
+    version: raw.version || null,
+    status: raw.status || "UNKNOWN",
+    replicas: raw.replicas || [],
+    createRequest: request,
+    cpu: container.resources?.cpu || null,
+    memory: container.resources?.mem || null,
+    writableLayerSize: image.writable_layer_size || imageAnnotations["cube.master.rootfs.writable_layer_size"] || annotations["cube.master.rootfs.writable_layer_size"] || findEmptyDirSize(request.volumes) || null,
+    artifactSizeBytes: numberOrNull(imageAnnotations["cube.master.rootfs.artifact.size_bytes"]),
+    exposedPorts: annotations["com.exposed_ports"] || null,
+    probePath: container.probe?.probe_handler?.http_get?.path || null,
+    probePort: container.probe?.probe_handler?.http_get?.port || null,
+    networkType: request.network_type || raw.network_type || null,
+    allowInternetAccess: raw.allowInternetAccess ?? raw.allow_internet_access ?? null,
+    env
+  };
+}
+
+function sandboxDetailFromRaw({ base, info, inspect, inspectError, logs, logsError }) {
+  const config = inspect?.config || {};
+  const annotations = {
+    ...(base.annotations || {}),
+    ...(info?.annotations || {}),
+    ...(inspect?.Annotations || {}),
+    ...(config.annotations || {})
+  };
+  const labels = {
+    ...(base.labels || {}),
+    ...(info?.labels || {}),
+    ...(inspect?.Labels || {})
+  };
+  const container = info?.containers?.[0] || {};
+  const imageAnnotations = config.image?.annotations || {};
+  const resources = config.resources || {};
+  const overhead = inspect?.ResourceWithOverHead || {};
+  return {
+    ...base,
+    ...(info || {}),
+    id: base.id,
+    status: info?.status || base.status,
+    hostId: info?.hostId || base.hostId,
+    hostIp: info?.hostIp || base.hostIp,
+    sandboxIp: info?.sandboxIp || inspect?.IP || null,
+    templateId: info?.templateId || base.templateId || labels["cube.master.appsnapshot.template.id"] || annotations["cube.master.appsnapshot.template.id"] || null,
+    namespace: info?.namespace || base.namespace || inspect?.namespace || null,
+    cpu: resources.cpu || container.cpu || null,
+    memory: resources.mem || container.memory || null,
+    image: config.image?.image || container.image || null,
+    instanceType: inspect?.instance_type || labels["cube.master.instance.type"] || null,
+    writableLayerSize: annotations["cube.master.rootfs.writable_layer_size"] || imageAnnotations["cube.master.rootfs.writable_layer_size"] || config.image?.writable_layer_size || null,
+    systemDiskSize: annotations["cube.master.system_disk_size"] || null,
+    artifactSizeBytes: numberOrNull(imageAnnotations["cube.master.rootfs.artifact.size_bytes"]),
+    hostDataDiskMB: numberOrNull(overhead.HostDataDiskMB),
+    hostStorageDiskMB: numberOrNull(overhead.HostStorageDiskMB),
+    volumeMounts: config.volume_mounts || [],
+    portMappings: inspect?.PortMappings || [],
+    exposedEndpoint: info?.exposedEndpoint || null,
+    exposedPortMode: info?.exposedPortMode || null,
+    requestedContainerPort: info?.requestedContainerPort || null,
+    annotations,
+    labels,
+    inspectError,
+    logs,
+    logsError
+  };
+}
+
+function findEmptyDirSize(volumes = []) {
+  for (const volume of volumes || []) {
+    const size = volume?.volume_source?.empty_dir?.size_limit;
+    if (size) return size;
+  }
+  return null;
+}
+
+function parseJsonObject(value) {
+  if (!value) return {};
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
+  }
+}
+
+function numberOrNull(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function isTimestamp(value) {
+  return /^\d{4}-\d{2}-\d{2}T/.test(String(value || ""));
 }
 
 function tableRows(output, headerPrefix) {

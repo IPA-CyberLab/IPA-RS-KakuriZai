@@ -1,11 +1,19 @@
 // @ts-nocheck
+import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { createAuthProvider } from "./auth/providers.js";
 import { commandExists } from "./core/fs.js";
+import { parseBooleanOption } from "./core/network.js";
 import { initConfigFile, loadConfig } from "./core/config.js";
 import { runCommand } from "./core/process.js";
+import {
+  readSandboxManifest,
+  stringifySandboxManifest,
+  worldToManifest,
+  writeTerraformBundle
+} from "./core/spec.js";
 import {
   applyWorld,
   changedPaths,
@@ -14,7 +22,8 @@ import {
   getWorld,
   listWorlds,
   openWorld,
-  removeWorld
+  removeWorld,
+  upsertWorldFromManifest
 } from "./core/worlds.js";
 import { startStudio } from "./server.js";
 
@@ -35,6 +44,8 @@ export async function main(argv) {
   }
   if (command === "changed") return changed(config, argv.slice(1));
   if (command === "apply") return apply(config, argv.slice(1));
+  if (command === "export" || command === "manifest") return manifest(config, argv.slice(1));
+  if (command === "terraform") return terraform(config, argv.slice(1));
   if (command === "auth") return auth(config, argv.slice(1));
   if (command === "studio") return studio(config, argv.slice(1));
   if (command === "exec" || command === "shell") {
@@ -48,6 +59,10 @@ function help() {
 
 Sandbox commands:
   agctl create --source <folder> --name <name> [--backend cube-sandbox-overlay]
+  agctl create --name <name> --no-host-mount [--network tap] [--expose-port 6443]
+  agctl apply -f sandbox.yaml [--json]
+  agctl export <sandbox> --yaml
+  agctl terraform export <sandbox|--file sandbox.yaml> --out ./terraform
   agctl list [--json]
   agctl show <sandbox> [--json]
   agctl open <sandbox> <file|terminal|vscode|agent>
@@ -75,8 +90,28 @@ async function create(config, args) {
   const sourcePath = takeOption(args, "--source") || takeOption(args, "-s");
   const name = takeOption(args, "--name") || takeOption(args, "-n");
   const backend = takeOption(args, "--backend") || config.defaultBackend;
-  if (!sourcePath || !name) throw new Error("create requires --source and --name");
-  const world = await createWorld(config, { sourcePath, name, backend });
+  const noHostMount = takeFlag(args, "--no-host-mount");
+  const networkType = takeOption(args, "--network") || takeOption(args, "--network-type");
+  const exposedPorts = takeRepeatedOption(args, "--expose-port");
+  const dnsServers = takeRepeatedOption(args, "--dns");
+  const allowInternet = takeOption(args, "--allow-internet-access");
+  const kubernetes = takeFlag(args, "--kubernetes") || takeFlag(args, "--k8s");
+  if (!name) throw new Error("create requires --name");
+  if (!sourcePath && !noHostMount) throw new Error("create requires --source unless --no-host-mount is set");
+  const world = await createWorld(config, {
+    sourcePath,
+    name,
+    backend,
+    hostMount: !noHostMount,
+    networkType,
+    network: {
+      type: networkType,
+      exposedPorts,
+      dns: { servers: dnsServers },
+      ...(allowInternet == null ? {} : { allowInternetAccess: parseBooleanOption(allowInternet) })
+    },
+    kubernetes: { enabled: kubernetes }
+  });
   printWorld(world);
 }
 
@@ -151,6 +186,8 @@ async function changed(config, args) {
 }
 
 async function apply(config, args) {
+  const file = takeOption(args, "-f") || takeOption(args, "--file");
+  if (file) return applyManifest(config, file, args);
   const ref = args.find((arg) => !arg.startsWith("-"));
   if (!ref) throw new Error("apply requires <sandbox>");
   const result = await applyWorld(config, ref, { dryRun: args.includes("--dry-run") });
@@ -161,6 +198,56 @@ async function apply(config, args) {
   for (const change of result.changes) {
     console.log(`${result.applied ? "applied" : "would-apply"}\t${change.action}\t${change.path}`);
   }
+}
+
+async function applyManifest(config, file, args) {
+  const manifest = await readSandboxManifest(file);
+  const result = await upsertWorldFromManifest(config, manifest);
+  if (args.includes("--json")) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  console.log(`${result.action} ${result.world.name}`);
+}
+
+async function manifest(config, args) {
+  const ref = args.find((arg) => !arg.startsWith("-"));
+  if (!ref) throw new Error("export requires a sandbox name or id");
+  const world = await getWorld(config, ref);
+  const output = takeOption(args, "--out") || takeOption(args, "-o");
+  const yaml = stringifySandboxManifest(worldToManifest(world));
+  if (output) {
+    await fs.writeFile(output, yaml, "utf8");
+    console.log(`wrote ${output}`);
+    return;
+  }
+  if (args.includes("--json")) console.log(JSON.stringify(worldToManifest(world), null, 2));
+  else console.log(yaml);
+}
+
+async function terraform(config, args) {
+  const subcommand = args[0] || "export";
+  if (subcommand !== "export" && subcommand !== "bundle") {
+    throw new Error("terraform supports: export <sandbox|--file manifest.yaml> --out <dir>");
+  }
+  args.shift();
+  const outDir = takeOption(args, "--out") || takeOption(args, "-o") || "kakurizai-terraform";
+  const file = takeOption(args, "--file") || takeOption(args, "-f");
+  let sandboxManifest;
+  if (file) {
+    sandboxManifest = await readSandboxManifest(file);
+  } else {
+    const ref = args.find((arg) => !arg.startsWith("-"));
+    if (!ref) throw new Error("terraform export requires <sandbox> or --file <manifest.yaml>");
+    sandboxManifest = worldToManifest(await getWorld(config, ref));
+  }
+  const result = await writeTerraformBundle(sandboxManifest, outDir);
+  if (args.includes("--json")) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  console.log(`wrote ${result.outDir}`);
+  for (const filePath of result.files) console.log(filePath);
 }
 
 async function auth(config, args) {
@@ -213,6 +300,23 @@ function takeOption(args, name) {
   const index = args.indexOf(name);
   if (index < 0) return null;
   return args.splice(index, 2)[1] || null;
+}
+
+function takeRepeatedOption(args, name) {
+  const values = [];
+  for (;;) {
+    const value = takeOption(args, name);
+    if (value == null) break;
+    values.push(value);
+  }
+  return values;
+}
+
+function takeFlag(args, name) {
+  const index = args.indexOf(name);
+  if (index < 0) return false;
+  args.splice(index, 1);
+  return true;
 }
 
 function printWorld(world) {

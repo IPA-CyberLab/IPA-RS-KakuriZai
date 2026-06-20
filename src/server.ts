@@ -3,8 +3,10 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import pty from "node-pty";
+import { WebSocket, WebSocketServer } from "ws";
 import { createAuthProvider } from "./auth/providers.js";
-import { applyWorld, changedPaths, createWorld, execWorld, listWorlds, openWorld, removeWorld } from "./core/worlds.js";
+import { applyWorld, changedPaths, createWorld, execWorld, getWorld, listWorlds, openWorld, removeWorld, updateWorldConfig } from "./core/worlds.js";
 import { CubeSandboxClient } from "./cube/client.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -15,6 +17,13 @@ export async function startStudio(config) {
   const server = http.createServer((request, response) => {
     route(config, auth, request, response).catch((error) => sendError(response, error));
   });
+  const shellServer = new WebSocketServer({ noServer: true });
+  server.on("upgrade", (request, socket, head) => {
+    handleUpgrade(config, auth, shellServer, request, socket, head).catch((error) => {
+      socket.write(`HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain\r\n\r\n${error.message || String(error)}\n`);
+      socket.destroy();
+    });
+  });
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(config.studio.port, config.studio.host, resolve);
@@ -22,6 +31,59 @@ export async function startStudio(config) {
   const token = auth.type === "self" ? auth.issueToken({ subject: "studio-local" }) : null;
   const url = `http://${config.studio.host}:${config.studio.port}/${token ? `?token=${encodeURIComponent(token)}` : ""}`;
   return { server, url };
+}
+
+async function handleUpgrade(config, auth, shellServer, request, socket, head) {
+  const url = new URL(request.url, `http://${request.headers.host || "127.0.0.1"}`);
+  const match = /^\/api\/worlds\/([^/]+)\/shell$/.exec(url.pathname);
+  if (!match) {
+    socket.destroy();
+    return;
+  }
+  const token = url.searchParams.get("token");
+  if (token && !request.headers.authorization) request.headers.authorization = `Bearer ${token}`;
+  request.user = await auth.verifyRequest(request);
+  const world = await getWorld(config, decodeURIComponent(match[1]));
+  shellServer.handleUpgrade(request, socket, head, (ws) => {
+    shellServer.emit("connection", ws, request, world);
+    attachShell(config, world, ws);
+  });
+}
+
+function attachShell(config, world, ws) {
+  let shellProcess;
+  try {
+    const shell = new CubeSandboxClient(config.cube).shellCommand(world);
+    shellProcess = pty.spawn(shell.command, shell.args, {
+      name: "xterm-256color",
+      cols: 100,
+      rows: 24,
+      cwd: process.cwd(),
+      env: process.env
+    });
+  } catch (error) {
+    ws.send(`\r\n${error.message || String(error)}\r\n`);
+    ws.close();
+    return;
+  }
+
+  const write = (chunk) => {
+    if (ws.readyState === WebSocket.OPEN) ws.send(chunk.toString());
+  };
+  shellProcess.onData(write);
+  shellProcess.onExit(({ exitCode }) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(`\r\n[session exited ${exitCode ?? ""}]\r\n`);
+      ws.close();
+    }
+  });
+  ws.on("message", (message) => {
+    shellProcess.write(message.toString());
+  });
+  ws.on("close", () => {
+    shellProcess.kill("SIGTERM");
+  });
+  ws.send(`Connected to ${world.name}\r\n`);
 }
 
 async function route(config, auth, request, response) {
@@ -47,6 +109,19 @@ async function api(config, request, response, url) {
   if (request.method === "GET" && url.pathname === "/api/cube/inspect") {
     return sendJson(response, await new CubeSandboxClient(config.cube).inspect());
   }
+  const cubeSandboxMatch = /^\/api\/cube\/sandboxes\/([^/]+)\/([^/]+)$/.exec(url.pathname);
+  if (cubeSandboxMatch) {
+    const [, sandboxId, action] = cubeSandboxMatch;
+    const client = new CubeSandboxClient(config.cube);
+    if (request.method === "GET" && action === "logs") {
+      return sendJson(response, await client.logs(decodeURIComponent(sandboxId), {
+        tail: Number(url.searchParams.get("tail") || 120)
+      }));
+    }
+    if (request.method === "POST" && action === "destroy") {
+      return sendJson(response, await client.destroySandboxById(decodeURIComponent(sandboxId)));
+    }
+  }
   if (request.method === "GET" && url.pathname === "/api/worlds") {
     return sendJson(response, await listWorlds(config));
   }
@@ -59,7 +134,10 @@ async function api(config, request, response, url) {
   if (!match) return sendJson(response, { error: "not found" }, 404);
   const [, ref, action] = match;
   if (request.method === "DELETE" && !action) {
-    return sendJson(response, await removeWorld(config, decodeURIComponent(ref)));
+    return sendJson(response, await removeWorld(config, decodeURIComponent(ref), { exactId: true }));
+  }
+  if (request.method === "PATCH" && action === "config") {
+    return sendJson(response, await updateWorldConfig(config, decodeURIComponent(ref), await readBody(request)));
   }
   if (request.method === "GET" && action === "changed") {
     return sendJson(response, await changedPaths(config, decodeURIComponent(ref)));

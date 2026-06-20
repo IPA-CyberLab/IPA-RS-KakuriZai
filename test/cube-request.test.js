@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { loadConfig } from "../dist/src/core/config.js";
+import { normalizeNetworkConfig } from "../dist/src/core/network.js";
+import { parseSandboxManifest, manifestToCreateInput, writeTerraformBundle } from "../dist/src/core/spec.js";
 import { WorldStore } from "../dist/src/core/store.js";
+import { updateWorldConfig } from "../dist/src/core/worlds.js";
 import { buildCubeSandboxRequest } from "../dist/src/cube/request.js";
 
 test("cube request mounts source readonly and upper writable", async () => {
@@ -23,6 +26,7 @@ test("cube request mounts source readonly and upper writable", async () => {
   assert.equal(request.annotations["cube.master.appsnapshot.template.id"], "base");
   assert.equal(request.annotations["cube.master.appsnapshot.template.version"], "v2");
   assert.equal(request.instance_type, "cubebox");
+  assert.equal(request.network_type, "tap");
   const volumes = new Map(request.volumes.map((volume) => [volume.name, volume]));
   assert.equal(volumes.size, 4);
   assert.equal(volumes.get("lower").volume_source.host_dir_volumes.volume_sources[0].host_path, world.sourcePath);
@@ -60,4 +64,165 @@ test("cube request supports CubeSandbox direct mount modes", async () => {
   const unsafeRequest = buildCubeSandboxRequest(world, { template: "base", workspacePath: "/workspace" });
   assert.equal(unsafeRequest.containers[0].volume_mounts[0].readonly, false);
   assert.equal(unsafeRequest.annotations["kakurizai.mountMode"], "unsafe-rw");
+});
+
+test("cube request carries writable layer and network settings", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-"));
+  const source = path.join(tmp, "source");
+  await fs.mkdir(source);
+  const config = await loadConfig({ home: path.join(tmp, "home"), createSecrets: false });
+  const store = new WorldStore(config);
+  const world = await store.create({
+    name: "cube-network",
+    sourcePath: source,
+    backend: "cube-sandbox-overlay"
+  });
+
+  const request = buildCubeSandboxRequest(world, {
+    template: "base",
+    workspacePath: "/workspace",
+    writableLayerSize: "2G",
+    networkType: "tap"
+  });
+
+  assert.equal(request.network_type, "tap");
+  assert.equal(request.annotations["cube.master.rootfs.writable_layer_size"], "2G");
+  assert.equal(request.containers[0].annotations["cube.master.rootfs.writable_layer_size"], "2G");
+});
+
+test("cube request can launch without a host mount", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-"));
+  const config = await loadConfig({ home: path.join(tmp, "home"), createSecrets: false });
+  const store = new WorldStore(config);
+  const world = await store.create({
+    name: "cube-unmounted",
+    backend: "cube-sandbox-overlay",
+    backendConfig: { hostMount: false, mountMode: "none" }
+  });
+
+  const sourceStat = await fs.stat(world.sourcePath);
+  const request = buildCubeSandboxRequest(world, { template: "base", workspacePath: "/workspace" });
+
+  assert.equal(sourceStat.isDirectory(), true);
+  assert.equal(world.sourcePath, world.paths.source);
+  assert.deepEqual(request.volumes, []);
+  assert.deepEqual(request.containers[0].volume_mounts, []);
+  assert.equal(request.annotations["kakurizai.hostMount"], "false");
+  assert.equal(request.annotations["kakurizai.mountMode"], "none");
+  assert.doesNotMatch(request.containers[0].args[0], /mount -t overlay/);
+});
+
+test("world disk size update is saved for later CubeSandbox requests", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-"));
+  const source = path.join(tmp, "source");
+  await fs.mkdir(source);
+  const config = await loadConfig({ home: path.join(tmp, "home"), createSecrets: false });
+  const store = new WorldStore(config);
+  const world = await store.create({
+    name: "cube-resize",
+    sourcePath: source,
+    backend: "cube-sandbox-overlay",
+    backendConfig: { writableLayerSize: "1G" }
+  });
+  world.backendConfig.cubeRequest = buildCubeSandboxRequest(world, {
+    template: "base",
+    workspacePath: "/workspace",
+    writableLayerSize: "1G"
+  });
+  await store.save(world);
+
+  const result = await updateWorldConfig(config, world.id, { writableLayerSize: "3G" });
+
+  assert.equal(result.appliedToRunningSandbox, false);
+  assert.match(result.reason, /saved for next sandbox create or recreate/);
+  assert.equal(result.world.backendConfig.writableLayerSize, "3G");
+  assert.equal(result.world.backendConfig.cubeRequest.annotations["cube.master.rootfs.writable_layer_size"], "3G");
+  assert.equal(result.world.backendConfig.cubeRequest.containers[0].annotations["cube.master.rootfs.writable_layer_size"], "3G");
+});
+
+test("cube request carries network, DNS, and Kubernetes lab settings", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-"));
+  const config = await loadConfig({ home: path.join(tmp, "home"), createSecrets: false });
+  const store = new WorldStore(config);
+  const world = await store.create({
+    name: "cube-k8s",
+    backend: "cube-sandbox-overlay",
+    backendConfig: {
+      hostMount: false,
+      mountMode: "none",
+      network: {
+        type: "tap",
+        exposedPorts: [8080],
+        dns: { servers: ["8.8.8.8"] },
+        allowInternetAccess: false,
+        denyOut: ["10.0.0.0/8"]
+      },
+      kubernetes: {
+        enabled: true,
+        profile: "k3s",
+        apiServerPort: 6443,
+        nodePorts: [30000]
+      }
+    }
+  });
+
+  const request = buildCubeSandboxRequest(world, { template: "base" });
+
+  assert.equal(request.network_type, "tap");
+  assert.deepEqual(request.exposed_ports, [6443, 8080, 30000]);
+  assert.equal(request.annotations["com.exposed_ports"], "6443:8080:30000");
+  assert.deepEqual(request.cube_network_config, {
+    allowInternetAccess: false,
+    denyOut: ["10.0.0.0/8"]
+  });
+  assert.deepEqual(request.containers[0].dns_config.servers, ["8.8.8.8"]);
+  assert.match(request.containers[0].dns_config.searches.join(","), /cluster\.local/);
+  assert.equal(request.containers[0].security_context.privileged, true);
+  assert.equal(request.containers[0].sysctls["net.ipv4.ip_forward"], "1");
+});
+
+test("sandbox manifest drives create input and Terraform bundle", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-spec-"));
+  const manifest = parseSandboxManifest(`
+apiVersion: kakurizai.dev/v1
+kind: Sandbox
+metadata:
+  name: lab
+spec:
+  hostMount: false
+  resources:
+    cpu: 4000m
+    memory: 4096Mi
+    writableLayerSize: 4G
+  network:
+    type: tap
+    exposedPorts: [6443]
+    dns:
+      servers: [1.1.1.1]
+    allowInternetAccess: false
+  kubernetes:
+    enabled: true
+    profile: k3s
+`);
+
+  const input = manifestToCreateInput(manifest);
+  assert.equal(input.name, "lab");
+  assert.equal(input.hostMount, false);
+  assert.equal(input.mountMode, "none");
+  assert.equal(input.cpu, "4000m");
+  assert.equal(input.network.exposedPorts[0], 6443);
+  assert.equal(input.kubernetes.enabled, true);
+
+  const result = await writeTerraformBundle(manifest, path.join(tmp, "tf"));
+  assert.deepEqual(result.files.map((file) => path.basename(file)).sort(), ["README.md", "main.tf", "sandbox.yaml"]);
+  const mainTf = await fs.readFile(path.join(tmp, "tf", "main.tf"), "utf8");
+  assert.match(mainTf, /apply -f/);
+  assert.match(mainTf, /remove/);
+});
+
+test("network config rejects unsupported CubeSandbox network types", () => {
+  assert.throws(
+    () => normalizeNetworkConfig({ type: "vlan", vlan: { enabled: true, vlanId: 100, hostInterface: "eth0" } }),
+    /supports network\.type=tap only/
+  );
 });

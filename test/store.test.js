@@ -48,3 +48,29 @@ test("whiteouts delete only during apply", async () => {
   await store.apply(world);
   await assert.rejects(fs.readFile(path.join(source, "remove.txt"), "utf8"), /ENOENT/);
 });
+
+test("duplicate world names require exact id for destructive operations", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-duplicate-"));
+  const source = path.join(tmp, "source");
+  await fs.mkdir(source);
+  const config = await loadConfig({ home: path.join(tmp, "home"), createSecrets: false });
+  const store = new WorldStore(config);
+  const first = await store.create({
+    name: "same-name",
+    sourcePath: source,
+    backend: "cube-sandbox-overlay"
+  });
+  const second = await store.create({
+    name: "same-name",
+    sourcePath: source,
+    backend: "cube-sandbox-overlay"
+  });
+
+  await assert.rejects(store.get("same-name"), /ambiguous world name/);
+  await assert.rejects(store.remove("same-name"), /ambiguous world name/);
+
+  const removed = await store.remove(second.id, { exactId: true });
+  const remaining = await store.list();
+  assert.equal(removed.id, second.id);
+  assert.deepEqual(remaining.map((world) => world.id), [first.id]);
+});

@@ -17,6 +17,10 @@ export class CubeSandboxOverlayBackend {
       template: world.backendConfig?.template || this.config.cube.template,
       cpu: world.backendConfig?.cpu || this.config.cube.cpu,
       memory: world.backendConfig?.memory || this.config.cube.memory,
+      writableLayerSize: world.backendConfig?.writableLayerSize || this.config.cube.writableLayerSize,
+      networkType: world.backendConfig?.networkType || this.config.cube.networkType,
+      network: world.backendConfig?.network || null,
+      kubernetes: world.backendConfig?.kubernetes || null,
       mountMode
     };
     const request = buildCubeSandboxRequest(world, cubeConfig);
@@ -50,6 +54,9 @@ export class CubeSandboxOverlayBackend {
 }
 
 function mountMapForMode(world, mountMode, workspacePath) {
+  if (mountMode === "none") {
+    return {};
+  }
   if (mountMode === "cubesandbox-readonly" || mountMode === "unsafe-rw") {
     return {
       workspace: {

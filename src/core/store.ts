@@ -35,15 +35,11 @@ export class WorldStore {
 
   async create(input) {
     await this.init();
-    const sourcePath = path.resolve(input.sourcePath);
-    const sourceStat = await fs.stat(sourcePath);
-    if (!sourceStat.isDirectory()) {
-      throw new Error(`source path is not a directory: ${sourcePath}`);
-    }
     const id = `${slugify(input.name)}-${randomId().slice(2)}`;
     const dir = this.worldDir(id);
     const paths = {
       metadata: this.metadataPath(id),
+      source: path.join(dir, "source"),
       upper: path.join(dir, "upper"),
       workdir: path.join(dir, "work"),
       whiteouts: path.join(dir, "whiteouts"),
@@ -51,6 +47,14 @@ export class WorldStore {
       exports: path.join(dir, "exports")
     };
     await Promise.all(Object.values(paths).filter((value) => value !== paths.metadata).map(ensureDir));
+    const hostMount = input.backendConfig?.hostMount !== false && Boolean(input.sourcePath);
+    const sourcePath = hostMount ? path.resolve(input.sourcePath) : paths.source;
+    if (hostMount) {
+      const sourceStat = await fs.stat(sourcePath);
+      if (!sourceStat.isDirectory()) {
+        throw new Error(`source path is not a directory: ${sourcePath}`);
+      }
+    }
     const now = nowIso();
     const world = {
       version: 1,
@@ -103,15 +107,21 @@ export class WorldStore {
     return worlds.sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  async get(ref) {
+  async get(ref, options = {}) {
     const worlds = await this.list();
-    const world = worlds.find((candidate) => candidate.id === ref || candidate.name === ref);
-    if (!world) throw new Error(`world not found: ${ref}`);
-    return world;
+    const byId = worlds.find((candidate) => candidate.id === ref);
+    if (byId) return byId;
+    if (options.exactId) throw new Error(`world id not found: ${ref}`);
+    const byName = worlds.filter((candidate) => candidate.name === ref);
+    if (byName.length > 1) {
+      throw new Error(`ambiguous world name: ${ref}; use a world id`);
+    }
+    if (byName.length === 1) return byName[0];
+    throw new Error(`world not found: ${ref}`);
   }
 
-  async remove(ref) {
-    const world = await this.get(ref);
+  async remove(ref, options = {}) {
+    const world = await this.get(ref, options);
     await removePath(this.worldDir(world.id));
     return world;
   }
