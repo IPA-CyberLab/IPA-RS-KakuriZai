@@ -1,15 +1,21 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import {
+  Bot,
+  Code2,
   Folder,
   FolderOpen,
   KeyRound,
-  Monitor,
+  MoreHorizontal,
   Play,
+  Plus,
   RefreshCcw,
   Server,
   Shield,
-  Trash2
+  Terminal,
+  Trash2,
+  Upload,
+  X
 } from "lucide-react";
 import "./styles.css";
 
@@ -66,7 +72,7 @@ type BrowseResult = {
   entries: Array<{ name: string; path: string; type: "directory" }>;
 };
 
-type RuntimeVm = CubeInspect["sandboxes"][number];
+type RuntimeSandbox = CubeInspect["sandboxes"][number];
 
 type InventoryRow = {
   key: string;
@@ -75,9 +81,9 @@ type InventoryRow = {
   origin: string;
   sourcePath: string;
   mountMode: string;
-  vmId: string;
+  sandboxId: string;
   world?: World;
-  runtime?: RuntimeVm;
+  runtime?: RuntimeSandbox;
 };
 
 const mountModes = [
@@ -105,8 +111,11 @@ function App() {
   const [worlds, setWorlds] = React.useState<World[]>([]);
   const [cube, setCube] = React.useState<CubeInspect | null>(null);
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
-  const [status, setStatus] = React.useState("Loading");
+  const [status, setStatus] = React.useState("Starting");
   const [busy, setBusy] = React.useState(false);
+  const [actionMenuOpen, setActionMenuOpen] = React.useState(false);
+  const [launchMenuOpen, setLaunchMenuOpen] = React.useState(false);
+  const [formMessage, setFormMessage] = React.useState("");
   const [launch, setLaunch] = React.useState({
     name: "kakurizai-sandbox",
     sourcePath: "",
@@ -143,7 +152,7 @@ function App() {
       setWorlds(worldsResult);
       setCube(cubeResult);
       setSelectedId((current) => nextInventory.some((row) => row.key === current) ? current : nextInventory[0]?.key || null);
-      setStatus(`${nextInventory.length} Sandbox${nextInventory.length === 1 ? "" : "es"} · ${cubeResult.sandboxes.length} CubeSandbox`);
+      setStatus(`${nextInventory.length} Sandbox${nextInventory.length === 1 ? "" : "es"} / ${cubeResult.sandboxes.length} CubeSandbox`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
     } finally {
@@ -157,30 +166,93 @@ function App() {
     await refresh();
   }
 
+  async function openCreateMenu() {
+    setActionMenuOpen(false);
+    setLaunchMenuOpen(true);
+    setFormMessage("");
+    if (!browser) {
+      try {
+        await browse(launch.sourcePath || "/home/mizuame");
+      } catch (error) {
+        setFormMessage(error instanceof Error ? error.message : String(error));
+      }
+    }
+  }
+
   async function browse(path: string) {
     const result = await api<BrowseResult>(`/api/host/browse?path=${encodeURIComponent(path || "/")}`, { token });
     setBrowser(result);
     setLaunch((current) => ({ ...current, sourcePath: result.path }));
   }
 
-  async function launchVm(event: React.FormEvent) {
+  async function createSandbox(event: React.FormEvent) {
     event.preventDefault();
+    if (!launch.name.trim()) {
+      setFormMessage("Enter a sandbox name.");
+      return;
+    }
+    if (!launch.sourcePath.trim()) {
+      setFormMessage("Choose a host folder first.");
+      return;
+    }
     setBusy(true);
+    setFormMessage("");
     try {
       const world = await api<World>("/api/worlds", {
         method: "POST",
         token,
         body: {
-          name: launch.name,
-          sourcePath: launch.sourcePath,
+          name: launch.name.trim(),
+          sourcePath: launch.sourcePath.trim(),
           backend: "cube-sandbox-overlay",
           mountMode: launch.mountMode,
           cpu: launch.cpu,
           memory: launch.memory
         }
       });
+      setLaunchMenuOpen(false);
       setSelectedId(`world:${world.id}`);
       await refresh();
+    } catch (error) {
+      setFormMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openTarget(target: "file" | "terminal" | "vscode" | "agent") {
+    if (!selected?.world) {
+      setStatus("Select a KakuriZai-managed sandbox");
+      return;
+    }
+    try {
+      await api(`/api/worlds/${encodeURIComponent(selected.world.id)}/open`, {
+        method: "POST",
+        token,
+        body: { target }
+      });
+      setStatus(`Opened ${target} for ${selected.name}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function applySelected() {
+    if (!selected?.world) {
+      setStatus("Select a KakuriZai-managed sandbox");
+      return;
+    }
+    setBusy(true);
+    try {
+      await api(`/api/worlds/${encodeURIComponent(selected.world.id)}/apply`, {
+        method: "POST",
+        token,
+        body: { dryRun: false }
+      });
+      setStatus(`Applied ${selected.name}`);
+      await refresh();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
     } finally {
       setBusy(false);
     }
@@ -200,168 +272,230 @@ function App() {
 
   if (authConfig?.requiresToken && !session) {
     return (
-      <div className="login-page">
-        <form className="login-panel" onSubmit={signIn}>
+      <div className="loginPage">
+        <form className="loginPanel" onSubmit={signIn}>
           <div className="mark"><Shield size={22} /></div>
           <h1>KakuriZai Console</h1>
           <p>{authConfig.label}</p>
-          <div className="auth-meta">
+          <div className="authMeta">
             <span>Provider</span><strong>{authConfig.provider}</strong>
             <span>Issuer</span><strong>{authConfig.issuer || "-"}</strong>
             <span>Audience</span><strong>{authConfig.audience || "-"}</strong>
           </div>
-          <label className="field-label">
+          <label>
             Bearer token
             <input value={token} onChange={(event) => setToken(event.target.value)} placeholder="eyJ..." />
           </label>
-          <button className="button primary" type="submit"><KeyRound size={16} /> Sign in</button>
-          <p className="hint">Auth provider is server-configured: self, Auth0, AWS Cognito, any OIDC, or disabled.</p>
+          <button className="primary wide" type="submit"><KeyRound size={16} /> Sign in</button>
         </form>
       </div>
     );
   }
 
   return (
-    <div className="console">
-      <aside className="nav">
-        <div className="brand-row">
-          <div className="brand-icon"><Server size={18} /></div>
-          <div>
-            <strong>KakuriZai</strong>
-            <span>Sandbox Console</span>
-          </div>
-        </div>
-        <nav>
-          <button className="nav-item active"><Monitor size={16} /> Sandboxes</button>
-        </nav>
-        <div className="node-card">
-          <span>Node</span>
-          <strong>100.105.153.15</strong>
-          <small>{cube?.available ? "Sandbox runtime online" : cube?.reason || "Unknown"}</small>
-        </div>
+    <main className="workbench">
+      <aside className="activityBar">
+        <button
+          className={`activityButton ${actionMenuOpen || launchMenuOpen ? "active" : ""}`}
+          onClick={() => {
+            setLaunchMenuOpen(false);
+            setActionMenuOpen((value) => !value);
+          }}
+          title="Menu"
+          type="button"
+        >
+          <MoreHorizontal size={22} />
+        </button>
       </aside>
 
-      <main className="workbench">
-        <header className="topbar">
-          <div>
-            <h1>Sandboxes</h1>
-            <p>{status} · {session || "anonymous"}</p>
+      {actionMenuOpen ? (
+        <section className="actionMenu">
+          <button className="actionMenuItem" onClick={() => void openCreateMenu()} type="button">
+            <Plus size={16} />
+            <span>Create Sandbox</span>
+          </button>
+        </section>
+      ) : null}
+
+      {launchMenuOpen ? (
+        <form className="newSandboxMenu" onSubmit={createSandbox}>
+          <header>
+            <strong>New Sandbox</strong>
+            <button className="iconButton ghost" onClick={() => setLaunchMenuOpen(false)} title="Close" type="button">
+              <X size={16} />
+            </button>
+          </header>
+
+          <label>Name</label>
+          <input value={launch.name} onChange={(event) => setLaunch({ ...launch, name: event.target.value })} autoFocus />
+
+          <label>Host folder</label>
+          <div className="inputRow">
+            <input value={launch.sourcePath} onChange={(event) => setLaunch({ ...launch, sourcePath: event.target.value })} placeholder="/home/mizuame/project" />
+            <button className="iconButton" type="button" onClick={() => browse(launch.sourcePath || "/home/mizuame")} title="Browse">
+              <FolderOpen size={16} />
+            </button>
           </div>
-          <button className="button" onClick={refresh} disabled={busy}><RefreshCcw size={15} /> Refresh</button>
+
+          {browser ? (
+            <div className="folderBrowser">
+              <div className="folderHeader">
+                <button className="ghost" type="button" disabled={!browser.parent} onClick={() => browser.parent && browse(browser.parent)}>Up</button>
+                <strong>{browser.path}</strong>
+              </div>
+              <div className="folderList">
+                {browser.entries.map((entry) => (
+                  <button type="button" key={entry.path} onClick={() => browse(entry.path)}>
+                    <Folder size={14} />
+                    <span>{entry.name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <label>Mount</label>
+          <div className="mountModes">
+            {mountModes.map((mode) => (
+              <button
+                key={mode.id}
+                type="button"
+                className={`mountChoice ${launch.mountMode === mode.id ? "active" : ""}`}
+                onClick={() => setLaunch({ ...launch, mountMode: mode.id })}
+              >
+                <strong>{mode.label}</strong>
+                <span>{mode.description}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="splitFields">
+            <div>
+              <label>CPU</label>
+              <input value={launch.cpu} onChange={(event) => setLaunch({ ...launch, cpu: event.target.value })} />
+            </div>
+            <div>
+              <label>Memory</label>
+              <input value={launch.memory} onChange={(event) => setLaunch({ ...launch, memory: event.target.value })} />
+            </div>
+          </div>
+
+          {formMessage ? <div className="formMessage">{formMessage}</div> : null}
+
+          <button className="primary wide" disabled={busy} type="submit">
+            <Plus size={16} />
+            {busy ? "Creating" : "Create"}
+          </button>
+        </form>
+      ) : null}
+
+      <section className="sandboxPanel">
+        <header className="panelHeader">
+          <span>Sandboxes</span>
+          <button className="iconButton ghost" onClick={() => void refresh()} title="Refresh" type="button" disabled={busy}>
+            <RefreshCcw size={15} />
+          </button>
+        </header>
+        <div className="sandboxList">
+          {inventory.map((row) => (
+            <button key={row.key} className={`sandboxItem ${row.key === selected?.key ? "selected" : ""}`} onClick={() => setSelectedId(row.key)} type="button">
+              <span className="sandboxTopLine">
+                <span className="sandboxName">{row.name}</span>
+                <span className={`sandboxState ${statusTone(row.status)}`}>{row.status}</span>
+              </span>
+              <span className="sandboxPath">{row.sourcePath}</span>
+            </button>
+          ))}
+          {inventory.length === 0 ? <div className="emptyList">No sandboxes</div> : null}
+        </div>
+      </section>
+
+      <section className="mainArea">
+        <header className="titleBar">
+          <div>
+            <strong>{selected ? selected.name : "No sandbox selected"}</strong>
+            <span>{selected ? selected.sourcePath : status}</span>
+          </div>
+          <div className="toolbarActions">
+            <button className="ghost" onClick={() => void refresh()} title="Refresh" type="button" disabled={busy}>
+              <RefreshCcw size={16} />
+            </button>
+            {selected?.world ? (
+              <button className="danger" onClick={() => removeWorld(selected.world!)} type="button" disabled={busy}>
+                <Trash2 size={16} />
+                Remove
+              </button>
+            ) : null}
+          </div>
         </header>
 
-        <section className="layout">
-          <section className="panel list-panel">
-            <div className="panel-head">
-              <h2>Inventory</h2>
-              <Badge tone={cube?.available ? "ok" : "warn"}>{cube?.available ? "ready" : "offline"}</Badge>
-            </div>
-            <table className="data-table">
-              <thead><tr><th>Name</th><th>Status</th><th>Origin</th><th>Mount</th><th>Sandbox ID</th></tr></thead>
-              <tbody>
-                {inventory.map((row) => (
-                  <tr key={row.key} className={row.key === selected?.key ? "selected" : ""} onClick={() => setSelectedId(row.key)}>
-                    <td><strong>{row.name}</strong><span>{row.sourcePath}</span></td>
-                    <td><Badge tone={statusTone(row.status)}>{row.status}</Badge></td>
-                    <td>{row.origin}</td>
-                    <td>{row.mountMode}</td>
-                    <td>{shortId(row.vmId)}</td>
-                  </tr>
-                ))}
-                {inventory.length === 0 && <tr><td colSpan={5} className="empty-cell">No sandboxes</td></tr>}
-              </tbody>
-            </table>
-          </section>
-
-          <section className="panel launch-panel">
-            <div className="panel-head">
-              <h2>Launch Sandbox</h2>
-              <Badge tone={cube?.available ? "ok" : "warn"}>{cube?.available ? "ready" : "offline"}</Badge>
-            </div>
-            <form onSubmit={launchVm} className="form-grid">
-              <label className="field-label">Name<input value={launch.name} onChange={(event) => setLaunch({ ...launch, name: event.target.value })} required /></label>
-              <label className="field-label path-field">Host folder
-                <div className="input-row">
-                  <input value={launch.sourcePath} onChange={(event) => setLaunch({ ...launch, sourcePath: event.target.value })} placeholder="/home/mizuame/project" required />
-                  <button className="button" type="button" onClick={() => browse(launch.sourcePath || "/home/mizuame")}><FolderOpen size={15} /> Browse</button>
-                </div>
-              </label>
-              {browser && (
-                <div className="browser">
-                  <div className="browser-head">
-                    <button type="button" className="link-button" disabled={!browser.parent} onClick={() => browser.parent && browse(browser.parent)}>Up</button>
-                    <strong>{browser.path}</strong>
-                  </div>
-                  <div className="browser-list">
-                    {browser.entries.map((entry) => (
-                      <button type="button" key={entry.path} onClick={() => browse(entry.path)}><Folder size={14} /> {entry.name}</button>
-                    ))}
-                  </div>
-                </div>
-              )}
-              <div className="mount-modes">
-                {mountModes.map((mode) => (
-                  <label key={mode.id} className={`choice ${launch.mountMode === mode.id ? "active" : ""}`}>
-                    <input type="radio" name="mountMode" checked={launch.mountMode === mode.id} onChange={() => setLaunch({ ...launch, mountMode: mode.id })} />
-                    <strong>{mode.label}</strong>
-                    <span>{mode.description}</span>
-                  </label>
-                ))}
+        <section className="editorPane">
+          {selected ? (
+            <div className="sandboxDashboard">
+              <div className="launchStrip">
+                <button className="launchButton" onClick={() => void openTarget("file")} disabled={!selected.world} type="button">
+                  <FolderOpen size={18} />
+                  <span>File</span>
+                </button>
+                <button className="launchButton" onClick={() => void openTarget("terminal")} disabled={!selected.world} type="button">
+                  <Terminal size={18} />
+                  <span>Terminal</span>
+                </button>
+                <button className="launchButton" onClick={() => void openTarget("vscode")} disabled={!selected.world} type="button">
+                  <Code2 size={18} />
+                  <span>VS Code</span>
+                </button>
+                <button className="launchButton" onClick={() => void openTarget("agent")} disabled={!selected.world} type="button">
+                  <Bot size={18} />
+                  <span>Agent</span>
+                </button>
+                <button className="launchButton" onClick={() => void applySelected()} disabled={!selected.world || busy} type="button">
+                  <Upload size={18} />
+                  <span>Apply</span>
+                </button>
               </div>
-              <div className="two-col">
-                <label className="field-label">CPU<input value={launch.cpu} onChange={(event) => setLaunch({ ...launch, cpu: event.target.value })} /></label>
-                <label className="field-label">Memory<input value={launch.memory} onChange={(event) => setLaunch({ ...launch, memory: event.target.value })} /></label>
-              </div>
-              <button className="button primary" type="submit" disabled={busy}><Play size={16} /> Start Sandbox</button>
-            </form>
-          </section>
 
-          <section className="panel detail-panel">
-            <div className="panel-head">
-              <h2>Sandbox Details</h2>
-              {selected?.world && <button className="button danger" onClick={() => removeWorld(selected.world!)}><Trash2 size={15} /> Delete</button>}
+              <div className="metricStrip">
+                <Metric label="Status" value={selected.status} />
+                <Metric label="Origin" value={selected.origin} />
+                <Metric label="Mount" value={selected.mountMode} />
+                <Metric label="Runtime" value={cube?.mode || "-"} />
+                <Metric label="Host" value={selected.runtime?.hostId || "-"} />
+                <Metric label="Created" value={selected.runtime?.createdAt || selected.world?.createdAt || "-"} />
+                <Metric label="Sandbox ID" value={selected.sandboxId || "-"} wide />
+                <Metric label="Source" value={selected.world?.sourcePath || "-"} wide />
+                <Metric label="Base Template" value={selected.world?.sandbox?.baseId || cube?.template || "-"} wide />
+                <Metric label="Reason" value={selected.world?.sandbox?.reason || "-"} wide />
+                <Metric label="Upper" value={formatBytes(selected.world?.diskUsage?.upperBytes || 0)} />
+                <Metric label="Logs" value={formatBytes(selected.world?.diskUsage?.logsBytes || 0)} />
+              </div>
             </div>
-            {selected ? <SandboxDetails row={selected} /> : <div className="empty-state">Select a sandbox</div>}
-          </section>
+          ) : (
+            <div className="emptyState">
+              <MoreHorizontal size={24} />
+              <span>Open the top-left menu to create a sandbox.</span>
+            </div>
+          )}
         </section>
-      </main>
-    </div>
+      </section>
+    </main>
   );
 }
 
-function SandboxDetails({ row }: { row: InventoryRow }) {
-  const world = row.world;
-  const runtime = row.runtime;
+function Metric({ label, value, wide = false }: { label: string; value: string; wide?: boolean }) {
   return (
-    <div className="details-grid">
-      <Info label="Name" value={row.name} />
-      <Info label="Status" value={row.status} />
-      <Info label="Origin" value={row.origin} />
-      <Info label="Sandbox ID" value={row.vmId || "-"} />
-      <Info label="Host" value={runtime?.hostId || "-"} />
-      <Info label="Created" value={runtime?.createdAt || world?.createdAt || "-"} />
-      <Info label="Source" value={world?.sourcePath || "-"} />
-      <Info label="Mount mode" value={row.mountMode} />
-      <Info label="Base template" value={world?.sandbox?.baseId || "-"} />
-      <Info label="Reason" value={world?.sandbox?.reason || "-"} />
-      <Info label="Upper bytes" value={formatBytes(world?.diskUsage?.upperBytes || 0)} />
+    <div className={wide ? "metric wideMetric" : "metric"}>
+      <span>{label}</span>
+      <strong>{value}</strong>
     </div>
   );
-}
-
-function Info({ label, value }: { label: string; value: string }) {
-  return <div className="info"><span>{label}</span><strong>{value}</strong></div>;
-}
-
-function Badge({ children, tone }: { children: React.ReactNode; tone: "ok" | "warn" | "muted" }) {
-  return <span className={`badge ${tone}`}>{children}</span>;
 }
 
 function buildInventory(worlds: World[], cube: CubeInspect | null): InventoryRow[] {
   const runtimes = cube?.sandboxes || [];
   const matchedRuntimeIds = new Set<string>();
   const rows = worlds.map((world) => {
-    const runtime = runtimes.find((candidate) => sameVmId(candidate.id, world.sandbox?.id));
+    const runtime = runtimes.find((candidate) => sameSandboxId(candidate.id, world.sandbox?.id));
     if (runtime) matchedRuntimeIds.add(runtime.id);
     return {
       key: `world:${world.id}`,
@@ -370,7 +504,7 @@ function buildInventory(worlds: World[], cube: CubeInspect | null): InventoryRow
       origin: runtime ? "KakuriZai + CubeSandbox" : "KakuriZai",
       sourcePath: world.sourcePath,
       mountMode: world.backendConfig?.mountMode || world.sandbox?.mountMode || "-",
-      vmId: world.sandbox?.id || runtime?.id || "",
+      sandboxId: world.sandbox?.id || runtime?.id || "",
       world,
       runtime
     };
@@ -384,14 +518,14 @@ function buildInventory(worlds: World[], cube: CubeInspect | null): InventoryRow
       origin: "CubeSandbox",
       sourcePath: runtime.hostId ? `host ${runtime.hostId}` : "runtime-only",
       mountMode: "-",
-      vmId: runtime.id,
+      sandboxId: runtime.id,
       runtime
     });
   }
   return rows;
 }
 
-function sameVmId(left?: string, right?: string) {
+function sameSandboxId(left?: string, right?: string) {
   if (!left || !right) return false;
   return left === right || shortId(left) === shortId(right);
 }
