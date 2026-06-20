@@ -961,7 +961,8 @@ function sandboxDetailFromRaw({ base, info, inspect, inspectError, logs, logsErr
 
 function findEmptyDirSize(volumes = []) {
   for (const volume of volumes || []) {
-    const size = volume?.volume_source?.empty_dir?.size_limit;
+    const emptyDir = volume?.volume_source?.empty_dir;
+    const size = emptyDir?.size_limit || emptyDir?.SizeLimit;
     if (size) return size;
   }
   return null;

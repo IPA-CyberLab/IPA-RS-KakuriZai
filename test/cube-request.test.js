@@ -122,7 +122,12 @@ test("cube request carries writable layer and network settings", async () => {
 
   assert.equal(request.network_type, "tap");
   assert.equal(request.annotations["cube.master.rootfs.writable_layer_size"], "2G");
+  assert.equal(request.annotations["cube.master.system_disk_size"], "2");
   assert.equal(request.containers[0].annotations["cube.master.rootfs.writable_layer_size"], "2G");
+  const rootVolume = request.volumes.find((volume) => volume.name === "cube_rootfs_rw");
+  assert.equal(rootVolume.volume_source.empty_dir.size_limit, "2G");
+  const rootMount = request.containers[0].volume_mounts.find((mount) => mount.name === "cube_rootfs_rw");
+  assert.equal(rootMount.container_path, "/");
 });
 
 test("cube request can launch without a host mount", async () => {
@@ -173,7 +178,12 @@ test("world disk size update is saved for later CubeSandbox requests", async () 
   assert.equal(result.world.backendConfig.writableLayerSize, "3G");
   assert.equal(result.world.backendConfig.writableLayerMinimumSize, "1G");
   assert.equal(result.world.backendConfig.cubeRequest.annotations["cube.master.rootfs.writable_layer_size"], "3G");
+  assert.equal(result.world.backendConfig.cubeRequest.annotations["cube.master.system_disk_size"], "3");
   assert.equal(result.world.backendConfig.cubeRequest.containers[0].annotations["cube.master.rootfs.writable_layer_size"], "3G");
+  const rootVolume = result.world.backendConfig.cubeRequest.volumes.find((volume) => volume.name === "cube_rootfs_rw");
+  assert.equal(rootVolume.volume_source.empty_dir.size_limit, "3G");
+  const rootMount = result.world.backendConfig.cubeRequest.containers[0].volume_mounts.find((mount) => mount.name === "cube_rootfs_rw");
+  assert.equal(rootMount.container_path, "/");
 });
 
 test("world disk size cannot shrink below current or original size", async () => {

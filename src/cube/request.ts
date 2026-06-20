@@ -19,8 +19,10 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
   const kubernetes = normalizeKubernetesConfig(cubeConfig.kubernetes || world.backendConfig?.kubernetes || {});
   const workspaceArg = shellQuote(workspace);
   const setup = setupCommandForMounts(mounts, { workspaceArg });
-  const volumes = volumesForMounts(mounts, world);
-  const volumeMounts = volumeMountsForMounts(mounts, world);
+  const writableLayerSize = cubeConfig.writableLayerSize || world.backendConfig?.writableLayerSize || null;
+  const writableLayerRequestAnnotations = writableLayerAnnotations(writableLayerSize);
+  const volumes = volumesForMounts(mounts, world, { writableLayerSize });
+  const volumeMounts = volumeMountsForMounts(mounts, world, { writableLayerSize });
   const primaryMount = mounts[0] || null;
   const request = {
     requestID: `kakurizai-${world.id}`,
@@ -43,7 +45,7 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
           "kakurizai.mountMode": mountMode,
           "kakurizai.kubernetes": String(kubernetes.enabled),
           "kakurizai.kubernetes.profile": kubernetes.profile,
-          ...(cubeConfig.writableLayerSize ? { "cube.master.rootfs.writable_layer_size": cubeConfig.writableLayerSize } : {})
+          ...(writableLayerSize ? { "cube.master.rootfs.writable_layer_size": writableLayerSize } : {})
         }
       }
     ],
@@ -61,7 +63,7 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
       "kakurizai.kubernetes.profile": kubernetes.profile,
       "cube.master.appsnapshot.template.id": cubeConfig.template || "kakurizai-base",
       "cube.master.appsnapshot.template.version": cubeConfig.templateVersion || "v2",
-      ...(cubeConfig.writableLayerSize ? { "cube.master.rootfs.writable_layer_size": cubeConfig.writableLayerSize } : {})
+      ...writableLayerRequestAnnotations
     },
     labels: {
       "app.kubernetes.io/managed-by": "kakurizai",
@@ -72,6 +74,16 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
     namespace: cubeConfig.namespace || "kakurizai"
   };
   return applyNetworkToCubeRequest(request, network, kubernetes);
+}
+
+export function writableLayerAnnotations(writableLayerSize) {
+  if (!writableLayerSize) return {};
+  const annotations = {
+    "cube.master.rootfs.writable_layer_size": writableLayerSize
+  };
+  const systemDiskGi = sizeToGi(writableLayerSize);
+  if (systemDiskGi) annotations["cube.master.system_disk_size"] = String(systemDiskGi);
+  return annotations;
 }
 
 export function mountSpecsForWorld(world, cubeConfig = {}) {
@@ -157,9 +169,12 @@ function setupCommandForMounts(mounts, paths) {
   return ["set -eu", `mkdir -p ${dirs.join(" ")}`, "tail -f /dev/null"].join("; ");
 }
 
-function volumesForMounts(mounts, world) {
-  if (!mounts.length) return [];
+function volumesForMounts(mounts, world, options = {}) {
   const volumes = [];
+  if (options.writableLayerSize) {
+    volumes.push(rootfsWritableVolume(options.writableLayerSize));
+  }
+  if (!mounts.length) return volumes;
   if (mounts.some((mount) => mount.mode === "agctl-overlay")) {
     volumes.push(
       hostDirVolume("upper", world.paths.upper),
@@ -174,9 +189,12 @@ function volumesForMounts(mounts, world) {
   return volumes;
 }
 
-function volumeMountsForMounts(mounts, world) {
-  if (!mounts.length) return [];
+function volumeMountsForMounts(mounts, world, options = {}) {
   const volumeMounts = [];
+  if (options.writableLayerSize) {
+    volumeMounts.push({ name: "cube_rootfs_rw", container_path: "/" });
+  }
+  if (!mounts.length) return volumeMounts;
   if (mounts.some((mount) => mount.mode === "agctl-overlay")) {
     volumeMounts.push(
       { name: "upper", container_path: "/kakurizai/upper", readonly: false, host_path: world.paths.upper },
@@ -202,6 +220,26 @@ function volumeMountsForMounts(mounts, world) {
     }
   }
   return volumeMounts;
+}
+
+function rootfsWritableVolume(sizeLimit) {
+  return {
+    name: "cube_rootfs_rw",
+    volume_source: {
+      empty_dir: {
+        size_limit: sizeLimit
+      }
+    }
+  };
+}
+
+function sizeToGi(value) {
+  const match = /^(\d+(?:\.\d+)?)([KMGTP])i?B?$/i.exec(String(value || "").trim());
+  if (!match) return null;
+  const power = { K: -2, M: -1, G: 0, T: 1, P: 2 }[match[2].toUpperCase()];
+  const gib = Number(match[1]) * 1024 ** power;
+  if (!Number.isFinite(gib) || gib <= 0) return null;
+  return Math.max(1, Math.ceil(gib));
 }
 
 function hostDirVolume(name, hostPath) {

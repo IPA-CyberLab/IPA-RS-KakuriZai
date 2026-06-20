@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getBackend } from "../backends/index.js";
-import { applyNetworkToCubeRequest } from "../cube/request.js";
+import { applyNetworkToCubeRequest, writableLayerAnnotations } from "../cube/request.js";
 import { normalizeHostMounts, primaryMount } from "./mounts.js";
 import { normalizeKubernetesConfig, normalizeNetworkConfig } from "./network.js";
 import { WorldStore } from "./store.js";
@@ -324,7 +324,14 @@ function statusError(message, statusCode) {
 function cubeRequestWritableLayerSize(world) {
   return world.backendConfig?.cubeRequest?.annotations?.["cube.master.rootfs.writable_layer_size"]
     || world.backendConfig?.cubeRequest?.containers?.[0]?.annotations?.["cube.master.rootfs.writable_layer_size"]
+    || cubeRequestWritableLayerVolumeSize(world.backendConfig?.cubeRequest)
     || null;
+}
+
+function cubeRequestWritableLayerVolumeSize(request) {
+  const volume = (request?.volumes || []).find((item) => item?.name === "cube_rootfs_rw");
+  const emptyDir = volume?.volume_source?.empty_dir;
+  return emptyDir?.size_limit || emptyDir?.SizeLimit || null;
 }
 
 function maxSizeLabel(values) {
@@ -355,13 +362,33 @@ function updateCubeRequestWritableLayer(world, writableLayerSize) {
   if (!request) return;
   request.annotations = {
     ...(request.annotations || {}),
-    "cube.master.rootfs.writable_layer_size": writableLayerSize
+    ...writableLayerAnnotations(writableLayerSize)
+  };
+  request.volumes = request.volumes || [];
+  let rootfsVolume = request.volumes.find((volume) => volume?.name === "cube_rootfs_rw");
+  if (!rootfsVolume) {
+    rootfsVolume = {
+      name: "cube_rootfs_rw",
+      volume_source: {
+        empty_dir: {}
+      }
+    };
+    request.volumes.unshift(rootfsVolume);
+  }
+  rootfsVolume.volume_source = rootfsVolume.volume_source || {};
+  rootfsVolume.volume_source.empty_dir = {
+    ...(rootfsVolume.volume_source.empty_dir || {}),
+    size_limit: writableLayerSize
   };
   for (const container of request.containers || []) {
     container.annotations = {
       ...(container.annotations || {}),
       "cube.master.rootfs.writable_layer_size": writableLayerSize
     };
+    container.volume_mounts = container.volume_mounts || [];
+    if (!container.volume_mounts.some((mount) => mount?.name === "cube_rootfs_rw" && mount?.container_path === "/")) {
+      container.volume_mounts.unshift({ name: "cube_rootfs_rw", container_path: "/" });
+    }
   }
 }
 
