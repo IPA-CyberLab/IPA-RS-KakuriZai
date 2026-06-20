@@ -68,6 +68,54 @@ test("cube client passes namespace to cubecli exec", async () => {
   assert.deepEqual(args, ["--namespace", "kakurizai", "exec", "-w", "/workspace", "4fac1c9a074d", "id"]);
 });
 
+test("cube client pauses and resumes sandbox tasks", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-pause-"));
+  const cubecli = path.join(tmp, "cubecli");
+  const argsFile = path.join(tmp, "args.txt");
+  await fs.writeFile(cubecli, `#!/bin/sh\nprintf '%s\\n' "$@" > "${argsFile}"\n`, "utf8");
+  await fs.chmod(cubecli, 0o755);
+  const client = new CubeSandboxClient({
+    cubecli,
+    namespace: "kakurizai"
+  });
+
+  const paused = await client.pauseSandboxById("4fac1c9a074d49bf8e29ee1d90592b22");
+  assert.equal(paused.applied, true);
+  let args = (await fs.readFile(argsFile, "utf8")).trim().split("\n");
+  assert.deepEqual(args, ["--namespace", "kakurizai", "containerd-ctr", "tasks", "pause", "4fac1c9a074d49bf8e29ee1d90592b22"]);
+
+  const resumed = await client.resumeSandboxById("4fac1c9a074d49bf8e29ee1d90592b22");
+  assert.equal(resumed.applied, true);
+  args = (await fs.readFile(argsFile, "utf8")).trim().split("\n");
+  assert.deepEqual(args, ["--namespace", "kakurizai", "containerd-ctr", "tasks", "resume", "4fac1c9a074d49bf8e29ee1d90592b22"]);
+});
+
+test("cube client falls back to sudo for task pause when cubelet socket is restricted", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-pause-sudo-"));
+  const cubecli = path.join(tmp, "cubecli");
+  const sudo = path.join(tmp, "sudo");
+  const sudoArgsFile = path.join(tmp, "sudo-args.txt");
+  await fs.writeFile(cubecli, "#!/bin/sh\necho 'connect: permission denied' >&2\nexit 1\n", "utf8");
+  await fs.writeFile(sudo, `#!/bin/sh\nprintf '%s\\n' "$@" > "${sudoArgsFile}"\n`, "utf8");
+  await fs.chmod(cubecli, 0o755);
+  await fs.chmod(sudo, 0o755);
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${tmp}${path.delimiter}${originalPath || ""}`;
+  try {
+    const client = new CubeSandboxClient({
+      cubecli,
+      namespace: "kakurizai"
+    });
+    const result = await client.pauseSandboxById("4fac1c9a074d49bf8e29ee1d90592b22");
+    assert.equal(result.applied, true);
+    assert.equal(result.sudo, true);
+    const args = (await fs.readFile(sudoArgsFile, "utf8")).trim().split("\n");
+    assert.deepEqual(args, ["-n", cubecli, "--namespace", "kakurizai", "containerd-ctr", "tasks", "pause", "4fac1c9a074d49bf8e29ee1d90592b22"]);
+  } finally {
+    process.env.PATH = originalPath;
+  }
+});
+
 test("cube client bootstraps terminal tools after sandbox create", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-client-"));
   const cubecli = path.join(tmp, "cubecli");

@@ -117,21 +117,26 @@ export class CubeSandboxClient {
     const status = this.available();
     const cubecli = commandExists(this.config.cubecli || "cubecli");
     const mastercli = commandExists(this.config.mastercli || "cubemastercli");
-    const [cubeVersion, masterTemplates, masterSandboxes, masterNodes, storageStatus] = await Promise.all([
+    const [cubeVersion, masterTemplates, masterSandboxes, masterNodes, storageStatus, taskStatuses] = await Promise.all([
       cubecli ? commandSummary(cubecli, ["--version"]) : Promise.resolve({ ok: false, reason: "cubecli not found" }),
       mastercli ? commandSummary(mastercli, ["tpl", "list"], parseTemplates) : Promise.resolve({ ok: false, reason: "cubemastercli not found" }),
       mastercli ? commandSummary(mastercli, ["list", "--all", "--wide"], parseSandboxesWide) : Promise.resolve({ ok: false, reason: "cubemastercli not found" }),
       mastercli ? commandSummary(mastercli, ["node", "list", "--json"], parseNodesJson) : Promise.resolve({ ok: false, reason: "cubemastercli not found" }),
-      mastercli ? commandSummary(mastercli, ["storage", "status"], parseStorageStatus) : Promise.resolve({ ok: false, reason: "cubemastercli not found" })
+      mastercli ? commandSummary(mastercli, ["storage", "status"], parseStorageStatus) : Promise.resolve({ ok: false, reason: "cubemastercli not found" }),
+      cubecli ? cubeCliCommandSummary(cubecli, [...cubeCliGlobalArgs(this.config), "containerd-ctr", "tasks", "list"], parseTaskStatuses) : Promise.resolve({ ok: false, reason: "cubecli not found" })
     ]);
     const templates = masterTemplates.ok ? masterTemplates.value : [];
     const templateDetails = mastercli
       ? await Promise.all(templates.map((template) => this.inspectTemplate(template, mastercli)))
       : templates;
     const sandboxes = masterSandboxes.ok ? masterSandboxes.value : [];
-    const sandboxDetails = await Promise.all(
+    const rawSandboxDetails = await Promise.all(
       sandboxes.map((sandbox) => this.inspectSandbox(sandbox, { mastercli, cubecli }))
     );
+    const sandboxDetails = rawSandboxDetails.map((sandbox) => {
+      const taskStatus = taskStatusForSandbox(taskStatuses.ok ? taskStatuses.value : {}, sandbox.id);
+      return taskStatus ? { ...sandbox, status: taskStatus.toLowerCase() } : sandbox;
+    });
     return {
       available: status.available,
       mode: status.mode || this.config.mode || "auto",
@@ -151,8 +156,8 @@ export class CubeSandboxClient {
       capabilities: {
         destroy: Boolean(mastercli),
         logs: Boolean(cubecli),
-        pause: false,
-        resume: false
+        pause: Boolean(cubecli && taskStatuses.ok),
+        resume: Boolean(cubecli && taskStatuses.ok)
       },
       config: {
         apiEndpoint: this.config.apiBaseUrl || null,
@@ -207,6 +212,49 @@ export class CubeSandboxClient {
       logs: result.stdout || "",
       stderr: result.stderr || "",
       error: result.ok ? null : result.reason
+    };
+  }
+
+  async pauseSandboxById(sandboxId) {
+    return this.taskAction(sandboxId, "pause");
+  }
+
+  async resumeSandboxById(sandboxId) {
+    return this.taskAction(sandboxId, "resume");
+  }
+
+  async pauseSandbox(world) {
+    const sandboxId = world.sandbox?.containerId || world.sandbox?.id;
+    if (!sandboxId) return { skipped: true, reason: "world has no sandbox id" };
+    return this.pauseSandboxById(sandboxId);
+  }
+
+  async resumeSandbox(world) {
+    const sandboxId = world.sandbox?.containerId || world.sandbox?.id;
+    if (!sandboxId) return { skipped: true, reason: "world has no sandbox id" };
+    return this.resumeSandboxById(sandboxId);
+  }
+
+  async taskAction(sandboxId, action) {
+    const binary = commandExists(this.config.cubecli || "cubecli");
+    if (!binary) return { sandboxId, action, skipped: true, reason: "cubecli not found" };
+    const result = await runCubeCliCommand(binary, [
+      ...cubeCliGlobalArgs(this.config),
+      "containerd-ctr",
+      "tasks",
+      action,
+      sandboxId
+    ], { allowFailure: true });
+    const output = `${result.stdout}\n${result.stderr}`;
+    return {
+      sandboxId,
+      action,
+      applied: result.code === 0,
+      code: result.code,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      sudo: Boolean(result.sudo),
+      reason: result.code === 0 ? null : parseFailure(output) || `cubecli task ${action} exited with ${result.code}`
     };
   }
 
@@ -581,6 +629,30 @@ async function commandSummary(command, args, parser = null) {
   return { ok: true, stdout, stderr, value: parser ? parser(stdout) : stdout };
 }
 
+async function cubeCliCommandSummary(command, args, parser = null) {
+  const result = await runCubeCliCommand(command, args, { allowFailure: true });
+  const stdout = result.stdout || "";
+  const stderr = result.stderr || "";
+  if (result.code !== 0) {
+    return { ok: false, reason: parseFailure(`${stdout}\n${stderr}`) || `${command} ${args.join(" ")} exited with ${result.code}`, stdout, stderr };
+  }
+  return { ok: true, stdout, stderr, value: parser ? parser(stdout) : stdout };
+}
+
+async function runCubeCliCommand(command, args, options = {}) {
+  const result = await runCommand(command, args, { allowFailure: true, input: options.input });
+  if (result.code === 0 || !shouldRetryWithSudo(result)) return result;
+  const sudo = commandExists("sudo");
+  if (!sudo) return result;
+  const sudoResult = await runCommand(sudo, ["-n", command, ...args], { allowFailure: true, input: options.input });
+  return { ...sudoResult, sudo: true };
+}
+
+function shouldRetryWithSudo(result) {
+  const output = `${result.stdout || ""}\n${result.stderr || ""}`;
+  return /permission denied|operation not permitted|connect: permission denied/i.test(output);
+}
+
 function parseTemplates(output) {
   const rows = tableRows(output, "TEMPLATE_ID");
   return rows.map((columns) => ({
@@ -619,6 +691,15 @@ function parseSandboxesWide(output) {
       labels
     };
   });
+}
+
+function parseTaskStatuses(output) {
+  const rows = tableRows(output, "TASK");
+  const statuses = {};
+  for (const columns of rows) {
+    if (columns[0] && columns[2]) statuses[columns[0]] = columns[2];
+  }
+  return statuses;
 }
 
 function parseJson(output) {
@@ -812,6 +893,14 @@ function numberOrNull(value) {
   if (value === null || value === undefined || value === "") return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+}
+
+function taskStatusForSandbox(statuses, sandboxId) {
+  if (!sandboxId) return null;
+  if (statuses[sandboxId]) return statuses[sandboxId];
+  const short = sandboxIdForCubeCli(sandboxId);
+  const match = Object.entries(statuses).find(([taskId]) => taskId === short || sandboxIdForCubeCli(taskId) === short);
+  return match ? match[1] : null;
 }
 
 function isTimestamp(value) {

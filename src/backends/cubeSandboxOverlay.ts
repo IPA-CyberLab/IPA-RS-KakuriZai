@@ -94,6 +94,14 @@ export class CubeSandboxOverlayBackend {
     return this.client.destroySandbox(world);
   }
 
+  async pause(world) {
+    return this.client.pauseSandbox(world);
+  }
+
+  async resume(world) {
+    return this.client.resumeSandbox(world);
+  }
+
   async exec(world, command, options = {}) {
     return this.client.exec(world, command, options);
   }

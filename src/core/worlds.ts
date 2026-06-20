@@ -223,6 +223,54 @@ export async function removeWorld(config, ref, options = {}) {
   return store.remove(world.id, { exactId: true });
 }
 
+export async function pauseWorld(config, ref) {
+  const store = new WorldStore(config);
+  const world = await store.get(ref);
+  const backend = getBackend(config, world.backend);
+  if (typeof backend.pause !== "function") throw new Error(`backend ${world.backend} does not support pause`);
+  const result = await backend.pause(world);
+  if (result.applied) {
+    world.status = "paused";
+    world.sandbox = {
+      ...(world.sandbox || {}),
+      status: "paused",
+      pausedAt: new Date().toISOString(),
+      reason: null
+    };
+  } else {
+    world.sandbox = {
+      ...(world.sandbox || {}),
+      reason: result.reason || "pause failed"
+    };
+  }
+  await store.save(world);
+  return { ...result, world };
+}
+
+export async function resumeWorld(config, ref) {
+  const store = new WorldStore(config);
+  const world = await store.get(ref);
+  const backend = getBackend(config, world.backend);
+  if (typeof backend.resume !== "function") throw new Error(`backend ${world.backend} does not support resume`);
+  const result = await backend.resume(world);
+  if (result.applied) {
+    world.status = "ready";
+    world.sandbox = {
+      ...(world.sandbox || {}),
+      status: "running",
+      pausedAt: null,
+      reason: null
+    };
+  } else {
+    world.sandbox = {
+      ...(world.sandbox || {}),
+      reason: result.reason || "resume failed"
+    };
+  }
+  await store.save(world);
+  return { ...result, world };
+}
+
 export async function execWorld(config, ref, command, options = {}) {
   const store = new WorldStore(config);
   const world = await store.get(ref);

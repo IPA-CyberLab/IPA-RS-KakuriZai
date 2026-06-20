@@ -69,6 +69,8 @@ test("help exposes CLI equivalents for Studio buttons", async () => {
     "agctl vscode <sandbox>",
     "agctl agent <sandbox>",
     "agctl apply <sandbox>",
+    "agctl pause <sandbox>",
+    "agctl resume <sandbox>",
     "agctl remove <sandbox>"
   ]) {
     assert.match(result.stdout, new RegExp(escapeRegExp(command)));

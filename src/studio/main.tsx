@@ -18,7 +18,9 @@ import {
   Layers,
   MoreHorizontal,
   Network,
+  Pause,
   Plus,
+  Play,
   RefreshCcw,
   Route,
   Search,
@@ -52,6 +54,7 @@ type World = {
     status?: string;
     reason?: string;
     mountMode?: string;
+    pausedAt?: string | null;
     bootstrap?: {
       pending?: boolean;
       applied?: boolean;
@@ -623,6 +626,40 @@ function App() {
     }
   }
 
+  async function pauseSelected() {
+    if (!selected?.sandboxId) return;
+    setBusy(true);
+    try {
+      const result = selected.world
+        ? await api<{ world: World; applied?: boolean; reason?: string }>(`/api/worlds/${encodeURIComponent(selected.world.id)}/pause`, { method: "POST", token })
+        : await api<{ applied?: boolean; reason?: string }>(`/api/cube/sandboxes/${encodeURIComponent(selected.sandboxId)}/pause`, { method: "POST", token });
+      if (result.applied === false) throw new Error(result.reason || `Failed to pause ${selected.name}`);
+      setStatus(`Paused ${selected.name}`);
+      await refresh();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resumeSelected() {
+    if (!selected?.sandboxId) return;
+    setBusy(true);
+    try {
+      const result = selected.world
+        ? await api<{ world: World; applied?: boolean; reason?: string }>(`/api/worlds/${encodeURIComponent(selected.world.id)}/resume`, { method: "POST", token })
+        : await api<{ applied?: boolean; reason?: string }>(`/api/cube/sandboxes/${encodeURIComponent(selected.sandboxId)}/resume`, { method: "POST", token });
+      if (result.applied === false) throw new Error(result.reason || `Failed to resume ${selected.name}`);
+      setStatus(`Resumed ${selected.name}`);
+      await refresh();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (authConfig?.requiresToken && !session) {
     return (
       <div className="loginPage">
@@ -885,6 +922,29 @@ function App() {
             <button className="ghost" onClick={() => void refresh()} title="Refresh" type="button" disabled={busy}>
               <RefreshCcw size={16} />
             </button>
+            {selected && isPausedStatus(selected.status) ? (
+              <button
+                className="ghost"
+                onClick={() => void resumeSelected()}
+                title={cube?.capabilities?.resume ? "Resume sandbox" : "Resume is not available on this CubeSandbox runtime"}
+                type="button"
+                disabled={busy || !selected.sandboxId || !cube?.capabilities?.resume}
+              >
+                <Play size={16} />
+                Resume
+              </button>
+            ) : selected ? (
+              <button
+                className="ghost"
+                onClick={() => void pauseSelected()}
+                title={cube?.capabilities?.pause ? "Pause sandbox" : "Pause is not available on this CubeSandbox runtime"}
+                type="button"
+                disabled={busy || !selected.sandboxId || !cube?.capabilities?.pause}
+              >
+                <Pause size={16} />
+                Pause
+              </button>
+            ) : null}
             {selected ? (
               <button className="danger" onClick={() => void destroySelected()} type="button" disabled={busy || !selected.sandboxId && !selected.world}>
                 <Trash2 size={16} />
@@ -1521,10 +1581,11 @@ function buildInventory(worlds: World[], cube: CubeInspect | null): InventoryRow
   const rows = worlds.map((world) => {
     const runtime = runtimes.find((candidate) => sameSandboxId(candidate.id, world.sandbox?.id));
     if (runtime) matchedRuntimeIds.add(runtime.id);
+    const worldStatus = world.sandbox?.status || world.status;
     return {
       key: `world:${world.id}`,
       name: world.name,
-      status: runtime?.status || world.status,
+      status: isPausedStatus(worldStatus) ? worldStatus : runtime?.status || world.status,
       origin: runtime ? "KakuriZai + CubeSandbox" : "KakuriZai",
       sourcePath: world.sourcePath,
       mountMode: world.backendConfig?.mountMode || world.sandbox?.mountMode || "-",
@@ -1649,6 +1710,10 @@ function mountModeLabel(row: InventoryRow, mount: CubeVolumeMount) {
 function sameSandboxId(left?: string, right?: string) {
   if (!left || !right) return false;
   return left === right || shortId(left) === shortId(right);
+}
+
+function isPausedStatus(status?: string | null) {
+  return String(status || "").toLowerCase().includes("paused");
 }
 
 function statusTone(status: string): "ok" | "warn" | "muted" {

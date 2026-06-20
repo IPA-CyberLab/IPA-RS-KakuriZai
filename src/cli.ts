@@ -22,7 +22,9 @@ import {
   getWorld,
   listWorlds,
   openWorld,
+  pauseWorld,
   removeWorld,
+  resumeWorld,
   upsertWorldFromManifest
 } from "./core/worlds.js";
 import { startStudio } from "./server.js";
@@ -38,6 +40,8 @@ export async function main(argv) {
   if (command === "list") return list(config, argv.slice(1));
   if (command === "show" || command === "inspect" || command === "details") return show(config, argv.slice(1));
   if (command === "remove") return remove(config, argv.slice(1));
+  if (command === "pause") return pause(config, argv.slice(1));
+  if (command === "resume") return resume(config, argv.slice(1));
   if (command === "open") return open(config, argv.slice(1));
   if (["file", "terminal", "vscode", "agent"].includes(command)) {
     return open(config, [argv[1], command, ...argv.slice(2)]);
@@ -74,6 +78,8 @@ Sandbox commands:
   agctl shell <sandbox>
   agctl changed <sandbox> [--json]
   agctl apply <sandbox> [--dry-run] [--json]
+  agctl pause <sandbox> [--json]
+  agctl resume <sandbox> [--json]
   agctl remove <sandbox> --yes
   agctl studio [--host 127.0.0.1] [--port 38476]
   agctl auth token [--subject local-user]
@@ -165,6 +171,30 @@ async function remove(config, args) {
     return;
   }
   console.log(`removed ${world.name}`);
+}
+
+async function pause(config, args) {
+  const ref = args.find((arg) => !arg.startsWith("-"));
+  if (!ref) throw new Error("pause requires a sandbox id");
+  const result = await pauseWorld(config, ref);
+  if (args.includes("--json")) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  if (!result.applied) throw new Error(result.reason || `failed to pause ${result.world.name}`);
+  console.log(`paused ${result.world.name}`);
+}
+
+async function resume(config, args) {
+  const ref = args.find((arg) => !arg.startsWith("-"));
+  if (!ref) throw new Error("resume requires a sandbox id");
+  const result = await resumeWorld(config, ref);
+  if (args.includes("--json")) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  if (!result.applied) throw new Error(result.reason || `failed to resume ${result.world.name}`);
+  console.log(`resumed ${result.world.name}`);
 }
 
 async function open(config, args) {

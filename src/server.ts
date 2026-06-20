@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import pty from "node-pty";
 import { WebSocket, WebSocketServer } from "ws";
 import { createAuthProvider } from "./auth/providers.js";
-import { applyWorld, changedPaths, createWorld, execWorld, getWorld, listWorlds, openWorld, removeWorld, updateWorldConfig } from "./core/worlds.js";
+import { applyWorld, changedPaths, createWorld, execWorld, getWorld, listWorlds, openWorld, pauseWorld, removeWorld, resumeWorld, updateWorldConfig } from "./core/worlds.js";
 import { CubeSandboxClient } from "./cube/client.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -399,6 +399,12 @@ async function api(config, devAccess, request, response, url) {
     if (request.method === "POST" && action === "destroy") {
       return sendJson(response, await client.destroySandboxById(decodeURIComponent(sandboxId)));
     }
+    if (request.method === "POST" && action === "pause") {
+      return sendJson(response, await client.pauseSandboxById(decodeURIComponent(sandboxId)));
+    }
+    if (request.method === "POST" && action === "resume") {
+      return sendJson(response, await client.resumeSandboxById(decodeURIComponent(sandboxId)));
+    }
   }
   if (request.method === "GET" && url.pathname === "/api/worlds") {
     return sendJson(response, await listWorlds(config));
@@ -435,6 +441,12 @@ async function api(config, devAccess, request, response, url) {
   }
   if (request.method === "POST" && action === "apply") {
     return sendJson(response, await applyWorld(config, decodeURIComponent(ref), await readBody(request)));
+  }
+  if (request.method === "POST" && action === "pause") {
+    return sendJson(response, await pauseWorld(config, decodeURIComponent(ref)));
+  }
+  if (request.method === "POST" && action === "resume") {
+    return sendJson(response, await resumeWorld(config, decodeURIComponent(ref)));
   }
   if (request.method === "POST" && action === "open") {
     const body = await readBody(request);
