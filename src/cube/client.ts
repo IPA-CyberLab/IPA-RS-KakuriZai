@@ -346,12 +346,16 @@ function normalizeBootstrapConfig(config = {}) {
       "iputils-ping",
       "less",
       "nano",
+      "ncurses-base",
+      "ncurses-bin",
+      "ncurses-term",
       "net-tools",
       "procps",
       "sudo",
+      "tmux",
       "vim-tiny"
     ],
-    commands: ["bash", "curl", "ip", "nano", "ping", "ps", "sudo"]
+    commands: ["bash", "curl", "ip", "nano", "ping", "ps", "sudo", "tmux"]
   };
   if (config === false) return { ...defaults, enabled: false };
   return {
@@ -384,6 +388,9 @@ function apkPackageName(pkg) {
   return {
     dnsutils: "bind-tools",
     "iputils-ping": "iputils",
+    "ncurses-base": "ncurses-terminfo-base",
+    "ncurses-bin": "ncurses",
+    "ncurses-term": "ncurses-terminfo",
     "vim-tiny": "vim"
   }[pkg] || pkg;
 }
@@ -392,6 +399,7 @@ function rpmPackageName(pkg) {
   return {
     dnsutils: "bind-utils",
     "iputils-ping": "iputils",
+    "ncurses-bin": "ncurses",
     "vim-tiny": "vim-minimal"
   }[pkg] || pkg;
 }

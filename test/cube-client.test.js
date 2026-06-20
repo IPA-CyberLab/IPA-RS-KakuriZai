@@ -78,8 +78,8 @@ test("cube client bootstraps terminal tools after sandbox create", async () => {
     cubecli,
     namespace: "kakurizai",
     bootstrapTools: {
-      packages: ["iproute2", "nano"],
-      commands: ["ip", "nano"]
+      packages: ["iproute2", "nano", "ncurses-bin", "ncurses-term", "tmux"],
+      commands: ["ip", "nano", "tmux"]
     }
   });
 
@@ -95,6 +95,9 @@ test("cube client bootstraps terminal tools after sandbox create", async () => {
   assert.match(args[6], /apt-get install -y --no-install-recommends/);
   assert.match(args[6], /iproute2/);
   assert.match(args[6], /nano/);
+  assert.match(args[6], /ncurses-bin/);
+  assert.match(args[6], /ncurses-term/);
+  assert.match(args[6], /tmux/);
 });
 
 test("cube client opens web shell with colorized bash profile", () => {

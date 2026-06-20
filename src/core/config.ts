@@ -47,12 +47,16 @@ export function defaultConfig(home = defaultHome()) {
           "iputils-ping",
           "less",
           "nano",
+          "ncurses-base",
+          "ncurses-bin",
+          "ncurses-term",
           "net-tools",
           "procps",
           "sudo",
+          "tmux",
           "vim-tiny"
         ],
-        commands: ["bash", "curl", "ip", "nano", "ping", "ps", "sudo"]
+        commands: ["bash", "curl", "ip", "nano", "ping", "ps", "sudo", "tmux"]
       }
     },
     isolatedAgent: {

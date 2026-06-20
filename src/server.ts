@@ -59,7 +59,12 @@ function attachShell(config, world, ws) {
       cols: 100,
       rows: 24,
       cwd: process.cwd(),
-      env: process.env
+      env: {
+        ...process.env,
+        TERM: "xterm-256color",
+        COLORTERM: "truecolor",
+        CLICOLOR: "1"
+      }
     });
   } catch (error) {
     ws.send(`\r\n${error.message || String(error)}\r\n`);
