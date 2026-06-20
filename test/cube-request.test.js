@@ -30,6 +30,7 @@ test("cube request mounts source readonly and upper writable", async () => {
   assert.equal(volumes.get("work").volume_source.host_dir_volumes.volume_sources[0].host_path, world.paths.workdir);
   assert.equal(volumes.get("whiteouts").volume_source.host_dir_volumes.volume_sources[0].host_path, world.paths.whiteouts);
   const mounts = request.containers[0].volume_mounts;
+  assert.deepEqual(request.containers[0].resources, { cpu: "2000m", mem: "2000Mi" });
   assert.equal(mounts.find((mount) => mount.name === "lower").readonly, true);
   assert.equal(mounts.find((mount) => mount.name === "upper").readonly, false);
   assert.match(request.containers[0].args[0], /mount -t overlay/);

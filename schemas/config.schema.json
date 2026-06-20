@@ -88,6 +88,8 @@
         "apiBaseUrl": { "type": ["string", "null"] },
         "template": { "type": "string" },
         "namespace": { "type": "string" },
+        "cpu": { "type": "string" },
+        "memory": { "type": "string" },
         "workspacePath": { "type": "string" }
       },
       "additionalProperties": true

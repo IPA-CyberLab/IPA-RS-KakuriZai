@@ -19,6 +19,8 @@
     "apiBaseUrl": null,
     "template": "kakurizai-base",
     "namespace": "kakurizai",
+    "cpu": "2000m",
+    "memory": "2000Mi",
     "workspacePath": "/workspace"
   },
   "isolatedAgent": {

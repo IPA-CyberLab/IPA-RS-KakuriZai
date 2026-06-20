@@ -27,6 +27,10 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
         command: ["/bin/sh", "-lc"],
         args: [setup],
         working_dir: workspace,
+        resources: {
+          cpu: cubeConfig.cpu || "2000m",
+          mem: cubeConfig.memory || "2000Mi"
+        },
         volume_mounts: [
           { name: "lower", container_path: lower, readonly: true, host_path: world.sourcePath },
           { name: "upper", container_path: upper, readonly: false, host_path: world.paths.upper },
