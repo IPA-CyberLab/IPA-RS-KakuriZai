@@ -7,7 +7,6 @@ import {
   Activity,
   Box,
   Code2,
-  Copy,
   Cpu,
   Database,
   ExternalLink,
@@ -257,21 +256,6 @@ type LaunchMount = {
   name: string;
   sourcePath: string;
   mode: string;
-};
-
-type DevAccess = {
-  worldId: string;
-  worldName: string;
-  sandboxIp: string;
-  workspace: string | null;
-  vscodeUrl: string | null;
-  vscodePath: string | null;
-  vscodePort: number | null;
-  vscodeForwardPort: number | null;
-  sshHost: string;
-  sshPort: number | null;
-  sshUri: string | null;
-  sshCommand: string | null;
 };
 
 type InventoryRow = {
@@ -1004,64 +988,8 @@ function DetailSection({ icon, title, children }: { icon: React.ReactNode; title
 }
 
 function SandboxAccessLauncher({ world, token }: { world?: World; token: string }) {
-  const [access, setAccess] = React.useState<DevAccess | null>(null);
-  const [busy, setBusy] = React.useState(false);
-  const [message, setMessage] = React.useState("");
-
-  React.useEffect(() => {
-    setAccess(null);
-    setMessage("");
-  }, [world?.id]);
-
   if (!world) {
     return <div className="sectionEmpty">Terminal is available for KakuriZai-managed sandboxes only.</div>;
-  }
-
-  async function ensureAccess(openTarget?: "vscode" | "ssh") {
-    if (openTarget === "vscode") {
-      window.open(devAccessOpenUrl(world.id, token), "_blank", "noopener,noreferrer");
-      setMessage("Opening VS Code Web");
-      return;
-    }
-    if (access && (openTarget !== "ssh" || access.sshUri)) {
-      openAccess(access, openTarget);
-      return;
-    }
-    setBusy(true);
-    setMessage("Starting dev access");
-    try {
-      const result = await api<DevAccess>(`/api/worlds/${encodeURIComponent(world.id)}/dev-access`, {
-        method: "POST",
-        body: openTarget === "ssh"
-          ? { vscode: false, ssh: true }
-          : { vscode: true, ssh: false },
-        token
-      });
-      setAccess(result);
-      setMessage("ready");
-      openAccess(result, openTarget);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function copySshCommand() {
-    const result = access?.sshCommand
-      ? access
-      : await api<DevAccess>(`/api/worlds/${encodeURIComponent(world.id)}/dev-access`, {
-          method: "POST",
-          body: { vscode: false, ssh: true },
-          token
-        });
-    setAccess(result);
-    if (!result.sshCommand) {
-      setMessage("SSH is not ready");
-      return;
-    }
-    await navigator.clipboard.writeText(result.sshCommand);
-    setMessage("SSH copied");
   }
 
   return (
@@ -1076,48 +1004,14 @@ function SandboxAccessLauncher({ world, token }: { world?: World; token: string 
           Open Terminal
           <ExternalLink size={14} />
         </button>
-        <button onClick={() => void ensureAccess("vscode")} type="button" disabled={busy}>
+        <button onClick={() => window.open(devAccessOpenUrl(world.id, token), "_blank", "noopener,noreferrer")} type="button">
           <Code2 size={15} />
           VS Code Web
           <ExternalLink size={14} />
         </button>
-        <button onClick={() => void ensureAccess("ssh")} type="button" disabled={busy}>
-          <Terminal size={15} />
-          SSH
-          <ExternalLink size={14} />
-        </button>
-        <button className="ghost" onClick={() => void copySshCommand()} type="button" disabled={busy}>
-          <Copy size={15} />
-          Copy SSH
-        </button>
-        <span className="statusText">{world.status}</span>
-        <span>{message || "VS Code Server and SSH are started on demand"}</span>
       </div>
-      {access ? (
-        <div className="commandBox">
-          <span>Workspace</span>
-          <strong>{access.workspace || "-"}</strong>
-          {access.sshCommand ? (
-            <>
-              <span>SSH</span>
-              <strong>{access.sshCommand}</strong>
-            </>
-          ) : null}
-          {access.vscodeUrl ? (
-            <>
-              <span>VS Code</span>
-              <strong>{access.vscodeUrl}</strong>
-            </>
-          ) : null}
-        </div>
-      ) : null}
     </div>
   );
-}
-
-function openAccess(access: DevAccess, target?: "vscode" | "ssh") {
-  if (target === "vscode" && access.vscodeUrl) window.open(access.vscodeUrl, "_blank", "noopener,noreferrer");
-  if (target === "ssh" && access.sshUri) window.open(access.sshUri, "_blank", "noopener,noreferrer");
 }
 
 function ShellPage({ worldId }: { worldId: string }) {
