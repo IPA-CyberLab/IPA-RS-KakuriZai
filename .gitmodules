@@ -3,4 +3,4 @@
 	url = https://github.com/IPA-CyberLab/IPA-RS-IsolatedAgent.git
 [submodule "vendor/CubeSandbox"]
 	path = vendor/CubeSandbox
-	url = https://github.com/IPA-CyberLab/CubeSandbox.git
+	url = https://github.com/IPA-CyberLab/CubeSandbox-private.git
