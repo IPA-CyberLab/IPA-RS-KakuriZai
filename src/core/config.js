@@ -33,6 +33,7 @@ export function defaultConfig(home = defaultHome()) {
       mastercli: process.env.KAKURIZAI_CUBEMASTERCLI || "cubemastercli",
       apiBaseUrl: process.env.KAKURIZAI_CUBE_API || null,
       template: process.env.KAKURIZAI_CUBE_TEMPLATE || "kakurizai-base",
+      namespace: process.env.KAKURIZAI_CUBE_NAMESPACE || "kakurizai",
       workspacePath: "/workspace"
     },
     isolatedAgent: {

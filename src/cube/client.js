@@ -128,7 +128,7 @@ export class CubeSandboxClient {
     if (!sandboxId) throw new Error(`world ${world.name} is not provisioned in CubeSandbox`);
     const binary = commandExists(this.config.cubecli || "cubecli");
     if (!binary) throw new Error("CubeSandbox is unavailable: cubecli not found");
-    const args = ["exec"];
+    const args = [...cubeCliGlobalArgs(this.config), "exec"];
     if (options.tty) args.push("-i", "-t");
     args.push("-w", this.config.workspacePath || "/workspace", sandboxIdForCubeCli(sandboxId), ...command);
     return runCommand(binary, args, { inherit: options.inherit });
@@ -144,7 +144,14 @@ export class CubeSandboxClient {
       `mkdir -p ${workspace}`,
       `mount -t overlay overlay -o lowerdir=/kakurizai/lower,upperdir=/kakurizai/upper,workdir=/kakurizai/work ${workspace} || fuse-overlayfs -o lowerdir=/kakurizai/lower,upperdir=/kakurizai/upper,workdir=/kakurizai/work ${workspace}`
     ].join("; ");
-    const result = await runCommand(binary, ["exec", sandboxIdForCubeCli(sandboxId), "/bin/sh", "-lc", script], {
+    const result = await runCommand(binary, [
+      ...cubeCliGlobalArgs(this.config),
+      "exec",
+      sandboxIdForCubeCli(sandboxId),
+      "/bin/sh",
+      "-lc",
+      script
+    ], {
       allowFailure: true
     });
     const output = `${result.stdout}\n${result.stderr}`;
@@ -171,6 +178,10 @@ function parseFailure(output) {
 
 function sandboxIdForCubeCli(sandboxId) {
   return sandboxId.length > 12 ? sandboxId.slice(0, 12) : sandboxId;
+}
+
+function cubeCliGlobalArgs(config) {
+  return config.namespace ? ["--namespace", config.namespace] : [];
 }
 
 function shellQuote(value) {

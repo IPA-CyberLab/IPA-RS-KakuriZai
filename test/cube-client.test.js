@@ -44,6 +44,30 @@ test("cube client accepts absolute cubemastercli paths", async () => {
   assert.equal(client.available().binary, mastercli);
 });
 
+test("cube client passes namespace to cubecli exec", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-client-"));
+  const cubecli = path.join(tmp, "cubecli");
+  const argsFile = path.join(tmp, "args.txt");
+  await fs.writeFile(cubecli, `#!/bin/sh\nprintf '%s\\n' "$@" > "${argsFile}"\n`, "utf8");
+  await fs.chmod(cubecli, 0o755);
+  const client = new CubeSandboxClient({
+    cubecli,
+    namespace: "kakurizai",
+    workspacePath: "/workspace"
+  });
+  await client.exec(
+    {
+      name: "cube",
+      sandbox: {
+        id: "4fac1c9a074d49bf8e29ee1d90592b22"
+      }
+    },
+    ["id"]
+  );
+  const args = (await fs.readFile(argsFile, "utf8")).trim().split("\n");
+  assert.deepEqual(args, ["--namespace", "kakurizai", "exec", "-w", "/workspace", "4fac1c9a074d", "id"]);
+});
+
 async function fakeBinary(file) {
   await fs.writeFile(file, "#!/bin/sh\nexit 0\n", "utf8");
   await fs.chmod(file, 0o755);

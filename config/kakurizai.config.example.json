@@ -18,6 +18,7 @@
     "mastercli": "cubemastercli",
     "apiBaseUrl": null,
     "template": "kakurizai-base",
+    "namespace": "kakurizai",
     "workspacePath": "/workspace"
   },
   "isolatedAgent": {

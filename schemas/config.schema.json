@@ -87,6 +87,7 @@
         "mastercli": { "type": "string" },
         "apiBaseUrl": { "type": ["string", "null"] },
         "template": { "type": "string" },
+        "namespace": { "type": "string" },
         "workspacePath": { "type": "string" }
       },
       "additionalProperties": true
