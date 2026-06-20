@@ -12,6 +12,7 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
     "tail -f /dev/null"
   ].join("; ");
   const volumes = [
+    emptyDirVolume("tmp"),
     hostDirVolume("lower", world.sourcePath),
     hostDirVolume("upper", world.paths.upper),
     hostDirVolume("work", world.paths.workdir),
@@ -45,14 +46,27 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
       "kakurizai.source": world.sourcePath,
       "kakurizai.upper": world.paths.upper,
       "kakurizai.workspace": workspace,
-      "cube.master.appsnapshot.template.id": cubeConfig.template || "kakurizai-base"
+      "cube.master.appsnapshot.template.id": cubeConfig.template || "kakurizai-base",
+      "cube.master.appsnapshot.template.version": cubeConfig.templateVersion || "v2"
     },
     labels: {
       "app.kubernetes.io/managed-by": "kakurizai",
       "kakurizai.world": world.id
     },
+    instance_type: cubeConfig.instanceType || "cubebox",
     network_type: cubeConfig.networkType || "tap",
     namespace: cubeConfig.namespace || "kakurizai"
+  };
+}
+
+function emptyDirVolume(name) {
+  return {
+    name,
+    volume_source: {
+      empty_dir: {
+        medium: 0
+      }
+    }
   };
 }
 
