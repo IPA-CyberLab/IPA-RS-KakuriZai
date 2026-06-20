@@ -37,7 +37,8 @@ test("cube request mounts source readonly and upper writable", async () => {
   assert.deepEqual(request.containers[0].resources, { cpu: "2000m", mem: "2000Mi" });
   assert.equal(mounts.find((mount) => mount.name === "lower").readonly, true);
   assert.equal(mounts.find((mount) => mount.name === "upper").readonly, false);
-  assert.match(request.containers[0].args[0], /mount -t overlay/);
+  assert.match(request.containers[0].args[0], /tail -f \/dev\/null/);
+  assert.doesNotMatch(request.containers[0].args[0], /mount -t overlay/);
 });
 
 test("cube request supports CubeSandbox direct mount modes", async () => {

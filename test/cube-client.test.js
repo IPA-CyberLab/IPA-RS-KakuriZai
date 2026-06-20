@@ -78,7 +78,7 @@ test("cube client bootstraps terminal tools after sandbox create", async () => {
     cubecli,
     namespace: "kakurizai",
     bootstrapTools: {
-      packages: ["iproute2", "nano", "ncurses-bin", "ncurses-term", "tmux"],
+      packages: ["fuse-overlayfs", "fuse3", "iproute2", "nano", "ncurses-bin", "ncurses-term", "tmux"],
       commands: ["ip", "nano", "tmux"]
     }
   });
@@ -94,6 +94,8 @@ test("cube client bootstraps terminal tools after sandbox create", async () => {
   assert.equal(args[5], "-lc");
   assert.match(args[6], /apt-get install -y --no-install-recommends/);
   assert.match(args[6], /iproute2/);
+  assert.match(args[6], /fuse-overlayfs/);
+  assert.match(args[6], /fuse3/);
   assert.match(args[6], /nano/);
   assert.match(args[6], /ncurses-bin/);
   assert.match(args[6], /ncurses-term/);

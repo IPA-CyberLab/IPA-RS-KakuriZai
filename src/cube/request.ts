@@ -128,7 +128,6 @@ function setupCommandForMountMode(mountMode, paths) {
     return [
       "set -eu",
       `mkdir -p ${paths.workspaceArg} ${paths.lower} ${paths.upper} ${paths.work} ${paths.whiteouts}`,
-      `mount -t overlay overlay -o lowerdir=${paths.lower},upperdir=${paths.upper},workdir=${paths.work} ${paths.workspaceArg} || fuse-overlayfs -o lowerdir=${paths.lower},upperdir=${paths.upper},workdir=${paths.work} ${paths.workspaceArg}`,
       "tail -f /dev/null"
     ].join("; ");
   }

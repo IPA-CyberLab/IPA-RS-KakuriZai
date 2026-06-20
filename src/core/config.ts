@@ -43,6 +43,8 @@ export function defaultConfig(home = defaultHome()) {
           "ca-certificates",
           "curl",
           "dnsutils",
+          "fuse-overlayfs",
+          "fuse3",
           "iproute2",
           "iputils-ping",
           "less",

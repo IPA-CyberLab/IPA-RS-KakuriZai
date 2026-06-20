@@ -277,7 +277,10 @@ export class CubeSandboxClient {
       "set -eu",
       "mkdir -p /kakurizai/lower /kakurizai/upper /kakurizai/work /kakurizai/whiteouts",
       `mkdir -p ${workspace}`,
-      `mount -t overlay overlay -o lowerdir=/kakurizai/lower,upperdir=/kakurizai/upper,workdir=/kakurizai/work ${workspace} || fuse-overlayfs -o lowerdir=/kakurizai/lower,upperdir=/kakurizai/upper,workdir=/kakurizai/work ${workspace}`
+      `mountpoint -q ${workspace} && exit 0`,
+      `mount -t overlay overlay -o lowerdir=/kakurizai/lower,upperdir=/kakurizai/upper,workdir=/kakurizai/work ${workspace} && exit 0`,
+      "if ! command -v fuse-overlayfs >/dev/null 2>&1; then if command -v apt-get >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y --no-install-recommends fuse-overlayfs fuse3; elif command -v apk >/dev/null 2>&1; then apk add --no-cache fuse-overlayfs fuse3; elif command -v dnf >/dev/null 2>&1; then dnf install -y fuse-overlayfs fuse3; elif command -v yum >/dev/null 2>&1; then yum install -y fuse-overlayfs fuse3; fi; fi",
+      `fuse-overlayfs -o lowerdir=/kakurizai/lower,upperdir=/kakurizai/upper,workdir=/kakurizai/work ${workspace}`
     ].join("; ");
     const result = await runCommand(binary, [
       ...cubeCliGlobalArgs(this.config),
@@ -338,6 +341,8 @@ function normalizeBootstrapConfig(config = {}) {
       "ca-certificates",
       "curl",
       "dnsutils",
+      "fuse-overlayfs",
+      "fuse3",
       "iproute2",
       "iputils-ping",
       "less",
