@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { spawn } from "node:child_process";
 
 export function runCommand(command, args = [], options = {}) {

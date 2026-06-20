@@ -1,3 +1,4 @@
+// @ts-nocheck
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";

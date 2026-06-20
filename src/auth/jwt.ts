@@ -1,3 +1,4 @@
+// @ts-nocheck
 import crypto from "node:crypto";
 
 export function base64urlEncode(value) {

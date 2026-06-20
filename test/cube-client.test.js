@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { CubeSandboxClient } from "../src/cube/client.js";
+import { CubeSandboxClient } from "../dist/src/cube/client.js";
 
 test("cube client prefers cubemastercli in auto mode", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-client-"));

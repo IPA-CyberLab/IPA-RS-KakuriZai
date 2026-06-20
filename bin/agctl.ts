@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-nocheck
 import { main } from "../src/cli.js";
 
 main(process.argv.slice(2)).catch((error) => {

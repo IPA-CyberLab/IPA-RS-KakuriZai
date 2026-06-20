@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { normalizeAuthConfig } from "../src/core/config.js";
-import { createAuthProvider } from "../src/auth/providers.js";
+import { normalizeAuthConfig } from "../dist/src/core/config.js";
+import { createAuthProvider } from "../dist/src/auth/providers.js";
 
 test("self auth issues and verifies a bearer token", async () => {
   const provider = createAuthProvider({

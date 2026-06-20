@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { getBackend } from "../backends/index.js";
 import { WorldStore } from "./store.js";
 import { openTarget } from "./openers.js";
@@ -6,12 +7,22 @@ export async function createWorld(config, input) {
   const store = new WorldStore(config);
   const backendName = input.backend || config.defaultBackend;
   const backend = getBackend(config, backendName);
+  const mountMode = input.mountMode || config.cube?.mountMode || "agctl-overlay";
   const world = await store.create({
     name: input.name,
     sourcePath: input.sourcePath,
     backend: backendName,
     status: "creating",
-    labels: input.labels
+    labels: {
+      ...(input.labels || {}),
+      "kakurizai.mountMode": mountMode
+    },
+    backendConfig: {
+      mountMode,
+      template: input.template || config.cube?.template || null,
+      cpu: input.cpu || config.cube?.cpu || null,
+      memory: input.memory || config.cube?.memory || null
+    }
   });
   try {
     return await backend.afterCreate(world, store);

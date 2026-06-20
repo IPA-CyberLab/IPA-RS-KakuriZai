@@ -1,3 +1,4 @@
+// @ts-nocheck
 import fs from "node:fs/promises";
 import path from "node:path";
 import { commandExists } from "../core/fs.js";
@@ -66,7 +67,8 @@ export class CubeSandboxClient {
       };
     }
     const sandboxId = parseMasterSandboxId(output) || world.id;
-    const overlay = await this.setupOverlay(world, sandboxId);
+    const mountMode = request.annotations?.["kakurizai.mountMode"] || world.backendConfig?.mountMode || "agctl-overlay";
+    const overlay = mountMode === "agctl-overlay" ? await this.setupOverlay(world, sandboxId) : null;
     return {
       provisioned: true,
       mode: "master",
@@ -108,6 +110,30 @@ export class CubeSandboxClient {
 
   async createSandboxViaApi(_world, _request) {
     throw new Error("CubeSandbox API create is not wired yet; use cube.mode=auto, cube.mode=master, or cube.mode=cli");
+  }
+
+  async inspect() {
+    const status = this.available();
+    const cubecli = commandExists(this.config.cubecli || "cubecli");
+    const mastercli = commandExists(this.config.mastercli || "cubemastercli");
+    const [cubeVersion, masterTemplates, masterSandboxes] = await Promise.all([
+      cubecli ? commandSummary(cubecli, ["--version"]) : Promise.resolve({ ok: false, reason: "cubecli not found" }),
+      mastercli ? commandSummary(mastercli, ["tpl", "list"], parseTemplates) : Promise.resolve({ ok: false, reason: "cubemastercli not found" }),
+      mastercli ? commandSummary(mastercli, ["list"], parseSandboxes) : Promise.resolve({ ok: false, reason: "cubemastercli not found" })
+    ]);
+    return {
+      available: status.available,
+      mode: status.mode || this.config.mode || "auto",
+      reason: status.reason || null,
+      namespace: this.config.namespace || "default",
+      template: this.config.template || null,
+      cubecli: cubecli ? { path: cubecli, version: cubeVersion.stdout?.trim() || null } : null,
+      mastercli: mastercli ? { path: mastercli } : null,
+      templates: masterTemplates.ok ? masterTemplates.value : [],
+      templatesError: masterTemplates.ok ? null : masterTemplates.reason,
+      sandboxes: masterSandboxes.ok ? masterSandboxes.value : [],
+      sandboxesError: masterSandboxes.ok ? null : masterSandboxes.reason
+    };
   }
 
   async destroySandbox(world) {
@@ -174,6 +200,44 @@ function parseMasterSandboxId(output) {
 
 function parseFailure(output) {
   return /message:([^,\n]+)/.exec(output)?.[1]?.trim() || /run fail:\s*(.+)/.exec(output)?.[1]?.trim() || null;
+}
+
+async function commandSummary(command, args, parser = null) {
+  const result = await runCommand(command, args, { allowFailure: true });
+  const stdout = result.stdout || "";
+  const stderr = result.stderr || "";
+  if (result.code !== 0) {
+    return { ok: false, reason: parseFailure(`${stdout}\n${stderr}`) || `${command} ${args.join(" ")} exited with ${result.code}`, stdout, stderr };
+  }
+  return { ok: true, stdout, stderr, value: parser ? parser(stdout) : stdout };
+}
+
+function parseTemplates(output) {
+  const rows = tableRows(output, "TEMPLATE_ID");
+  return rows.map((columns) => ({
+    id: columns[0],
+    status: columns[1],
+    createdAt: columns[2],
+    image: columns.slice(3).join(" ")
+  }));
+}
+
+function parseSandboxes(output) {
+  const rows = tableRows(output, "sandbox_id");
+  return rows.map((columns) => ({
+    id: columns[0],
+    status: columns[1],
+    hostId: columns[2],
+    createdAt: columns[3],
+    pausedAt: columns[4] || "-"
+  }));
+}
+
+function tableRows(output, headerPrefix) {
+  const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const headerIndex = lines.findIndex((line) => line.startsWith(headerPrefix));
+  if (headerIndex < 0) return [];
+  return lines.slice(headerIndex + 1).filter((line) => !/^[A-Z_]+\s+/.test(line)).map((line) => line.split(/\s{2,}|\t+/).filter(Boolean));
 }
 
 function sandboxIdForCubeCli(sandboxId) {

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import crypto from "node:crypto";
 import { normalizeAuthConfig } from "../core/config.js";
 import { decodeJwt, signSelfToken, verifyClaims, verifySelfToken } from "./jwt.js";
@@ -13,6 +14,10 @@ export function createAuthProvider(rawConfig) {
 export class NoAuthProvider {
   type = "none";
 
+  publicConfig() {
+    return { provider: "none", label: "Disabled", requiresToken: false };
+  }
+
   async verifyRequest() {
     return { subject: "anonymous", provider: "none", claims: {} };
   }
@@ -22,6 +27,16 @@ export class SelfAuthProvider {
   constructor(config) {
     this.type = "self";
     this.config = config;
+  }
+
+  publicConfig() {
+    return {
+      provider: "self",
+      label: "KakuriZai Self Auth",
+      issuer: this.config.issuer,
+      audience: this.config.audience,
+      requiresToken: true
+    };
   }
 
   issueToken(options = {}) {
@@ -49,6 +64,16 @@ export class OidcAuthProvider {
     this.config = config;
     this.jwks = null;
     this.jwksLoadedAt = 0;
+  }
+
+  publicConfig() {
+    return {
+      provider: this.config.providerName || "oidc",
+      label: this.config.label || this.config.providerName || "OIDC",
+      issuer: this.config.issuer,
+      audience: this.config.audience,
+      requiresToken: true
+    };
   }
 
   async verifyRequest(request) {

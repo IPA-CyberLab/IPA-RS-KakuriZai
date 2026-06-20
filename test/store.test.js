@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { loadConfig } from "../src/core/config.js";
-import { WorldStore } from "../src/core/store.js";
+import { loadConfig } from "../dist/src/core/config.js";
+import { WorldStore } from "../dist/src/core/store.js";
 
 test("apply copies upper changes only when requested", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-store-"));

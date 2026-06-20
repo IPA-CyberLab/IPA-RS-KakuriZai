@@ -1,9 +1,11 @@
+// @ts-nocheck
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAuthProvider } from "./auth/providers.js";
 import { applyWorld, changedPaths, createWorld, execWorld, listWorlds, openWorld, removeWorld } from "./core/worlds.js";
+import { CubeSandboxClient } from "./cube/client.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATIC_ROOT = path.join(__dirname, "studio");
@@ -24,6 +26,9 @@ export async function startStudio(config) {
 
 async function route(config, auth, request, response) {
   const url = new URL(request.url, `http://${request.headers.host || "127.0.0.1"}`);
+  if (request.method === "GET" && url.pathname === "/api/auth/config") {
+    return sendJson(response, auth.publicConfig());
+  }
   if (url.pathname.startsWith("/api/")) {
     request.query = url.searchParams;
     request.user = await auth.verifyRequest(request);
@@ -35,6 +40,12 @@ async function route(config, auth, request, response) {
 async function api(config, request, response, url) {
   if (request.method === "GET" && url.pathname === "/api/session") {
     return sendJson(response, { user: request.user, auth: request.user.provider });
+  }
+  if (request.method === "GET" && url.pathname === "/api/host/browse") {
+    return sendJson(response, await browseHost(url.searchParams.get("path") || process.env.HOME || "/"));
+  }
+  if (request.method === "GET" && url.pathname === "/api/cube/inspect") {
+    return sendJson(response, await new CubeSandboxClient(config.cube).inspect());
   }
   if (request.method === "GET" && url.pathname === "/api/worlds") {
     return sendJson(response, await listWorlds(config));
@@ -66,6 +77,24 @@ async function api(config, request, response, url) {
     return sendJson(response, result);
   }
   return sendJson(response, { error: "not found" }, 404);
+}
+
+async function browseHost(target) {
+  const resolved = path.resolve(target);
+  const entries = await fs.readdir(resolved, { withFileTypes: true });
+  const parent = path.dirname(resolved);
+  return {
+    path: resolved,
+    parent: parent === resolved ? null : parent,
+    entries: entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => ({
+        name: entry.name,
+        path: path.join(resolved, entry.name),
+        type: "directory"
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+  };
 }
 
 async function staticFile(_request, response, url) {

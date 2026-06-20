@@ -1,3 +1,4 @@
+// @ts-nocheck
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import fssync from "node:fs";

@@ -3,69 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>KakuriZai Agent Studio</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <title>KakuriZai Console</title>
   </head>
   <body>
-    <div class="shell">
-      <aside class="sidebar">
-        <div class="brand">
-          <span class="brand-mark">K</span>
-          <div>
-            <strong>KakuriZai</strong>
-            <span>Agent Studio</span>
-          </div>
-        </div>
-        <form id="create-form" class="create-form">
-          <label>
-            <span>Source</span>
-            <input name="sourcePath" placeholder="/path/to/source" autocomplete="off" required />
-          </label>
-          <label>
-            <span>Name</span>
-            <input name="name" placeholder="world-name" autocomplete="off" required />
-          </label>
-          <label>
-            <span>Backend</span>
-            <select name="backend">
-              <option value="cube-sandbox-overlay">cube-sandbox-overlay</option>
-              <option value="apfs-clone">apfs-clone</option>
-              <option value="windows-block-clone">windows-block-clone</option>
-              <option value="linux-native">linux-native</option>
-              <option value="path-preserving-overlay">path-preserving-overlay</option>
-              <option value="windows-minifilter-overlay">windows-minifilter-overlay</option>
-            </select>
-          </label>
-          <button type="submit" class="primary">Create World</button>
-        </form>
-        <div class="auth-box" id="auth-box" hidden>
-          <label>
-            <span>Token</span>
-            <input id="token-input" placeholder="Bearer token" />
-          </label>
-          <button id="token-save" type="button">Apply</button>
-        </div>
-      </aside>
-      <main class="main">
-        <header class="toolbar">
-          <div>
-            <h1>Worlds</h1>
-            <p id="status-line">Loading</p>
-          </div>
-          <button id="refresh" type="button">Refresh</button>
-        </header>
-        <section class="content">
-          <div class="world-list" id="world-list"></div>
-          <section class="details" id="details">
-            <div class="empty">No world selected</div>
-          </section>
-        </section>
-      </main>
-    </div>
-    <div class="busy" id="busy" hidden>
-      <div class="spinner"></div>
-      <strong id="busy-text">Working</strong>
-    </div>
-    <script type="module" src="/app.js"></script>
+    <div id="root"></div>
+    <script type="module" src="/main.tsx"></script>
   </body>
 </html>

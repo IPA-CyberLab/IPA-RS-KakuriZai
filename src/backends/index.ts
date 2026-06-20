@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { CubeSandboxOverlayBackend } from "./cubeSandboxOverlay.js";
 import { IsolatedAgentBackend } from "./isolatedAgent.js";
 

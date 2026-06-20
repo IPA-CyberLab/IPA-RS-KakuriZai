@@ -74,7 +74,7 @@ test("help exposes CLI equivalents for Studio buttons", async () => {
 });
 
 async function runCli(home, args) {
-  return execFileAsync(process.execPath, ["./bin/agctl.js", ...args], {
+  return execFileAsync(process.execPath, ["./dist/bin/agctl.js", ...args], {
     cwd: process.cwd(),
     env: { ...process.env, KAKURIZAI_CONFIG: "", KAKURIZAI_HOME: home, KAKURIZAI_CUBE_MODE: "disabled" },
     maxBuffer: 1024 * 1024

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { commandExists } from "../core/fs.js";
 import { runCommand } from "../core/process.js";
 

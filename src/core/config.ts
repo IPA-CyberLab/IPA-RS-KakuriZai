@@ -1,3 +1,4 @@
+// @ts-nocheck
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -105,6 +106,8 @@ export function normalizeAuthConfig(auth) {
     const issuer = auth.issuer || `https://${domain.replace(/^https?:\/\//, "").replace(/\/$/, "")}/`;
     return {
       provider: "oidc",
+      providerName: "auth0",
+      label: "Auth0",
       issuer,
       audience: required(auth.audience, "auth.audience"),
       jwksUri: auth.jwksUri || `${issuer}.well-known/jwks.json`
@@ -116,6 +119,8 @@ export function normalizeAuthConfig(auth) {
     const issuer = auth.issuer || `https://cognito-idp.${region}.amazonaws.com/${userPoolId}`;
     return {
       provider: "oidc",
+      providerName: "cognito",
+      label: "AWS Cognito",
       issuer,
       audience: auth.clientId || auth.audience,
       jwksUri: auth.jwksUri || `${issuer}/.well-known/jwks.json`

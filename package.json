@@ -4,15 +4,29 @@
   "description": "World lifecycle control plane and Studio UI for isolated source overlays backed by CubeSandbox.",
   "type": "module",
   "bin": {
-    "agctl": "./bin/agctl.js"
+    "agctl": "./dist/bin/agctl.js"
   },
   "scripts": {
-    "agctl": "node ./bin/agctl.js",
-    "start": "node ./bin/agctl.js studio",
-    "test": "node --test"
+    "agctl": "npm run build --silent && node ./dist/bin/agctl.js",
+    "build": "tsc -p tsconfig.json && vite build && chmod +x dist/bin/agctl.js",
+    "start": "npm run build --silent && node ./dist/bin/agctl.js studio",
+    "test": "npm run build --silent && node --test"
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.1.2",
+    "lucide-react": "^0.562.0",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "vite": "^7.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.3",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^5.9.3"
   },
   "license": "MIT"
 }

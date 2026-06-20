@@ -3,9 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { loadConfig } from "../src/core/config.js";
-import { WorldStore } from "../src/core/store.js";
-import { buildCubeSandboxRequest } from "../src/cube/request.js";
+import { loadConfig } from "../dist/src/core/config.js";
+import { WorldStore } from "../dist/src/core/store.js";
+import { buildCubeSandboxRequest } from "../dist/src/cube/request.js";
 
 test("cube request mounts source readonly and upper writable", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-"));
@@ -34,4 +34,30 @@ test("cube request mounts source readonly and upper writable", async () => {
   assert.equal(mounts.find((mount) => mount.name === "lower").readonly, true);
   assert.equal(mounts.find((mount) => mount.name === "upper").readonly, false);
   assert.match(request.containers[0].args[0], /mount -t overlay/);
+});
+
+test("cube request supports CubeSandbox direct mount modes", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-"));
+  const source = path.join(tmp, "source");
+  await fs.mkdir(source);
+  const config = await loadConfig({ home: path.join(tmp, "home"), createSecrets: false });
+  const store = new WorldStore(config);
+  const world = await store.create({
+    name: "cube-direct",
+    sourcePath: source,
+    backend: "cube-sandbox-overlay",
+    backendConfig: { mountMode: "cubesandbox-readonly" }
+  });
+
+  const readonlyRequest = buildCubeSandboxRequest(world, { template: "base", workspacePath: "/workspace" });
+  assert.equal(readonlyRequest.volumes.length, 1);
+  assert.equal(readonlyRequest.volumes[0].name, "workspace");
+  assert.equal(readonlyRequest.containers[0].volume_mounts[0].container_path, "/workspace");
+  assert.equal(readonlyRequest.containers[0].volume_mounts[0].readonly, true);
+  assert.doesNotMatch(readonlyRequest.containers[0].args[0], /mount -t overlay/);
+
+  world.backendConfig.mountMode = "unsafe-rw";
+  const unsafeRequest = buildCubeSandboxRequest(world, { template: "base", workspacePath: "/workspace" });
+  assert.equal(unsafeRequest.containers[0].volume_mounts[0].readonly, false);
+  assert.equal(unsafeRequest.annotations["kakurizai.mountMode"], "unsafe-rw");
 });

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { commandExists } from "./fs.js";
 import { spawnDetached } from "./process.js";
 
