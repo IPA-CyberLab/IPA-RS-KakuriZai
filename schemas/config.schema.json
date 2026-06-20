@@ -82,8 +82,9 @@
     "cube": {
       "type": "object",
       "properties": {
-        "mode": { "enum": ["auto", "cli", "api", "disabled"] },
+        "mode": { "enum": ["auto", "master", "cli", "api", "disabled"] },
         "cubecli": { "type": "string" },
+        "mastercli": { "type": "string" },
         "apiBaseUrl": { "type": ["string", "null"] },
         "template": { "type": "string" },
         "workspacePath": { "type": "string" }

@@ -26,10 +26,11 @@ export class CubeSandboxOverlayBackend {
       baseId: this.config.cube.template || "kakurizai-base",
       runtime: "CubeSandbox",
       mode: provision.mode,
-      status: provision.provisioned ? "running" : "planned",
-      reason: provision.reason || null
+      status: provision.provisioned && provision.overlay?.mounted === false ? "running-overlay-pending" : provision.provisioned ? "running" : "planned",
+      reason: provision.reason || provision.overlay?.reason || null,
+      overlay: provision.overlay || null
     };
-    world.status = provision.provisioned ? "ready" : "pending-cube";
+    world.status = provision.provisioned && provision.overlay?.mounted === false ? "pending-overlay" : provision.provisioned ? "ready" : "pending-cube";
     return store.save(world);
   }
 

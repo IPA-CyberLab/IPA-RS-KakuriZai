@@ -30,6 +30,7 @@ export function defaultConfig(home = defaultHome()) {
     cube: {
       mode: process.env.KAKURIZAI_CUBE_MODE || "auto",
       cubecli: process.env.KAKURIZAI_CUBECLI || "cubecli",
+      mastercli: process.env.KAKURIZAI_CUBEMASTERCLI || "cubemastercli",
       apiBaseUrl: process.env.KAKURIZAI_CUBE_API || null,
       template: process.env.KAKURIZAI_CUBE_TEMPLATE || "kakurizai-base",
       workspacePath: "/workspace"

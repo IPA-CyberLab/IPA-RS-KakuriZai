@@ -4,30 +4,22 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
   const upper = "/kakurizai/upper";
   const work = "/kakurizai/work";
   const whiteouts = "/kakurizai/whiteouts";
+  const workspaceArg = shellQuote(workspace);
   const setup = [
     "set -eu",
-    `mkdir -p ${workspace} ${lower} ${upper} ${work} ${whiteouts}`,
-    `mount -t overlay overlay -o lowerdir=${lower},upperdir=${upper},workdir=${work} ${workspace} || fuse-overlayfs -o lowerdir=${lower},upperdir=${upper},workdir=${work} ${workspace}`,
+    `mkdir -p ${workspaceArg} ${lower} ${upper} ${work} ${whiteouts}`,
+    `mount -t overlay overlay -o lowerdir=${lower},upperdir=${upper},workdir=${work} ${workspaceArg} || fuse-overlayfs -o lowerdir=${lower},upperdir=${upper},workdir=${work} ${workspaceArg}`,
     "tail -f /dev/null"
   ].join("; ");
-  const volumeSources = [
-    { name: "lower", host_path: world.sourcePath },
-    { name: "upper", host_path: world.paths.upper },
-    { name: "work", host_path: world.paths.workdir },
-    { name: "whiteouts", host_path: world.paths.whiteouts }
+  const volumes = [
+    hostDirVolume("lower", world.sourcePath),
+    hostDirVolume("upper", world.paths.upper),
+    hostDirVolume("work", world.paths.workdir),
+    hostDirVolume("whiteouts", world.paths.whiteouts)
   ];
   return {
     requestID: `kakurizai-${world.id}`,
-    volumes: [
-      {
-        name: "kakurizai-host",
-        volume_source: {
-          host_dir_volumes: {
-            volume_sources: volumeSources
-          }
-        }
-      }
-    ],
+    volumes,
     containers: [
       {
         name: "workspace",
@@ -62,4 +54,24 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
     network_type: cubeConfig.networkType || "tap",
     namespace: cubeConfig.namespace || "kakurizai"
   };
+}
+
+function hostDirVolume(name, hostPath) {
+  return {
+    name,
+    volume_source: {
+      host_dir_volumes: {
+        volume_sources: [
+          {
+            name,
+            host_path: hostPath
+          }
+        ]
+      }
+    }
+  };
+}
+
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`;
 }

@@ -5,3 +5,4 @@ coverage/
 .kakurizai/
 tmp/
 *.log
+.key

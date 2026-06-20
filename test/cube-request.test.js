@@ -21,6 +21,12 @@ test("cube request mounts source readonly and upper writable", async () => {
   const request = buildCubeSandboxRequest(world, { template: "base", workspacePath: "/workspace" });
   assert.equal(request.annotations["kakurizai.backend"], "cube-sandbox-overlay");
   assert.equal(request.annotations["cube.master.appsnapshot.template.id"], "base");
+  const volumes = new Map(request.volumes.map((volume) => [volume.name, volume]));
+  assert.equal(volumes.size, 4);
+  assert.equal(volumes.get("lower").volume_source.host_dir_volumes.volume_sources[0].host_path, world.sourcePath);
+  assert.equal(volumes.get("upper").volume_source.host_dir_volumes.volume_sources[0].host_path, world.paths.upper);
+  assert.equal(volumes.get("work").volume_source.host_dir_volumes.volume_sources[0].host_path, world.paths.workdir);
+  assert.equal(volumes.get("whiteouts").volume_source.host_dir_volumes.volume_sources[0].host_path, world.paths.whiteouts);
   const mounts = request.containers[0].volume_mounts;
   assert.equal(mounts.find((mount) => mount.name === "lower").readonly, true);
   assert.equal(mounts.find((mount) => mount.name === "upper").readonly, false);

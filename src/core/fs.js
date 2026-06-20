@@ -131,13 +131,35 @@ export async function directorySize(root) {
 }
 
 export function commandExists(command) {
+  if (!command) return null;
+  if (command.includes("/") || command.includes("\\")) {
+    return commandExistsAtPath(command);
+  }
   const pathEnv = process.env.PATH || "";
   const extensions = process.platform === "win32" ? ["", ".exe", ".cmd", ".bat"] : [""];
   for (const part of pathEnv.split(path.delimiter)) {
     for (const ext of extensions) {
       const candidate = path.join(part, `${command}${ext}`);
-      if (fssync.existsSync(candidate)) return candidate;
+      if (isExecutable(candidate)) return candidate;
     }
   }
   return null;
+}
+
+function commandExistsAtPath(command) {
+  const extensions = process.platform === "win32" ? ["", ".exe", ".cmd", ".bat"] : [""];
+  for (const ext of extensions) {
+    const candidate = `${command}${ext}`;
+    if (isExecutable(candidate)) return candidate;
+  }
+  return null;
+}
+
+function isExecutable(candidate) {
+  try {
+    fssync.accessSync(candidate, process.platform === "win32" ? fssync.constants.F_OK : fssync.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }

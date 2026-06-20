@@ -15,6 +15,7 @@
   "cube": {
     "mode": "auto",
     "cubecli": "cubecli",
+    "mastercli": "cubemastercli",
     "apiBaseUrl": null,
     "template": "kakurizai-base",
     "workspacePath": "/workspace"
