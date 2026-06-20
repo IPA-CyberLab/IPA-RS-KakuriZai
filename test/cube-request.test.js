@@ -136,8 +136,28 @@ test("world disk size update is saved for later CubeSandbox requests", async () 
   assert.equal(result.appliedToRunningSandbox, false);
   assert.match(result.reason, /saved for next sandbox create or recreate/);
   assert.equal(result.world.backendConfig.writableLayerSize, "3G");
+  assert.equal(result.world.backendConfig.writableLayerMinimumSize, "1G");
   assert.equal(result.world.backendConfig.cubeRequest.annotations["cube.master.rootfs.writable_layer_size"], "3G");
   assert.equal(result.world.backendConfig.cubeRequest.containers[0].annotations["cube.master.rootfs.writable_layer_size"], "3G");
+});
+
+test("world disk size cannot shrink below current or original size", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-"));
+  const source = path.join(tmp, "source");
+  await fs.mkdir(source);
+  const config = await loadConfig({ home: path.join(tmp, "home"), createSecrets: false });
+  const store = new WorldStore(config);
+  const world = await store.create({
+    name: "cube-no-shrink",
+    sourcePath: source,
+    backend: "cube-sandbox-overlay",
+    backendConfig: { writableLayerSize: "2G", writableLayerMinimumSize: "2G" }
+  });
+
+  await assert.rejects(
+    () => updateWorldConfig(config, world.id, { writableLayerSize: "1G" }),
+    /cannot be smaller/
+  );
 });
 
 test("cube request carries network, DNS, and Kubernetes lab settings", async () => {

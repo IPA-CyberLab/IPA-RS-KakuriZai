@@ -52,6 +52,7 @@ type World = {
     reason?: string;
     mountMode?: string;
     bootstrap?: {
+      pending?: boolean;
       applied?: boolean;
       skipped?: boolean;
       reason?: string | null;
@@ -63,6 +64,7 @@ type World = {
     cpu?: string | null;
     memory?: string | null;
     writableLayerSize?: string | null;
+    writableLayerMinimumSize?: string | null;
     networkType?: string | null;
     network?: NetworkConfig | null;
     kubernetes?: KubernetesConfig | null;
@@ -447,7 +449,7 @@ function App() {
     }
   }
 
-  async function saveDiskSize(world: World, writableLayerSize: string) {
+  async function saveDiskSize(world: World, writableLayerSize: string, recreate = false) {
     const nextSize = writableLayerSize.trim();
     if (!nextSize) {
       setStatus("Enter writable layer size.");
@@ -457,10 +459,10 @@ function App() {
     try {
       const result = await api<{ world: World; appliedToRunningSandbox: boolean; reason: string }>(
         `/api/worlds/${encodeURIComponent(world.id)}/config`,
-        { method: "PATCH", token, body: { writableLayerSize: nextSize } }
+        { method: "PATCH", token, body: { writableLayerSize: nextSize, recreate } }
       );
       setWorlds((current) => current.map((candidate) => candidate.id === result.world.id ? result.world : candidate));
-      setStatus(result.appliedToRunningSandbox ? `Disk updated for ${result.world.name}` : `Disk saved for next create/recreate: ${result.world.name}`);
+      setStatus(result.appliedToRunningSandbox ? `Disk applied by recreating ${result.world.name}` : `Disk saved for next recreate: ${result.world.name}`);
       await refresh();
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
@@ -792,6 +794,7 @@ function App() {
                 <DiskEditor
                   world={selected.world}
                   runtimeSize={selected.runtime?.writableLayerSize || selectedTemplate?.writableLayerSize || ""}
+                  minimumSize={diskMinimumForSelection(selected, selectedTemplate)}
                   busy={busy}
                   onSave={saveDiskSize}
                 />
@@ -1057,16 +1060,23 @@ function shellPageUrl(worldId: string, token: string) {
 function DiskEditor({
   world,
   runtimeSize,
+  minimumSize,
   busy,
   onSave
 }: {
   world?: World;
   runtimeSize: string;
+  minimumSize: string;
   busy: boolean;
-  onSave: (world: World, writableLayerSize: string) => Promise<void>;
+  onSave: (world: World, writableLayerSize: string, recreate?: boolean) => Promise<void>;
 }) {
   const configuredSize = world?.backendConfig?.writableLayerSize || runtimeSize || "1G";
   const [value, setValue] = React.useState(configuredSize);
+  const minimumBytes = parseSizeToBytes(minimumSize);
+  const valueBytes = parseSizeToBytes(value);
+  const shrinkError = minimumBytes != null && valueBytes != null && valueBytes < minimumBytes
+    ? `Minimum is ${minimumSize}`
+    : "";
 
   React.useEffect(() => {
     setValue(configuredSize);
@@ -1081,17 +1091,27 @@ function DiskEditor({
       className="diskEditor"
       onSubmit={(event) => {
         event.preventDefault();
-        void onSave(world, value);
+        if (!shrinkError) void onSave(world, value, false);
       }}
     >
       <div>
         <label>Writable layer</label>
         <div className="inputRow">
           <input value={value} onChange={(event) => setValue(event.target.value)} placeholder="1G" />
-          <button className="primary" disabled={busy || !value.trim()} type="submit">Save</button>
+          <button className="primary" disabled={busy || !value.trim() || Boolean(shrinkError)} type="submit">Save</button>
+          <button
+            className="primary"
+            disabled={busy || !value.trim() || Boolean(shrinkError)}
+            onClick={() => void onSave(world, value, true)}
+            type="button"
+          >
+            Apply recreate
+          </button>
         </div>
+        {shrinkError ? <div className="fieldError">{shrinkError}</div> : null}
       </div>
       <Metric label="Runtime size" value={runtimeSize || "-"} />
+      <Metric label="Minimum size" value={minimumSize || "-"} />
     </form>
   );
 }
@@ -1399,6 +1419,15 @@ function findNodeForSandbox(cube: CubeInspect | null, selected: InventoryRow | n
   return (cube.nodes || []).find((node) => node.nodeId === selected.host || node.ip === selected.host || node.nodeId === selected.runtime?.hostId || node.ip === selected.runtime?.hostIp) || null;
 }
 
+function diskMinimumForSelection(selected: InventoryRow, template: CubeTemplate | null) {
+  return maxSizeLabel([
+    selected.world?.backendConfig?.writableLayerMinimumSize,
+    selected.world?.backendConfig?.writableLayerSize,
+    selected.runtime?.writableLayerSize,
+    template?.writableLayerSize
+  ]) || "1G";
+}
+
 function mountsFromWorld(world?: World): CubeVolumeMount[] {
   const mounts = world?.backendConfig?.mounts;
   if (!mounts) return [];
@@ -1474,8 +1503,9 @@ function formatBool(value?: boolean | null) {
   return value ? "allowed" : "blocked";
 }
 
-function formatBootstrapStatus(value?: { applied?: boolean; skipped?: boolean; reason?: string | null } | null) {
+function formatBootstrapStatus(value?: { pending?: boolean; applied?: boolean; skipped?: boolean; reason?: string | null } | null) {
   if (!value) return "-";
+  if (value.pending) return "installing";
   if (value.applied) return "installed";
   if (value.skipped) return value.reason || "skipped";
   return value.reason || "failed";
@@ -1485,6 +1515,23 @@ function formatList(value?: Array<string | number> | string | null) {
   if (!value) return "";
   if (Array.isArray(value)) return value.join(",");
   return String(value);
+}
+
+function maxSizeLabel(values: Array<string | null | undefined>) {
+  let best = "";
+  for (const value of values) {
+    const bytes = parseSizeToBytes(value || "");
+    if (bytes == null) continue;
+    if (!best || bytes > (parseSizeToBytes(best) || 0)) best = String(value);
+  }
+  return best;
+}
+
+function parseSizeToBytes(value: string) {
+  const match = /^(\d+(?:\.\d+)?)([KMGTP])i?B?$/i.exec(String(value || "").trim());
+  if (!match) return null;
+  const power = { K: 1, M: 2, G: 3, T: 4, P: 5 }[match[2].toUpperCase() as "K" | "M" | "G" | "T" | "P"];
+  return Number(match[1]) * 1024 ** power;
 }
 
 function parseCsv(value: string) {

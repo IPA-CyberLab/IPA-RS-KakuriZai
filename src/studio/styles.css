@@ -436,6 +436,12 @@ label {
   overflow-wrap: anywhere;
 }
 
+.fieldError {
+  margin-top: 6px;
+  color: #f0b4ab;
+  font-size: 12px;
+}
+
 .sandboxPanel {
   min-width: 0;
   min-height: 0;

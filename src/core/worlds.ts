@@ -18,6 +18,7 @@ export async function createWorld(config, input) {
     type: input.network?.type || input.networkType || config.cube?.networkType || "tap"
   });
   const kubernetes = normalizeKubernetesConfig(input.kubernetes || input.k8s || {});
+  const writableLayerSize = input.writableLayerSize || config.cube?.writableLayerSize || null;
   const world = await store.create({
     name: input.name,
     sourcePath: input.sourcePath,
@@ -36,7 +37,8 @@ export async function createWorld(config, input) {
       template: input.template || config.cube?.template || null,
       cpu: input.cpu || config.cube?.cpu || null,
       memory: input.memory || config.cube?.memory || null,
-      writableLayerSize: input.writableLayerSize || config.cube?.writableLayerSize || null,
+      writableLayerSize,
+      writableLayerMinimumSize: writableLayerSize,
       networkType: network.type,
       network,
       kubernetes
@@ -76,6 +78,12 @@ export async function updateWorldConfig(config, ref, input = {}) {
   }
   if (input.writableLayerSize !== undefined) {
     const writableLayerSize = normalizeSize(input.writableLayerSize, "writableLayerSize");
+    assertWritableLayerCanGrow(world, writableLayerSize);
+    world.backendConfig.writableLayerMinimumSize = maxSizeLabel([
+      world.backendConfig.writableLayerMinimumSize,
+      world.backendConfig.writableLayerSize,
+      cubeRequestWritableLayerSize(world)
+    ]) || writableLayerSize;
     world.backendConfig.writableLayerSize = writableLayerSize;
     updateCubeRequestWritableLayer(world, writableLayerSize);
   }
@@ -114,11 +122,43 @@ export async function updateWorldConfig(config, ref, input = {}) {
     world.backendConfig.mountMode = String(input.mountMode || "none").trim() || "none";
   }
   await store.save(world);
+  if (input.recreate === true) {
+    const recreated = await recreateSavedWorld(config, store, world);
+    return {
+      world: recreated,
+      appliedToRunningSandbox: true,
+      recreated: true,
+      reason: "CubeSandbox does not expose a safe live writable-layer resize; the sandbox was recreated with the requested disk size."
+    };
+  }
   return {
     world,
     appliedToRunningSandbox: false,
     reason: "CubeSandbox open-source CLI does not support live network or disk mutation; saved for next sandbox create or recreate."
   };
+}
+
+async function recreateSavedWorld(config, store, world) {
+  const backend = getBackend(config, world.backend);
+  if (world.sandbox?.id) {
+    const removal = await backend.remove(world);
+    if (removal?.skipped) {
+      throw new Error(`cannot recreate sandbox: ${removal.reason || "remove skipped"}`);
+    }
+    if (typeof removal?.code === "number" && removal.code !== 0) {
+      throw new Error(`cannot recreate sandbox: ${removal.stderr || removal.stdout || `remove exited with ${removal.code}`}`);
+    }
+  }
+  world.status = "creating";
+  world.sandbox = {
+    ...(world.sandbox || {}),
+    id: null,
+    containerId: null,
+    status: "recreating",
+    reason: "recreating sandbox to apply disk/configuration changes"
+  };
+  await store.save(world);
+  return backend.afterCreate(world, store);
 }
 
 export async function upsertWorldFromManifest(config, manifest) {
@@ -176,6 +216,49 @@ function normalizeSize(value, name) {
     throw new Error(`${name} must look like 1G, 2048M, or 10GiB`);
   }
   return normalized;
+}
+
+function assertWritableLayerCanGrow(world, nextSize) {
+  const minimumSize = maxSizeLabel([
+    world.backendConfig?.writableLayerMinimumSize,
+    world.backendConfig?.writableLayerSize,
+    cubeRequestWritableLayerSize(world)
+  ]);
+  if (!minimumSize) return;
+  const nextBytes = sizeToBytes(nextSize);
+  const minimumBytes = sizeToBytes(minimumSize);
+  if (nextBytes < minimumBytes) {
+    throw statusError(`writableLayerSize cannot be smaller than the current/original size ${minimumSize}`, 400);
+  }
+}
+
+function statusError(message, statusCode) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+function cubeRequestWritableLayerSize(world) {
+  return world.backendConfig?.cubeRequest?.annotations?.["cube.master.rootfs.writable_layer_size"]
+    || world.backendConfig?.cubeRequest?.containers?.[0]?.annotations?.["cube.master.rootfs.writable_layer_size"]
+    || null;
+}
+
+function maxSizeLabel(values) {
+  let best = null;
+  for (const value of values || []) {
+    if (!value) continue;
+    const size = normalizeSize(value, "size");
+    if (!best || sizeToBytes(size) > sizeToBytes(best)) best = size;
+  }
+  return best;
+}
+
+function sizeToBytes(value) {
+  const match = /^(\d+(?:\.\d+)?)([KMGTP])i?B?$/i.exec(String(value || "").trim());
+  if (!match) throw new Error(`invalid size: ${value}`);
+  const power = { K: 1, M: 2, G: 3, T: 4, P: 5 }[match[2].toUpperCase()];
+  return Number(match[1]) * 1024 ** power;
 }
 
 function cleanRequired(value, name) {

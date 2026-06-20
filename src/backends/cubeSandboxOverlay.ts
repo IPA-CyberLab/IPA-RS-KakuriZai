@@ -39,10 +39,47 @@ export class CubeSandboxOverlayBackend {
       status: overlayPending ? "running-overlay-pending" : provision.provisioned ? "running" : "planned",
       reason: provision.reason || provision.overlay?.reason || null,
       overlay: provision.overlay || null,
-      bootstrap: provision.bootstrap || null
+      bootstrap: provision.provisioned
+        ? { pending: true, skipped: false, applied: false, reason: "installing terminal tools in background" }
+        : null
     };
     world.status = overlayPending ? "pending-overlay" : provision.provisioned ? "ready" : "pending-cube";
-    return store.save(world);
+    const saved = await store.save(world);
+    if (provision.provisioned) {
+      this.bootstrapToolsInBackground(saved, store, provision.sandboxId || provision.containerId);
+    }
+    return saved;
+  }
+
+  bootstrapToolsInBackground(world, store, sandboxId) {
+    this.client.bootstrapSandboxTools(world, sandboxId)
+      .then(async (bootstrap) => {
+        const latest = await store.get(world.id, { exactId: true });
+        if (latest.sandbox?.id !== world.sandbox?.id) return;
+        latest.sandbox = {
+          ...(latest.sandbox || {}),
+          bootstrap
+        };
+        await store.save(latest);
+      })
+      .catch(async (error) => {
+        try {
+          const latest = await store.get(world.id, { exactId: true });
+          if (latest.sandbox?.id !== world.sandbox?.id) return;
+          latest.sandbox = {
+            ...(latest.sandbox || {}),
+            bootstrap: {
+              pending: false,
+              skipped: false,
+              applied: false,
+              reason: error.message || String(error)
+            }
+          };
+          await store.save(latest);
+        } catch {
+          // Nothing useful to do if metadata disappeared while bootstrap was running.
+        }
+      });
   }
 
   async remove(world) {

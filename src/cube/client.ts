@@ -69,7 +69,6 @@ export class CubeSandboxClient {
     const sandboxId = parseMasterSandboxId(output) || world.id;
     const mountMode = request.annotations?.["kakurizai.mountMode"] || world.backendConfig?.mountMode || "agctl-overlay";
     const overlay = mountMode === "agctl-overlay" ? await this.setupOverlay(world, sandboxId) : null;
-    const bootstrap = await this.bootstrapSandboxTools(world, sandboxId);
     return {
       provisioned: true,
       mode: "master",
@@ -77,8 +76,7 @@ export class CubeSandboxClient {
       containerId: sandboxId,
       requestPath,
       output,
-      overlay,
-      bootstrap
+      overlay
     };
   }
 
@@ -100,15 +98,13 @@ export class CubeSandboxClient {
       };
     }
     const sandboxId = parseSandboxId(output) || world.id;
-    const bootstrap = await this.bootstrapSandboxTools(world, sandboxId);
     return {
       provisioned: true,
       mode: "cli",
       sandboxId,
       containerId: sandboxId,
       requestPath,
-      output,
-      bootstrap
+      output
     };
   }
 
