@@ -1575,7 +1575,7 @@ function mountsFromWorld(world?: World): CubeVolumeMount[] {
     return mounts.map((mount) => ({
       name: mount.name || mount.id || "mount",
       container_path: mount.sandboxPath || `/workspace/${slugMountName(mount.name || mount.id || "mount")}`,
-      host_path: `${mount.sourcePath || mount.hostPath || "-"}${mount.mode === "agctl-overlay" ? " + KakuriZai overlay" : ""}`,
+      host_path: mount.sourcePath || mount.hostPath || "-",
       readonly: mount.mode !== "unsafe-rw",
       mode: mount.mode === "agctl-overlay" ? "overlay" : mount.mode
     }));
