@@ -924,9 +924,26 @@ function ShellPage({ worldId }: { worldId: string }) {
       fontSize: 13,
       scrollback: 10000,
       theme: {
-        background: "#07080a",
-        foreground: "#e5e5e8",
-        cursor: "#1493ff"
+        background: "#091018",
+        foreground: "#dce7f3",
+        cursor: "#57c7ff",
+        selectionBackground: "#1e4f75",
+        black: "#0b1118",
+        red: "#ff6b7a",
+        green: "#4ade80",
+        yellow: "#facc15",
+        blue: "#60a5fa",
+        magenta: "#c084fc",
+        cyan: "#22d3ee",
+        white: "#dce7f3",
+        brightBlack: "#5d6b7a",
+        brightRed: "#ff8fa3",
+        brightGreen: "#86efac",
+        brightYellow: "#fde047",
+        brightBlue: "#93c5fd",
+        brightMagenta: "#d8b4fe",
+        brightCyan: "#67e8f9",
+        brightWhite: "#ffffff"
       }
     });
     const fitAddon = new FitAddon();

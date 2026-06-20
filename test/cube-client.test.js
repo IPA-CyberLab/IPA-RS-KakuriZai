@@ -97,6 +97,35 @@ test("cube client bootstraps terminal tools after sandbox create", async () => {
   assert.match(args[6], /nano/);
 });
 
+test("cube client opens web shell with colorized bash profile", () => {
+  const client = new CubeSandboxClient({
+    cubecli: "/bin/echo",
+    namespace: "kakurizai",
+    workspacePath: "/workspace"
+  });
+  const shell = client.shellCommand({
+    name: "cube",
+    sandbox: { id: "4fac1c9a074d49bf8e29ee1d90592b22" }
+  });
+
+  assert.deepEqual(shell.args.slice(0, 8), [
+    "--namespace",
+    "kakurizai",
+    "exec",
+    "-i",
+    "-t",
+    "-w",
+    "/workspace",
+    "4fac1c9a074d"
+  ]);
+  assert.equal(shell.args[8], "/bin/sh");
+  assert.equal(shell.args[9], "-lc");
+  assert.match(shell.args[10], /TERM=xterm-256color/);
+  assert.match(shell.args[10], /alias ls='ls --color=auto/);
+  assert.match(shell.args[10], /PS1=/);
+  assert.match(shell.args[10], /exec bash --rcfile/);
+});
+
 async function fakeBinary(file) {
   await fs.writeFile(file, "#!/bin/sh\nexit 0\n", "utf8");
   await fs.chmod(file, 0o755);

@@ -267,7 +267,8 @@ export class CubeSandboxClient {
         this.config.workspacePath || "/workspace",
         sandboxIdForCubeCli(sandboxId),
         "/bin/sh",
-        "-l"
+        "-lc",
+        buildInteractiveShellScript()
       ]
     };
   }
@@ -393,6 +394,32 @@ function rpmPackageName(pkg) {
     "iputils-ping": "iputils",
     "vim-tiny": "vim-minimal"
   }[pkg] || pkg;
+}
+
+function buildInteractiveShellScript() {
+  return [
+    "export TERM=xterm-256color COLORTERM=truecolor CLICOLOR=1",
+    "cat > /tmp/kakurizai-bashrc <<'KAKURIZAI_RC'",
+    "export TERM=xterm-256color",
+    "export COLORTERM=truecolor",
+    "export CLICOLOR=1",
+    "export GREP_COLORS='ms=01;38;5;203:mc=01;38;5;203:sl=:cx=:fn=38;5;111:ln=38;5;246:bn=38;5;150:se=38;5;246'",
+    "if command -v dircolors >/dev/null 2>&1; then eval \"$(dircolors -b 2>/dev/null || true)\"; fi",
+    "alias ls='ls --color=auto --group-directories-first'",
+    "alias ll='ls -alF --color=auto --group-directories-first'",
+    "alias la='ls -A --color=auto --group-directories-first'",
+    "alias grep='grep --color=auto'",
+    "alias egrep='egrep --color=auto'",
+    "alias fgrep='fgrep --color=auto'",
+    "alias diff='diff --color=auto'",
+    "alias ip='ip -color=auto'",
+    "show() { if [ \"${1:-}\" = \"ip\" ]; then shift; ip -brief -color=auto addr \"$@\"; else printf 'show: unsupported command: %s\\n' \"$*\" >&2; return 127; fi; }",
+    "PS1='\\[\\e[38;5;45m\\]\\u@\\h\\[\\e[0m\\]:\\[\\e[38;5;111m\\]\\w\\[\\e[0m\\]\\\\$ '",
+    "KAKURIZAI_RC",
+    "if command -v bash >/dev/null 2>&1; then exec bash --rcfile /tmp/kakurizai-bashrc -i; fi",
+    "export PS1='\\033[36m\\u@\\h\\033[0m:\\033[94m\\w\\033[0m# '",
+    "exec /bin/sh -i"
+  ].join("\n");
 }
 
 function parseSandboxId(output) {
