@@ -197,23 +197,57 @@ test("cube client starts sandbox dev access services", async () => {
       vscodePort: 13337,
       sshPort: 2222,
       vscodePassword: "code-secret",
-      sshPassword: "secret"
+      vscodeHashedPassword: "$argon2id$v=19$m=4096,t=3,p=1$salt$hash"
     }
   );
 
   assert.equal(result.applied, true);
   assert.equal(result.workspace, "/workspace/repo");
+  assert.equal(result.vscode, true);
+  assert.equal(result.ssh, false);
   const argsText = await fs.readFile(argsFile, "utf8");
   const stdinText = await fs.readFile(stdinFile, "utf8");
-  const args = argsText.trim().split("\n");
-  assert.deepEqual(args, ["--namespace", "kakurizai", "exec", "-i", "4fac1c9a074d", "/bin/sh", "-s"]);
+  assert.match(argsText, /^--namespace\nkakurizai\nexec\n4fac1c9a074d\n\/bin\/sh\n-lc\n/);
   assert.doesNotMatch(argsText, /code-secret|secret/);
-  assert.match(stdinText, /openssh-server/);
-  assert.match(stdinText, /code-server/);
-  assert.match(stdinText, /--auth password/);
-  assert.match(stdinText, /PASSWORD="\$vscode_password"/);
-  assert.match(stdinText, /code-secret/);
-  assert.match(stdinText, /Port \$\{ssh_port\}/);
+  assert.equal(stdinText, "");
+  assert.match(argsText, /enable_vscode=1/);
+  assert.match(argsText, /enable_ssh=0/);
+  assert.match(argsText, /vscode_hashed_password='?\$argon2id/);
+  assert.doesNotMatch(argsText, /openssh-server/);
+  assert.match(argsText, /code-server/);
+  assert.match(argsText, /--auth password/);
+  assert.match(argsText, /HASHED_PASSWORD="\$vscode_hashed_password"/);
+  assert.doesNotMatch(argsText, /PASSWORD="\$vscode_password"/);
+  assert.match(argsText, /Port \$\{ssh_port\}/);
+
+  const sshResult = await client.startDevAccessServices(
+    {
+      name: "cube",
+      sourcePath: tmp,
+      sandbox: { id: "4fac1c9a074d49bf8e29ee1d90592b22" },
+      paths: { logs: tmp },
+      backendConfig: {
+        hostMount: true,
+        mounts: [{ name: "repo", sourcePath: tmp, mode: "agctl-overlay" }]
+      }
+    },
+    {
+      vscodePort: 13337,
+      sshPort: 2222,
+      enableVscode: false,
+      enableSsh: true
+    }
+  );
+  const sshArgsText = await fs.readFile(argsFile, "utf8");
+  const sshStdinText = await fs.readFile(stdinFile, "utf8");
+  assert.equal(sshResult.applied, true);
+  assert.equal(sshResult.vscode, false);
+  assert.equal(sshResult.ssh, true);
+  assert.equal(sshStdinText, "");
+  assert.match(sshArgsText, /enable_vscode=0/);
+  assert.match(sshArgsText, /enable_ssh=1/);
+  assert.match(sshArgsText, /openssh-server/);
+  assert.match(sshArgsText, /Port \$\{ssh_port\}/);
 });
 
 async function fakeBinary(file) {

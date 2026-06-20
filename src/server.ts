@@ -126,81 +126,207 @@ class DevAccessManager {
   constructor(config) {
     this.config = config;
     this.sessions = new Map();
+    this.pending = new Map();
   }
 
   async ensure(world, request) {
-    const existing = this.sessions.get(world.id);
-    if (existing) return this.publicSession(existing, request);
+    const session = await this.ensureSession(world, { vscode: true, ssh: false });
+    return this.publicSession(session, request);
+  }
 
-    const vscodePassword = crypto.randomBytes(18).toString("base64url");
-    const sshPassword = crypto.randomBytes(18).toString("base64url");
+  async ensureSession(world, options = {}) {
+    const existing = this.pending.get(world.id);
+    if (existing) {
+      await existing.catch(() => {});
+    }
+    const task = this.ensureSessionLocked(world, options);
+    this.pending.set(world.id, task);
+    try {
+      return await task;
+    } finally {
+      if (this.pending.get(world.id) === task) this.pending.delete(world.id);
+    }
+  }
+
+  async ensureSessionLocked(world, options = {}) {
+    const needsVscode = options.vscode !== false;
+    const needsSsh = options.ssh === true;
+    let session = this.sessions.get(world.id);
+    if (!session) {
+      const client = new CubeSandboxClient(this.config.cube);
+      const runtime = await client.inspectWorldSandbox(world);
+      const sandboxIp = runtime.sandboxIp;
+      if (!sandboxIp) throw new Error(`sandbox IP is not available for ${world.name}`);
+      session = {
+        worldId: world.id,
+        worldName: world.name,
+        sandboxIp,
+        workspace: null,
+        vscodePort: 13337,
+        sshPort: 2222
+      };
+      this.sessions.set(world.id, session);
+    }
+
     const vscodePort = 13337;
     const sshPort = 2222;
     const client = new CubeSandboxClient(this.config.cube);
-    const runtime = await client.inspectWorldSandbox(world);
-    const sandboxIp = runtime.sandboxIp;
-    if (!sandboxIp) throw new Error(`sandbox IP is not available for ${world.name}`);
 
-    const services = await client.startDevAccessServices(world, {
-      vscodePort,
-      sshPort,
-      vscodePassword,
-      sshPassword
-    });
-    if (!services.applied) throw new Error(services.reason || `failed to start dev access for ${world.name}`);
+    if (needsVscode && !session.vscodeForward) {
+      session.vscodePassword = crypto.randomBytes(18).toString("base64url");
+      session.vscodeHashedPassword = hashCodeServerPassword(session.vscodePassword);
+      const services = await client.startDevAccessServices(world, {
+        vscodePort,
+        sshPort,
+        enableVscode: true,
+        enableSsh: false,
+        vscodeHashedPassword: session.vscodeHashedPassword
+      });
+      if (!services.applied) throw new Error(services.reason || `failed to start VS Code Web for ${world.name}`);
+      session.workspace = services.workspace;
+      session.vscodeForward = await listenTcpForward({
+        listenHost: publicListenHost(this.config.studio.host),
+        targetHost: session.sandboxIp,
+        targetPort: vscodePort
+      });
+    }
 
-    const vscodeForward = await listenTcpForward({
-      listenHost: publicListenHost(this.config.studio.host),
-      targetHost: sandboxIp,
-      targetPort: vscodePort
-    });
-    const sshForward = await listenTcpForward({
-      listenHost: publicListenHost(this.config.studio.host),
-      targetHost: sandboxIp,
-      targetPort: sshPort
-    });
-    const session = {
-      worldId: world.id,
-      worldName: world.name,
-      sandboxIp,
-      vscodePort,
-      vscodePassword,
-      vscodeForward,
-      sshPort,
-      sshPassword,
-      sshForward,
-      workspace: services.workspace
-    };
-    this.sessions.set(world.id, session);
-    return this.publicSession(session, request);
+    if (needsSsh && !session.sshForward) {
+      session.sshPassword = crypto.randomBytes(18).toString("base64url");
+      const services = await client.startDevAccessServices(world, {
+        vscodePort,
+        sshPort,
+        enableVscode: false,
+        enableSsh: true,
+        sshPassword: session.sshPassword
+      });
+      if (!services.applied) throw new Error(services.reason || `failed to start SSH for ${world.name}`);
+      session.workspace = session.workspace || services.workspace;
+      session.sshForward = await listenTcpForward({
+        listenHost: publicListenHost(this.config.studio.host),
+        targetHost: session.sandboxIp,
+        targetPort: sshPort
+      });
+    }
+
+    return session;
   }
 
   publicSession(session, request) {
     const origin = publicOrigin(request, this.config);
     const publicHost = publicHostname(origin);
-    const httpUrl = new URL(origin);
-    httpUrl.port = String(session.vscodeForward.port);
-    httpUrl.pathname = "/";
-    httpUrl.search = "";
-    httpUrl.hash = "";
-    const sshCommand = `ssh root@${publicHost} -p ${session.sshForward.port}`;
+    const httpUrl = session.vscodeForward ? new URL(origin) : null;
+    if (httpUrl) {
+      httpUrl.port = String(session.vscodeForward.port);
+      httpUrl.pathname = "/";
+      httpUrl.search = "";
+      httpUrl.hash = "";
+    }
+    const sshCommand = session.sshForward ? `ssh root@${publicHost} -p ${session.sshForward.port}` : null;
     return {
       worldId: session.worldId,
       worldName: session.worldName,
       sandboxIp: session.sandboxIp,
       workspace: session.workspace,
-      vscodeUrl: httpUrl.toString(),
-      vscodePath: "/",
-      vscodePort: session.vscodePort,
-      vscodePassword: session.vscodePassword,
-      vscodeForwardPort: session.vscodeForward.port,
+      vscodeUrl: httpUrl ? httpUrl.toString() : null,
+      vscodePath: httpUrl ? "/" : null,
+      vscodePort: session.vscodeForward ? session.vscodePort : null,
+      vscodeForwardPort: session.vscodeForward?.port || null,
       sshHost: publicHost,
-      sshPort: session.sshForward.port,
-      sshUri: `ssh://root@${publicHost}:${session.sshForward.port}`,
-      sshCommand,
-      sshPassword: session.sshPassword
+      sshPort: session.sshForward?.port || null,
+      sshUri: session.sshForward ? `ssh://root@${publicHost}:${session.sshForward.port}` : null,
+      sshCommand
     };
   }
+
+  async loginCodeServer(session, publicUrl) {
+    if (!session.vscodeForward || !session.vscodePassword) {
+      throw new Error("VS Code Web is not started");
+    }
+    const loginUrl = new URL("login", publicUrl).toString();
+    const attempts = [
+      { base: ".", href: loginUrl },
+      { base: "/", href: publicUrl }
+    ];
+    let lastError = null;
+    for (const attempt of attempts) {
+      try {
+        return await postCodeServerLogin({
+          port: session.vscodeForward.port,
+          host: new URL(publicUrl).host,
+          password: session.vscodePassword,
+          base: attempt.base,
+          href: attempt.href
+        });
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError || new Error("code-server login failed");
+  }
+}
+
+function postCodeServerLogin(options) {
+  const body = new URLSearchParams({
+    password: options.password,
+    base: options.base,
+    href: options.href
+  }).toString();
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    const request = http.request({
+      host: "127.0.0.1",
+      port: options.port,
+      method: "POST",
+      path: "/login",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "content-length": Buffer.byteLength(body),
+        host: options.host
+      }
+    }, (response) => {
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("end", () => {
+        const cookies = response.headers["set-cookie"] || [];
+        if (response.statusCode && response.statusCode >= 400) {
+          reject(new Error(`code-server login failed with ${response.statusCode}`));
+          return;
+        }
+        if (!cookies.length) {
+          const text = Buffer.concat(chunks).toString("utf8");
+          const detail = /error[^>]*>([^<]+)/i.exec(text)?.[1]?.trim();
+          reject(new Error(detail || "code-server login did not return an auth cookie"));
+          return;
+        }
+        resolve(Array.isArray(cookies) ? cookies : [cookies]);
+      });
+    });
+    request.on("error", reject);
+    request.end(body);
+  });
+}
+
+function hashCodeServerPassword(password) {
+  if (typeof crypto.argon2Sync !== "function") {
+    throw new Error("Node.js crypto.argon2Sync is required for code-server password hashing");
+  }
+  const salt = crypto.randomBytes(16);
+  const memory = 4096;
+  const passes = 3;
+  const parallelism = 1;
+  const hash = crypto.argon2Sync("argon2id", {
+    message: password,
+    nonce: salt,
+    parallelism,
+    tagLength: 32,
+    memory,
+    passes
+  });
+  return `$argon2id$v=19$m=${memory},t=${passes},p=${parallelism}$${phcBase64(salt)}$${phcBase64(hash)}`;
+}
+
+function phcBase64(value) {
+  return Buffer.from(value).toString("base64").replace(/=+$/g, "");
 }
 
 function listenTcpForward(options) {
@@ -242,6 +368,8 @@ async function route(config, auth, devAccess, request, response) {
     return sendJson(response, auth.publicConfig());
   }
   if (url.pathname.startsWith("/api/")) {
+    const token = url.searchParams.get("token");
+    if (token && !request.headers.authorization) request.headers.authorization = `Bearer ${token}`;
     request.query = url.searchParams;
     request.user = await auth.verifyRequest(request);
     return api(config, devAccess, request, response, url);
@@ -280,6 +408,19 @@ async function api(config, devAccess, request, response, url) {
     const world = await createWorld(config, body);
     return sendJson(response, world, 201);
   }
+  const devAccessOpenMatch = /^\/api\/worlds\/([^/]+)\/dev-access\/open$/.exec(url.pathname);
+  if (request.method === "GET" && devAccessOpenMatch) {
+    const world = await getWorld(config, decodeURIComponent(devAccessOpenMatch[1]));
+    const session = await devAccess.ensureSession(world, { vscode: true, ssh: false });
+    const publicSession = devAccess.publicSession(session, request);
+    const cookies = await devAccess.loginCodeServer(session, publicSession.vscodeUrl);
+    response.writeHead(302, {
+      location: publicSession.vscodeUrl,
+      ...(cookies.length ? { "set-cookie": cookies } : {})
+    });
+    response.end();
+    return;
+  }
   const match = /^\/api\/worlds\/([^/]+)(?:\/([^/]+))?$/.exec(url.pathname);
   if (!match) return sendJson(response, { error: "not found" }, 404);
   const [, ref, action] = match;
@@ -300,7 +441,13 @@ async function api(config, devAccess, request, response, url) {
     return sendJson(response, await openWorld(config, decodeURIComponent(ref), body.target));
   }
   if (request.method === "POST" && action === "dev-access") {
-    return sendJson(response, await devAccess.ensure(await getWorld(config, decodeURIComponent(ref)), request));
+    const body = await readBody(request);
+    const world = await getWorld(config, decodeURIComponent(ref));
+    const session = await devAccess.ensureSession(world, {
+      vscode: body.vscode !== false,
+      ssh: body.ssh === true
+    });
+    return sendJson(response, devAccess.publicSession(session, request));
   }
   if (request.method === "POST" && action === "exec") {
     const body = await readBody(request);

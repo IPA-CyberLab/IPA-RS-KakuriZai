@@ -263,17 +263,15 @@ type DevAccess = {
   worldId: string;
   worldName: string;
   sandboxIp: string;
-  workspace: string;
-  vscodeUrl: string;
-  vscodePath: string;
-  vscodePort: number;
-  vscodeForwardPort: number;
-  vscodePassword: string;
+  workspace: string | null;
+  vscodeUrl: string | null;
+  vscodePath: string | null;
+  vscodePort: number | null;
+  vscodeForwardPort: number | null;
   sshHost: string;
-  sshPort: number;
-  sshUri: string;
-  sshCommand: string;
-  sshPassword: string;
+  sshPort: number | null;
+  sshUri: string | null;
+  sshCommand: string | null;
 };
 
 type InventoryRow = {
@@ -1043,6 +1041,11 @@ function DevAccessLauncher({ world, token }: { world?: World; token: string }) {
   }
 
   async function ensureAccess(openTarget?: "vscode" | "ssh") {
+    if (openTarget === "vscode") {
+      window.open(devAccessOpenUrl(world.id, token), "_blank", "noopener,noreferrer");
+      setMessage("Opening VS Code Web");
+      return;
+    }
     if (access) {
       openAccess(access, openTarget);
       return;
@@ -1052,6 +1055,9 @@ function DevAccessLauncher({ world, token }: { world?: World; token: string }) {
     try {
       const result = await api<DevAccess>(`/api/worlds/${encodeURIComponent(world.id)}/dev-access`, {
         method: "POST",
+        body: openTarget === "ssh"
+          ? { vscode: false, ssh: true }
+          : { vscode: true, ssh: false },
         token
       });
       setAccess(result);
@@ -1067,11 +1073,15 @@ function DevAccessLauncher({ world, token }: { world?: World; token: string }) {
   async function copySshCommand() {
     const result = access || await api<DevAccess>(`/api/worlds/${encodeURIComponent(world.id)}/dev-access`, {
       method: "POST",
+      body: { vscode: false, ssh: true },
       token
     });
     setAccess(result);
-    const text = `${result.sshCommand}\npassword: ${result.sshPassword}`;
-    await navigator.clipboard.writeText(text);
+    if (!result.sshCommand) {
+      setMessage("SSH is not ready");
+      return;
+    }
+    await navigator.clipboard.writeText(result.sshCommand);
     setMessage("SSH copied");
   }
 
@@ -1097,15 +1107,19 @@ function DevAccessLauncher({ world, token }: { world?: World; token: string }) {
       {access ? (
         <div className="commandBox">
           <span>Workspace</span>
-          <strong>{access.workspace}</strong>
-          <span>SSH</span>
-          <strong>{access.sshCommand}</strong>
-          <span>VS Code</span>
-          <strong>{access.vscodeUrl}</strong>
-          <span>Code password</span>
-          <strong>{access.vscodePassword}</strong>
-          <span>SSH password</span>
-          <strong>{access.sshPassword}</strong>
+          <strong>{access.workspace || "-"}</strong>
+          {access.sshCommand ? (
+            <>
+              <span>SSH</span>
+              <strong>{access.sshCommand}</strong>
+            </>
+          ) : null}
+          {access.vscodeUrl ? (
+            <>
+              <span>VS Code</span>
+              <strong>{access.vscodeUrl}</strong>
+            </>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -1113,8 +1127,8 @@ function DevAccessLauncher({ world, token }: { world?: World; token: string }) {
 }
 
 function openAccess(access: DevAccess, target?: "vscode" | "ssh") {
-  if (target === "vscode") window.open(access.vscodeUrl, "_blank", "noopener,noreferrer");
-  if (target === "ssh") window.open(access.sshUri, "_blank", "noopener,noreferrer");
+  if (target === "vscode" && access.vscodeUrl) window.open(access.vscodeUrl, "_blank", "noopener,noreferrer");
+  if (target === "ssh" && access.sshUri) window.open(access.sshUri, "_blank", "noopener,noreferrer");
 }
 
 function ShellPage({ worldId }: { worldId: string }) {
@@ -1271,6 +1285,12 @@ function shellTokenFromLocation() {
 
 function shellPageUrl(worldId: string, token: string) {
   const url = new URL(`/shell/${encodeURIComponent(worldId)}`, window.location.href);
+  if (token) url.searchParams.set("token", token);
+  return url.toString();
+}
+
+function devAccessOpenUrl(worldId: string, token: string) {
+  const url = new URL(`/api/worlds/${encodeURIComponent(worldId)}/dev-access/open`, window.location.href);
   if (token) url.searchParams.set("token", token);
   return url.toString();
 }
