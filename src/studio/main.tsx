@@ -1,11 +1,8 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import {
-  Activity,
-  Database,
   Folder,
   FolderOpen,
-  HardDrive,
   KeyRound,
   Monitor,
   Play,
@@ -73,17 +70,17 @@ const mountModes = [
   {
     id: "agctl-overlay",
     label: "agctl overlay",
-    description: "Read-only source plus KakuriZai upper/work layers. Changes apply back explicitly."
+    description: "Read-only host folder plus KakuriZai upper/work layers inside the VM."
   },
   {
     id: "cubesandbox-readonly",
-    label: "CubeSandbox read-only",
-    description: "Mount the selected host folder directly as read-only."
+    label: "Default read-only",
+    description: "Mount the selected host folder directly as read-only inside the VM."
   },
   {
     id: "unsafe-rw",
     label: "Unsafe read-write",
-    description: "Mount the host folder directly as writable. No isolation for file writes."
+    description: "Mount the host folder directly as writable inside the VM."
   }
 ];
 
@@ -215,19 +212,16 @@ function App() {
           <div className="brand-icon"><Server size={18} /></div>
           <div>
             <strong>KakuriZai</strong>
-            <span>CubeSandbox Console</span>
+            <span>VM Console</span>
           </div>
         </div>
         <nav>
           <button className="nav-item active"><Monitor size={16} /> Virtual Machines</button>
-          <button className="nav-item"><Database size={16} /> Templates</button>
-          <button className="nav-item"><HardDrive size={16} /> Storage</button>
-          <button className="nav-item"><Activity size={16} /> Tasks</button>
         </nav>
         <div className="node-card">
           <span>Node</span>
           <strong>100.105.153.15</strong>
-          <small>{cube?.available ? "CubeSandbox online" : cube?.reason || "Unknown"}</small>
+          <small>{cube?.available ? "VM runtime online" : cube?.reason || "Unknown"}</small>
         </div>
       </aside>
 
@@ -244,10 +238,10 @@ function App() {
           <section className="panel list-panel">
             <div className="panel-head">
               <h2>Inventory</h2>
-              <Badge tone={cube?.available ? "ok" : "warn"}>{cube?.mode || "unknown"}</Badge>
+              <Badge tone={cube?.available ? "ok" : "warn"}>{cube?.available ? "ready" : "offline"}</Badge>
             </div>
             <table className="data-table">
-              <thead><tr><th>Name</th><th>Status</th><th>Mount</th><th>Sandbox</th></tr></thead>
+              <thead><tr><th>Name</th><th>Status</th><th>Mount</th><th>VM ID</th></tr></thead>
               <tbody>
                 {worlds.map((world) => (
                   <tr key={world.id} className={world.id === selected?.id ? "selected" : ""} onClick={() => setSelectedId(world.id)}>
@@ -265,7 +259,7 @@ function App() {
           <section className="panel launch-panel">
             <div className="panel-head">
               <h2>Launch VM</h2>
-              <Badge tone="muted">CubeSandbox</Badge>
+              <Badge tone={cube?.available ? "ok" : "warn"}>{cube?.available ? "ready" : "offline"}</Badge>
             </div>
             <form onSubmit={launchVm} className="form-grid">
               <label className="field-label">Name<input value={launch.name} onChange={(event) => setLaunch({ ...launch, name: event.target.value })} required /></label>
@@ -312,19 +306,6 @@ function App() {
             </div>
             {selected ? <VmDetails world={selected} /> : <div className="empty-state">Select a VM</div>}
           </section>
-
-          <section className="panel cube-panel">
-            <div className="panel-head"><h2>CubeSandbox</h2><Badge tone={cube?.available ? "ok" : "warn"}>{cube?.available ? "online" : "offline"}</Badge></div>
-            <div className="kv">
-              <span>Namespace</span><strong>{cube?.namespace || "-"}</strong>
-              <span>Template</span><strong>{cube?.template || "-"}</strong>
-              <span>cubecli</span><strong>{cube?.cubecli?.version || cube?.cubecli?.path || "-"}</strong>
-            </div>
-            <h3>Templates</h3>
-            <MiniTable rows={cube?.templates || []} columns={["id", "status", "createdAt", "image"]} />
-            <h3>Sandboxes</h3>
-            <MiniTable rows={cube?.sandboxes || []} columns={["id", "status", "hostId", "createdAt"]} />
-          </section>
         </section>
       </main>
     </div>
@@ -338,8 +319,8 @@ function VmDetails({ world }: { world: World }) {
       <Info label="Status" value={world.status} />
       <Info label="Source" value={world.sourcePath} />
       <Info label="Mount mode" value={world.backendConfig?.mountMode || world.sandbox?.mountMode || "-"} />
-      <Info label="Sandbox" value={world.sandbox?.id || "-"} />
-      <Info label="Template" value={world.sandbox?.baseId || "-"} />
+      <Info label="VM ID" value={world.sandbox?.id || "-"} />
+      <Info label="Base template" value={world.sandbox?.baseId || "-"} />
       <Info label="Reason" value={world.sandbox?.reason || "-"} />
       <Info label="Upper bytes" value={formatBytes(world.diskUsage?.upperBytes || 0)} />
     </div>
@@ -352,18 +333,6 @@ function Info({ label, value }: { label: string; value: string }) {
 
 function Badge({ children, tone }: { children: React.ReactNode; tone: "ok" | "warn" | "muted" }) {
   return <span className={`badge ${tone}`}>{children}</span>;
-}
-
-function MiniTable({ rows, columns }: { rows: Array<Record<string, string>>; columns: string[] }) {
-  return (
-    <table className="mini-table">
-      <thead><tr>{columns.map((column) => <th key={column}>{column}</th>)}</tr></thead>
-      <tbody>
-        {rows.map((row, index) => <tr key={index}>{columns.map((column) => <td key={column}>{row[column] || "-"}</td>)}</tr>)}
-        {rows.length === 0 && <tr><td colSpan={columns.length} className="empty-cell">None</td></tr>}
-      </tbody>
-    </table>
-  );
 }
 
 async function api<T>(path: string, options: { method?: string; token?: string | null; body?: unknown } = {}): Promise<T> {

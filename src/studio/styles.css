@@ -193,7 +193,7 @@ input {
   padding: 14px;
   display: grid;
   grid-template-columns: minmax(430px, 1.4fr) minmax(360px, 0.9fr);
-  grid-template-rows: minmax(310px, auto) minmax(260px, 1fr);
+  grid-template-rows: minmax(310px, auto) minmax(220px, 1fr);
   gap: 12px;
   align-items: stretch;
 }
@@ -206,26 +206,8 @@ input {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
-.cube-panel {
+.detail-panel {
   grid-column: 1 / -1;
-  grid-template-columns: 300px 1fr 1fr;
-  grid-template-rows: auto auto;
-  gap: 12px;
-  padding-bottom: 12px;
-}
-
-.cube-panel .panel-head {
-  grid-column: 1 / -1;
-}
-
-.cube-panel .kv {
-  padding: 0 12px;
-  align-content: start;
-}
-
-.cube-panel h3 {
-  margin: 0 12px 6px;
-  font-size: 13px;
 }
 
 .panel-head {
@@ -302,25 +284,21 @@ input:focus {
   color: var(--muted);
 }
 
-.data-table,
-.mini-table {
+.data-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
 }
 
 .data-table th,
-.data-table td,
-.mini-table th,
-.mini-table td {
+.data-table td {
   border-bottom: 1px solid #e5e9ef;
   padding: 8px 10px;
   text-align: left;
   vertical-align: top;
 }
 
-.data-table th,
-.mini-table th {
+.data-table th {
   color: var(--muted);
   font-weight: 600;
   background: #fbfcfd;
@@ -474,15 +452,6 @@ input {
   font-size: 12px;
 }
 
-.mini-table {
-  margin: 0 12px 12px;
-  table-layout: fixed;
-}
-
-.mini-table td {
-  overflow-wrap: anywhere;
-}
-
 @media (max-width: 1100px) {
   .console {
     grid-template-columns: 1fr;
@@ -503,10 +472,6 @@ input {
   }
 
   .layout {
-    grid-template-columns: 1fr;
-  }
-
-  .cube-panel {
     grid-template-columns: 1fr;
   }
 }

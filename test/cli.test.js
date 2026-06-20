@@ -33,7 +33,7 @@ test("cli covers studio world operations", async () => {
 
   const show = await runCli(home, ["show", "cli-world"]);
   assert.match(show.stdout, /Source\s+/);
-  assert.match(show.stdout, /Backend\s+cube-sandbox-overlay/);
+  assert.match(show.stdout, /Runtime\s+cube-sandbox-overlay/);
   assert.match(show.stdout, /Sessions\s+0/);
 
   const showJson = JSON.parse((await runCli(home, ["show", "cli-world", "--json"])).stdout);
@@ -55,19 +55,19 @@ test("cli covers studio world operations", async () => {
   const remove = JSON.parse((await runCli(home, ["remove", "cli-world", "--yes", "--json"])).stdout);
   assert.equal(remove.name, "cli-world");
   const afterRemove = await runCli(home, ["list"]);
-  assert.match(afterRemove.stdout, /no worlds/);
+  assert.match(afterRemove.stdout, /no VMs/);
 });
 
 test("help exposes CLI equivalents for Studio buttons", async () => {
   const result = await runCli(await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-help-")), ["help"]);
   for (const command of [
-    "agctl show <world>",
-    "agctl file <world>",
-    "agctl terminal <world>",
-    "agctl vscode <world>",
-    "agctl agent <world>",
-    "agctl apply <world>",
-    "agctl remove <world>"
+    "agctl show <vm>",
+    "agctl file <vm>",
+    "agctl terminal <vm>",
+    "agctl vscode <vm>",
+    "agctl agent <vm>",
+    "agctl apply <vm>",
+    "agctl remove <vm>"
   ]) {
     assert.match(result.stdout, new RegExp(escapeRegExp(command)));
   }

@@ -46,20 +46,20 @@ export async function main(argv) {
 function help() {
   console.log(`agctl
 
-World commands:
+VM commands:
   agctl create --source <folder> --name <name> [--backend cube-sandbox-overlay]
   agctl list [--json]
-  agctl show <world> [--json]
-  agctl open <world> <file|terminal|vscode|agent>
-  agctl file <world>
-  agctl terminal <world>
-  agctl vscode <world>
-  agctl agent <world>
-  agctl exec <world> -- <command...>
-  agctl shell <world>
-  agctl changed <world> [--json]
-  agctl apply <world> [--dry-run] [--json]
-  agctl remove <world> --yes
+  agctl show <vm> [--json]
+  agctl open <vm> <file|terminal|vscode|agent>
+  agctl file <vm>
+  agctl terminal <vm>
+  agctl vscode <vm>
+  agctl agent <vm>
+  agctl exec <vm> -- <command...>
+  agctl shell <vm>
+  agctl changed <vm> [--json]
+  agctl apply <vm> [--dry-run] [--json]
+  agctl remove <vm> --yes
   agctl studio [--host 127.0.0.1] [--port 38476]
   agctl auth token [--subject local-user]
 
@@ -87,7 +87,7 @@ async function list(config, args) {
     return;
   }
   if (worlds.length === 0) {
-    console.log("no worlds");
+    console.log("no VMs");
     return;
   }
   for (const world of worlds) {
@@ -105,7 +105,7 @@ async function list(config, args) {
 
 async function show(config, args) {
   const ref = args.find((arg) => !arg.startsWith("-"));
-  if (!ref) throw new Error("show requires a world name or id");
+  if (!ref) throw new Error("show requires a VM name or id");
   const world = await getWorld(config, ref);
   if (args.includes("--json")) {
     console.log(JSON.stringify(world, null, 2));
@@ -116,7 +116,7 @@ async function show(config, args) {
 
 async function remove(config, args) {
   const ref = args.find((arg) => !arg.startsWith("-"));
-  if (!ref) throw new Error("remove requires a world name or id");
+  if (!ref) throw new Error("remove requires a VM name or id");
   if (!args.includes("--yes")) await confirmRemove(ref);
   const world = await removeWorld(config, ref);
   if (args.includes("--json")) {
@@ -128,7 +128,7 @@ async function remove(config, args) {
 
 async function open(config, args) {
   const [ref, target] = args;
-  if (!ref || !target) throw new Error("open requires <world> <target>");
+  if (!ref || !target) throw new Error("open requires <vm> <target>");
   const result = await openWorld(config, ref, target);
   if (args.includes("--json")) {
     console.log(JSON.stringify(result, null, 2));
@@ -139,7 +139,7 @@ async function open(config, args) {
 
 async function changed(config, args) {
   const [ref] = args;
-  if (!ref) throw new Error("changed requires <world>");
+  if (!ref) throw new Error("changed requires <vm>");
   const changes = await changedPaths(config, ref);
   if (args.includes("--json")) {
     console.log(JSON.stringify(changes, null, 2));
@@ -152,7 +152,7 @@ async function changed(config, args) {
 
 async function apply(config, args) {
   const ref = args.find((arg) => !arg.startsWith("-"));
-  if (!ref) throw new Error("apply requires <world>");
+  if (!ref) throw new Error("apply requires <vm>");
   const result = await applyWorld(config, ref, { dryRun: args.includes("--dry-run") });
   if (args.includes("--json")) {
     console.log(JSON.stringify(result, null, 2));
@@ -232,9 +232,9 @@ function printDetails(world) {
     ["ID", world.id],
     ["Status", world.status],
     ["Source", world.sourcePath],
-    ["Backend", world.backend],
-    ["Sandbox", world.sandbox?.id || world.sandbox?.status || "none"],
-    ["Base", world.sandbox?.baseId || "none"],
+    ["Runtime", world.backend],
+    ["VM ID", world.sandbox?.id || world.sandbox?.status || "none"],
+    ["Base template", world.sandbox?.baseId || "none"],
     ["Upper", world.paths?.upper || "none"],
     ["Disk", `${formatBytes(world.diskUsage?.upperBytes || 0)} upper`],
     ["Sessions", String((world.sessions || []).length)],

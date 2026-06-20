@@ -1,6 +1,6 @@
 # IPA-RS KakuriZai
 
-KakuriZai is a World lifecycle control plane and compact Agent Studio UI for isolated workspaces. It imports IPA-RS IsolatedAgent and Tencent CubeSandbox as Git submodules, then adds a `cube-sandbox-overlay` backend that maps a host source folder to a writable per-World upper layer.
+KakuriZai is a VM lifecycle control plane and compact Studio UI for isolated workspaces. CubeSandbox is treated as the VM runtime: each launched CubeSandbox instance is exposed to users as a VM. KakuriZai adds a `cube-sandbox-overlay` runtime path that maps a host source folder to a writable per-VM upper layer.
 
 ## Submodules
 
@@ -9,7 +9,7 @@ git submodule update --init --recursive
 ```
 
 - `vendor/IPA-RS-IsolatedAgent` provides the existing `agentctl`/`agctl` lifecycle implementation and native macOS/Windows/Linux backends.
-- `vendor/CubeSandbox` provides the CubeSandbox/Cubelet runtime used by `cube-sandbox-overlay`.
+- `vendor/CubeSandbox` provides the VM runtime used by `cube-sandbox-overlay`.
 
 ## Quick Start
 
@@ -20,7 +20,7 @@ npm run agctl -- list
 npm start
 ```
 
-When `cubecli` is not installed, Cube Worlds are still recorded with their metadata, upper/work/whiteout/log paths, and generated Cube request. Their sandbox status is `planned` until CubeSandbox is available.
+When `cubecli` is not installed, VMs are still recorded with their metadata, upper/work/whiteout/log paths, and generated Cube request. Their runtime status is `planned` until CubeSandbox is available.
 
 ## CLI And Studio Parity
 
@@ -28,15 +28,15 @@ Every Studio operation has a CLI equivalent:
 
 | Studio operation | CLI |
 | --- | --- |
-| Create World | `agctl create --source <folder> --name <name> --backend cube-sandbox-overlay` |
-| Refresh/list Worlds | `agctl list` or `agctl list --json` |
-| Select/show details | `agctl show <world>` or `agctl show <world> --json` |
-| File button | `agctl file <world>` or `agctl open <world> file` |
-| Terminal button | `agctl terminal <world>` or `agctl open <world> terminal` |
-| VS Code button | `agctl vscode <world>` or `agctl open <world> vscode` |
-| Agent button | `agctl agent <world>` or `agctl open <world> agent` |
-| Apply button | `agctl apply <world>` |
-| Remove button | `agctl remove <world>` with interactive confirmation, or `agctl remove <world> --yes` |
+| Create VM | `agctl create --source <folder> --name <name> --backend cube-sandbox-overlay` |
+| Refresh/list VMs | `agctl list` or `agctl list --json` |
+| Select/show details | `agctl show <vm>` or `agctl show <vm> --json` |
+| File button | `agctl file <vm>` or `agctl open <vm> file` |
+| Terminal button | `agctl terminal <vm>` or `agctl open <vm> terminal` |
+| VS Code button | `agctl vscode <vm>` or `agctl open <vm> vscode` |
+| Agent button | `agctl agent <vm>` or `agctl open <vm> agent` |
+| Apply button | `agctl apply <vm>` |
+| Remove button | `agctl remove <vm>` with interactive confirmation, or `agctl remove <vm> --yes` |
 
 Automation can use `--json` on `list`, `show`, `changed`, `apply`, and `remove`.
 
@@ -51,21 +51,21 @@ Authentication is provider-based. Configure `auth.provider` in `KAKURIZAI_CONFIG
 
 Examples live in `config/auth0.example.json` and `config/cognito.example.json`.
 
-## World Model
+## VM Model
 
-Each World stores:
+Each VM stores:
 
 - source path
-- backend name
+- runtime name
 - upper layer path
 - overlay workdir
 - whiteout path
 - logs and exports
-- sandbox/base IDs
+- VM runtime/base IDs
 - session list
 - apply/export state
 
-Writes are represented in the upper layer or whiteout tree. Host source files are changed only by `agctl apply <world>`.
+Writes are represented in the upper layer or whiteout tree. Host source files are changed only by `agctl apply <vm>`.
 
 ## Backends
 
@@ -75,8 +75,8 @@ Default backend selection preserves the IsolatedAgent defaults:
 - Windows: `windows-block-clone`
 - Linux: `linux-native`
 
-`cube-sandbox-overlay` adds strong execution isolation by running commands inside CubeSandbox. The host source is mounted read-only as lower, and the World upper/work paths are mounted separately. Inside the sandbox, overlayfs or fuse-overlayfs presents `/workspace`.
+`cube-sandbox-overlay` adds strong execution isolation by running commands inside a CubeSandbox VM. The host source is mounted read-only as lower, and the VM upper/work paths are mounted separately. Inside the VM, overlayfs or fuse-overlayfs presents `/workspace`.
 
 ## Existing agctl
 
-The local `agctl` wrapper delegates unknown commands, and existing env-oriented `exec`/`shell` calls for unknown World names, to IPA-RS IsolatedAgent `agentctl` when it is installed. If `agentctl` is missing but Cargo exists, it can run the submodule workspace with `cargo run`.
+The local `agctl` wrapper delegates unknown commands, and existing env-oriented `exec`/`shell` calls for unknown VM names, to IPA-RS IsolatedAgent `agentctl` when it is installed. If `agentctl` is missing but Cargo exists, it can run the submodule workspace with `cargo run`.
