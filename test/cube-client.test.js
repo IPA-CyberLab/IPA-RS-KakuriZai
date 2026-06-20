@@ -78,7 +78,7 @@ test("cube client bootstraps terminal tools after sandbox create", async () => {
     cubecli,
     namespace: "kakurizai",
     bootstrapTools: {
-      packages: ["fuse-overlayfs", "fuse3", "iproute2", "nano", "ncurses-bin", "ncurses-term", "tmux"],
+      packages: ["fuse-overlayfs", "fuse3", "iproute2", "nano", "ncurses-bin", "ncurses-term", "tmux", "unionfs-fuse"],
       commands: ["ip", "nano", "tmux"]
     }
   });
@@ -100,6 +100,35 @@ test("cube client bootstraps terminal tools after sandbox create", async () => {
   assert.match(args[6], /ncurses-bin/);
   assert.match(args[6], /ncurses-term/);
   assert.match(args[6], /tmux/);
+  assert.match(args[6], /unionfs-fuse/);
+});
+
+test("cube client mounts agctl overlay with a probed unionfs driver", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-overlay-"));
+  const cubecli = path.join(tmp, "cubecli");
+  const argsFile = path.join(tmp, "args.txt");
+  await fs.writeFile(cubecli, `#!/bin/sh\nprintf '%s\\n' "$@" > "${argsFile}"\n`, "utf8");
+  await fs.chmod(cubecli, 0o755);
+  const client = new CubeSandboxClient({
+    cubecli,
+    namespace: "kakurizai",
+    workspacePath: "/workspace"
+  });
+
+  const result = await client.setupOverlay(
+    { name: "cube", paths: { logs: tmp, workdir: tmp } },
+    "4fac1c9a074d49bf8e29ee1d90592b22"
+  );
+
+  assert.equal(result.mounted, true);
+  const args = (await fs.readFile(argsFile, "utf8")).trim().split("\n");
+  const script = args.at(-1);
+  assert.deepEqual(args.slice(0, 5), ["--namespace", "kakurizai", "exec", "4fac1c9a074d", "/bin/sh"]);
+  assert.match(script, /probe_workspace/);
+  assert.match(script, /unionfs-fuse -o cow/);
+  assert.match(script, /fuse-overlayfs/);
+  assert.match(script, /no usable overlay driver/);
+  assert.doesNotMatch(script, /tar cf|cp -a|rsync/);
 });
 
 test("cube client opens web shell with colorized bash profile", () => {

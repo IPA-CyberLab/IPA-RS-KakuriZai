@@ -130,6 +130,12 @@ export class WorldStore {
     const world = typeof ref === "string" ? await this.get(ref) : ref;
     const changed = [];
     for await (const entry of walkFiles(world.paths.upper)) {
+      const unionfsWhiteout = unionfsFuseWhiteoutTarget(entry.relativePath);
+      if (unionfsWhiteout) {
+        changed.push({ action: "delete", path: unionfsWhiteout, source: "unionfs-fuse-whiteout" });
+        continue;
+      }
+      if (isUnionfsFuseControlPath(entry.relativePath)) continue;
       if (entry.type === "directory") continue;
       const overlayWhiteout = overlayWhiteoutTarget(entry.relativePath);
       if (overlayWhiteout) {
@@ -184,6 +190,21 @@ function overlayWhiteoutTarget(relativePath) {
   if (!leaf?.startsWith(".wh.")) return null;
   parts[parts.length - 1] = leaf.slice(4);
   return parts.join(path.sep);
+}
+
+function unionfsFuseWhiteoutTarget(relativePath) {
+  const prefix = `.unionfs-fuse${path.sep}`;
+  if (!relativePath.startsWith(prefix)) return null;
+  const target = relativePath.slice(prefix.length);
+  const parts = target.split(path.sep);
+  const leaf = parts.at(-1);
+  if (!leaf?.endsWith("_HIDDEN~")) return null;
+  parts[parts.length - 1] = leaf.slice(0, -"_HIDDEN~".length);
+  return parts.join(path.sep);
+}
+
+function isUnionfsFuseControlPath(relativePath) {
+  return relativePath === ".unionfs-fuse" || relativePath.startsWith(`.unionfs-fuse${path.sep}`);
 }
 
 function dedupeChanges(changes) {

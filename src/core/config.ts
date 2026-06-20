@@ -56,6 +56,7 @@ export function defaultConfig(home = defaultHome()) {
           "procps",
           "sudo",
           "tmux",
+          "unionfs-fuse",
           "vim-tiny"
         ],
         commands: ["bash", "curl", "ip", "nano", "ping", "ps", "sudo", "tmux"]

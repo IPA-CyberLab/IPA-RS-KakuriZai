@@ -49,6 +49,38 @@ test("whiteouts delete only during apply", async () => {
   await assert.rejects(fs.readFile(path.join(source, "remove.txt"), "utf8"), /ENOENT/);
 });
 
+test("unionfs-fuse whiteouts delete host paths during apply", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-unionfs-whiteout-"));
+  const source = path.join(tmp, "source");
+  await fs.mkdir(path.join(source, "docs"), { recursive: true });
+  await fs.mkdir(path.join(source, "src"), { recursive: true });
+  await fs.writeFile(path.join(source, "src", "cli.ts"), "old\n");
+  await fs.writeFile(path.join(source, "docs", "architecture.md"), "old\n");
+  const config = await loadConfig({ home: path.join(tmp, "home"), createSecrets: false });
+  const store = new WorldStore(config);
+  const world = await store.create({
+    name: "union-delete-test",
+    sourcePath: source,
+    backend: "cube-sandbox-overlay"
+  });
+  await fs.mkdir(path.join(world.paths.upper, ".unionfs-fuse", "src"), { recursive: true });
+  await fs.writeFile(path.join(world.paths.upper, ".unionfs-fuse", "src", "cli.ts_HIDDEN~"), "");
+  await fs.mkdir(path.join(world.paths.upper, ".unionfs-fuse", "docs_HIDDEN~"), { recursive: true });
+  await fs.writeFile(path.join(world.paths.upper, ".unionfs-fuse", "ignored-control-file"), "ignored\n");
+
+  const dryRun = await store.apply(world, { dryRun: true });
+  assert.deepEqual(
+    dryRun.changes.map((change) => `${change.action}:${change.path}:${change.source}`),
+    [
+      "delete:docs:unionfs-fuse-whiteout",
+      "delete:src/cli.ts:unionfs-fuse-whiteout"
+    ]
+  );
+  await store.apply(world);
+  await assert.rejects(fs.readFile(path.join(source, "src", "cli.ts"), "utf8"), /ENOENT/);
+  await assert.rejects(fs.stat(path.join(source, "docs")), /ENOENT/);
+});
+
 test("duplicate world names require exact id for destructive operations", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-duplicate-"));
   const source = path.join(tmp, "source");
