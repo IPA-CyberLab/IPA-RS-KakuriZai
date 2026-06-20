@@ -169,6 +169,53 @@ test("cube client opens web shell with colorized bash profile", () => {
   assert.match(shell.args[10], /exec bash --rcfile/);
 });
 
+test("cube client starts sandbox dev access services", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-dev-access-"));
+  const cubecli = path.join(tmp, "cubecli");
+  const argsFile = path.join(tmp, "args.txt");
+  const stdinFile = path.join(tmp, "stdin.txt");
+  await fs.writeFile(cubecli, `#!/bin/sh\nprintf '%s\\n' "$@" > "${argsFile}"\ncat > "${stdinFile}"\n`, "utf8");
+  await fs.chmod(cubecli, 0o755);
+  const client = new CubeSandboxClient({
+    cubecli,
+    namespace: "kakurizai",
+    workspacePath: "/workspace"
+  });
+
+  const result = await client.startDevAccessServices(
+    {
+      name: "cube",
+      sourcePath: tmp,
+      sandbox: { id: "4fac1c9a074d49bf8e29ee1d90592b22" },
+      paths: { logs: tmp },
+      backendConfig: {
+        hostMount: true,
+        mounts: [{ name: "repo", sourcePath: tmp, mode: "agctl-overlay" }]
+      }
+    },
+    {
+      vscodePort: 13337,
+      sshPort: 2222,
+      vscodePassword: "code-secret",
+      sshPassword: "secret"
+    }
+  );
+
+  assert.equal(result.applied, true);
+  assert.equal(result.workspace, "/workspace/repo");
+  const argsText = await fs.readFile(argsFile, "utf8");
+  const stdinText = await fs.readFile(stdinFile, "utf8");
+  const args = argsText.trim().split("\n");
+  assert.deepEqual(args, ["--namespace", "kakurizai", "exec", "-i", "4fac1c9a074d", "/bin/sh", "-s"]);
+  assert.doesNotMatch(argsText, /code-secret|secret/);
+  assert.match(stdinText, /openssh-server/);
+  assert.match(stdinText, /code-server/);
+  assert.match(stdinText, /--auth password/);
+  assert.match(stdinText, /PASSWORD="\$vscode_password"/);
+  assert.match(stdinText, /code-secret/);
+  assert.match(stdinText, /Port \$\{ssh_port\}/);
+});
+
 async function fakeBinary(file) {
   await fs.writeFile(file, "#!/bin/sh\nexit 0\n", "utf8");
   await fs.chmod(file, 0o755);

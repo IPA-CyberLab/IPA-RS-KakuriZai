@@ -1,6 +1,8 @@
 // @ts-nocheck
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
+import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pty from "node-pty";
@@ -14,8 +16,9 @@ const STATIC_ROOT = path.join(__dirname, "studio");
 
 export async function startStudio(config) {
   const auth = createAuthProvider(config.auth);
+  const devAccess = new DevAccessManager(config);
   const server = http.createServer((request, response) => {
-    route(config, auth, request, response).catch((error) => sendError(response, error));
+    route(config, auth, devAccess, request, response).catch((error) => sendError(response, error));
   });
   const shellServer = new WebSocketServer({ noServer: true });
   server.on("upgrade", (request, socket, head) => {
@@ -119,7 +122,121 @@ function parseShellEnvelope(text) {
   return null;
 }
 
-async function route(config, auth, request, response) {
+class DevAccessManager {
+  constructor(config) {
+    this.config = config;
+    this.sessions = new Map();
+  }
+
+  async ensure(world, request) {
+    const existing = this.sessions.get(world.id);
+    if (existing) return this.publicSession(existing, request);
+
+    const vscodePassword = crypto.randomBytes(18).toString("base64url");
+    const sshPassword = crypto.randomBytes(18).toString("base64url");
+    const vscodePort = 13337;
+    const sshPort = 2222;
+    const client = new CubeSandboxClient(this.config.cube);
+    const runtime = await client.inspectWorldSandbox(world);
+    const sandboxIp = runtime.sandboxIp;
+    if (!sandboxIp) throw new Error(`sandbox IP is not available for ${world.name}`);
+
+    const services = await client.startDevAccessServices(world, {
+      vscodePort,
+      sshPort,
+      vscodePassword,
+      sshPassword
+    });
+    if (!services.applied) throw new Error(services.reason || `failed to start dev access for ${world.name}`);
+
+    const vscodeForward = await listenTcpForward({
+      listenHost: publicListenHost(this.config.studio.host),
+      targetHost: sandboxIp,
+      targetPort: vscodePort
+    });
+    const sshForward = await listenTcpForward({
+      listenHost: publicListenHost(this.config.studio.host),
+      targetHost: sandboxIp,
+      targetPort: sshPort
+    });
+    const session = {
+      worldId: world.id,
+      worldName: world.name,
+      sandboxIp,
+      vscodePort,
+      vscodePassword,
+      vscodeForward,
+      sshPort,
+      sshPassword,
+      sshForward,
+      workspace: services.workspace
+    };
+    this.sessions.set(world.id, session);
+    return this.publicSession(session, request);
+  }
+
+  publicSession(session, request) {
+    const origin = publicOrigin(request, this.config);
+    const publicHost = publicHostname(origin);
+    const httpUrl = new URL(origin);
+    httpUrl.port = String(session.vscodeForward.port);
+    httpUrl.pathname = "/";
+    httpUrl.search = "";
+    httpUrl.hash = "";
+    const sshCommand = `ssh root@${publicHost} -p ${session.sshForward.port}`;
+    return {
+      worldId: session.worldId,
+      worldName: session.worldName,
+      sandboxIp: session.sandboxIp,
+      workspace: session.workspace,
+      vscodeUrl: httpUrl.toString(),
+      vscodePath: "/",
+      vscodePort: session.vscodePort,
+      vscodePassword: session.vscodePassword,
+      vscodeForwardPort: session.vscodeForward.port,
+      sshHost: publicHost,
+      sshPort: session.sshForward.port,
+      sshUri: `ssh://root@${publicHost}:${session.sshForward.port}`,
+      sshCommand,
+      sshPassword: session.sshPassword
+    };
+  }
+}
+
+function listenTcpForward(options) {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer((clientSocket) => {
+      const upstream = net.createConnection({ host: options.targetHost, port: options.targetPort });
+      clientSocket.pipe(upstream);
+      upstream.pipe(clientSocket);
+      clientSocket.on("error", () => upstream.destroy());
+      upstream.on("error", () => clientSocket.destroy());
+    });
+    server.once("error", reject);
+    server.listen(0, options.listenHost, () => {
+      server.off("error", reject);
+      resolve({ server, port: server.address().port });
+    });
+  });
+}
+
+function publicListenHost(studioHost) {
+  return studioHost === "127.0.0.1" || studioHost === "localhost" ? "127.0.0.1" : "0.0.0.0";
+}
+
+function publicOrigin(request, config) {
+  const proto = request.headers["x-forwarded-proto"] || "http";
+  const host = request.headers["x-forwarded-host"] || request.headers.host || `${config.studio.host}:${config.studio.port}`;
+  return `${Array.isArray(proto) ? proto[0] : proto}://${Array.isArray(host) ? host[0] : host}`;
+}
+
+function publicHostname(origin) {
+  const hostname = new URL(origin).hostname;
+  if (hostname === "0.0.0.0") return "127.0.0.1";
+  return hostname;
+}
+
+async function route(config, auth, devAccess, request, response) {
   const url = new URL(request.url, `http://${request.headers.host || "127.0.0.1"}`);
   if (request.method === "GET" && url.pathname === "/api/auth/config") {
     return sendJson(response, auth.publicConfig());
@@ -127,12 +244,12 @@ async function route(config, auth, request, response) {
   if (url.pathname.startsWith("/api/")) {
     request.query = url.searchParams;
     request.user = await auth.verifyRequest(request);
-    return api(config, request, response, url);
+    return api(config, devAccess, request, response, url);
   }
   return staticFile(request, response, url);
 }
 
-async function api(config, request, response, url) {
+async function api(config, devAccess, request, response, url) {
   if (request.method === "GET" && url.pathname === "/api/session") {
     return sendJson(response, { user: request.user, auth: request.user.provider });
   }
@@ -181,6 +298,9 @@ async function api(config, request, response, url) {
   if (request.method === "POST" && action === "open") {
     const body = await readBody(request);
     return sendJson(response, await openWorld(config, decodeURIComponent(ref), body.target));
+  }
+  if (request.method === "POST" && action === "dev-access") {
+    return sendJson(response, await devAccess.ensure(await getWorld(config, decodeURIComponent(ref)), request));
   }
   if (request.method === "POST" && action === "exec") {
     const body = await readBody(request);

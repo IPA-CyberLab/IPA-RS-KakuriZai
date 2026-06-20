@@ -6,7 +6,7 @@ export function runCommand(command, args = [], options = {}) {
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: { ...process.env, ...(options.env || {}) },
-      stdio: options.inherit ? "inherit" : ["ignore", "pipe", "pipe"]
+      stdio: options.inherit ? "inherit" : [options.input ? "pipe" : "ignore", "pipe", "pipe"]
     });
     let stdout = "";
     let stderr = "";
@@ -17,6 +17,9 @@ export function runCommand(command, args = [], options = {}) {
       child.stderr?.on("data", (chunk) => {
         stderr += chunk.toString();
       });
+    }
+    if (options.input && child.stdin) {
+      child.stdin.end(options.input);
     }
     child.on("error", reject);
     child.on("close", (code, signal) => {

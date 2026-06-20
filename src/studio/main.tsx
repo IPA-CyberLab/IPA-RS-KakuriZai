@@ -6,6 +6,8 @@ import "@xterm/xterm/css/xterm.css";
 import {
   Activity,
   Box,
+  Code2,
+  Copy,
   Cpu,
   Database,
   ExternalLink,
@@ -255,6 +257,23 @@ type LaunchMount = {
   name: string;
   sourcePath: string;
   mode: string;
+};
+
+type DevAccess = {
+  worldId: string;
+  worldName: string;
+  sandboxIp: string;
+  workspace: string;
+  vscodeUrl: string;
+  vscodePath: string;
+  vscodePort: number;
+  vscodeForwardPort: number;
+  vscodePassword: string;
+  sshHost: string;
+  sshPort: number;
+  sshUri: string;
+  sshCommand: string;
+  sshPassword: string;
 };
 
 type InventoryRow = {
@@ -889,6 +908,7 @@ function App() {
 
               <DetailSection icon={<Terminal size={16} />} title="Terminal">
                 <TerminalLauncher world={selected.world} token={token} />
+                <DevAccessLauncher world={selected.world} token={token} />
               </DetailSection>
 
               <DetailSection icon={<Database size={16} />} title="Storage and Mounts">
@@ -1006,6 +1026,95 @@ function TerminalLauncher({ world, token }: { world?: World; token: string }) {
       <span>{world.status}</span>
     </div>
   );
+}
+
+function DevAccessLauncher({ world, token }: { world?: World; token: string }) {
+  const [access, setAccess] = React.useState<DevAccess | null>(null);
+  const [busy, setBusy] = React.useState(false);
+  const [message, setMessage] = React.useState("");
+
+  React.useEffect(() => {
+    setAccess(null);
+    setMessage("");
+  }, [world?.id]);
+
+  if (!world) {
+    return null;
+  }
+
+  async function ensureAccess(openTarget?: "vscode" | "ssh") {
+    if (access) {
+      openAccess(access, openTarget);
+      return;
+    }
+    setBusy(true);
+    setMessage("Starting dev access");
+    try {
+      const result = await api<DevAccess>(`/api/worlds/${encodeURIComponent(world.id)}/dev-access`, {
+        method: "POST",
+        token
+      });
+      setAccess(result);
+      setMessage("ready");
+      openAccess(result, openTarget);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copySshCommand() {
+    const result = access || await api<DevAccess>(`/api/worlds/${encodeURIComponent(world.id)}/dev-access`, {
+      method: "POST",
+      token
+    });
+    setAccess(result);
+    const text = `${result.sshCommand}\npassword: ${result.sshPassword}`;
+    await navigator.clipboard.writeText(text);
+    setMessage("SSH copied");
+  }
+
+  return (
+    <div className="devAccessPanel">
+      <div className="terminalLauncher">
+        <button className="primary" onClick={() => void ensureAccess("vscode")} type="button" disabled={busy}>
+          <Code2 size={15} />
+          VS Code Web
+          <ExternalLink size={14} />
+        </button>
+        <button onClick={() => void ensureAccess("ssh")} type="button" disabled={busy}>
+          <Terminal size={15} />
+          SSH
+          <ExternalLink size={14} />
+        </button>
+        <button className="ghost" onClick={() => void copySshCommand()} type="button" disabled={busy}>
+          <Copy size={15} />
+          Copy SSH
+        </button>
+        <span>{message || "VS Code Server and SSH are started on demand"}</span>
+      </div>
+      {access ? (
+        <div className="commandBox">
+          <span>Workspace</span>
+          <strong>{access.workspace}</strong>
+          <span>SSH</span>
+          <strong>{access.sshCommand}</strong>
+          <span>VS Code</span>
+          <strong>{access.vscodeUrl}</strong>
+          <span>Code password</span>
+          <strong>{access.vscodePassword}</strong>
+          <span>SSH password</span>
+          <strong>{access.sshPassword}</strong>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function openAccess(access: DevAccess, target?: "vscode" | "ssh") {
+  if (target === "vscode") window.open(access.vscodeUrl, "_blank", "noopener,noreferrer");
+  if (target === "ssh") window.open(access.sshUri, "_blank", "noopener,noreferrer");
 }
 
 function ShellPage({ worldId }: { worldId: string }) {
