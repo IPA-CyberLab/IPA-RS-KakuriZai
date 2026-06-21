@@ -1332,6 +1332,11 @@ label {
 }
 
 .networkMatrix .dataRow {
+  min-width: 880px;
+  grid-template-columns: 160px 130px minmax(230px, 1fr) 90px 160px 180px;
+}
+
+.networkMatrix.probeMatrix .dataRow {
   min-width: 980px;
   grid-template-columns: 160px 130px minmax(230px, 1fr) 90px 160px 180px 90px;
 }
@@ -1348,7 +1353,7 @@ label {
 
 .switchToolbar {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) auto auto;
+  grid-template-columns: minmax(180px, 1fr) auto;
   gap: 16px;
   align-items: center;
 }
@@ -1367,26 +1372,6 @@ label {
 .switchDeviceHeader span,
 .switchLegend span {
   color: #64748b;
-}
-
-.switchTabs {
-  display: inline-flex;
-  overflow: hidden;
-  border: 1px solid #e5eaf0;
-  border-radius: 6px;
-  background: #ffffff;
-}
-
-.switchTabs span {
-  min-width: 82px;
-  padding: 8px 14px;
-  color: #64748b;
-  text-align: center;
-}
-
-.switchTabs span.active {
-  background: #eff6ff;
-  color: #1473cc;
 }
 
 .switchStats {
@@ -1460,10 +1445,6 @@ label {
   background: #b7df22;
 }
 
-.switchPort.k8s {
-  background: #2d9bb8;
-}
-
 .switchPort.muted {
   background: #c4cad2;
 }
@@ -1517,10 +1498,6 @@ label {
   background: #b7df22;
 }
 
-.legendDot.k8s {
-  background: #2d9bb8;
-}
-
 .legendDot.muted {
   background: #c4cad2;
 }
@@ -1559,11 +1536,6 @@ label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.k8sLabMatrix .dataRow {
-  min-width: 1080px;
-  grid-template-columns: 160px 180px 180px minmax(210px, 1fr) 180px 120px 210px;
 }
 
 .nodeTable .dataRow {

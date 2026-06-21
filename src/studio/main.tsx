@@ -433,11 +433,9 @@ function App() {
   const [activeView, setActiveView] = React.useState<AppView>("sandboxes");
   const [actionMenuOpen, setActionMenuOpen] = React.useState(false);
   const [launchMenuOpen, setLaunchMenuOpen] = React.useState(false);
-  const [labMenuOpen, setLabMenuOpen] = React.useState(false);
   const activityMenuRef = React.useRef<HTMLButtonElement | null>(null);
   const actionMenuRef = React.useRef<HTMLElement | null>(null);
   const launchMenuRef = React.useRef<HTMLFormElement | null>(null);
-  const labMenuRef = React.useRef<HTMLFormElement | null>(null);
   const [formMessage, setFormMessage] = React.useState("");
   const [search, setSearch] = React.useState("");
   const [stateFilter, setStateFilter] = React.useState<StateFilter>("all");
@@ -486,25 +484,6 @@ function App() {
     kubernetesExtraArgs: "",
     kubernetesSysctls: defaultKubernetesSysctlsText()
   });
-  const [lab, setLab] = React.useState({
-    name: "kakurizai-lab",
-    controlPlanes: "1",
-    workers: "2",
-    cpu: "2000m",
-    memory: "2000Mi",
-    writableLayerSize: "2G",
-    profile: "k3s",
-    cni: "flannel",
-    podCidr: "10.42.0.0/16",
-    serviceCidr: "10.43.0.0/16",
-    apiServerPort: "6443",
-    nodePorts: "30000,30001",
-    joinToken: "",
-    extraArgs: "--disable=traefik",
-    sysctls: defaultKubernetesSysctlsText(),
-    allowInternetAccess: true,
-    denyOut: "10.0.0.0/8,100.64.0.0/10,172.16.0.0/12,192.168.0.0/18"
-  });
   const [browser, setBrowser] = React.useState<BrowseResult | null>(null);
   const [browserMountIndex, setBrowserMountIndex] = React.useState(0);
 
@@ -517,7 +496,6 @@ function App() {
   const selectedTemplate = findTemplateForSandbox(cube, selected);
   const selectedNode = findNodeForSandbox(cube, selected);
   const selectedNetwork = selected ? networkForRow(selected, selectedTemplate?.networkType || cube?.config?.networkType || "tap") : null;
-  const selectedKubernetes = selected ? kubernetesForRow(selected) : null;
 
   React.useEffect(() => {
     api<AuthConfig>("/api/auth/config", { token: null })
@@ -532,12 +510,11 @@ function App() {
   }, [authConfig]);
 
   React.useEffect(() => {
-    if (!actionMenuOpen && !launchMenuOpen && !labMenuOpen) return;
+    if (!actionMenuOpen && !launchMenuOpen) return;
 
     function closeMenus() {
       setActionMenuOpen(false);
       setLaunchMenuOpen(false);
-      setLabMenuOpen(false);
     }
 
     function onPointerDown(event: PointerEvent) {
@@ -546,7 +523,6 @@ function App() {
       if (activityMenuRef.current?.contains(target)) return;
       if (actionMenuRef.current?.contains(target)) return;
       if (launchMenuRef.current?.contains(target)) return;
-      if (labMenuRef.current?.contains(target)) return;
       closeMenus();
     }
 
@@ -560,7 +536,7 @@ function App() {
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [actionMenuOpen, launchMenuOpen, labMenuOpen]);
+  }, [actionMenuOpen, launchMenuOpen]);
 
   async function refresh() {
     setBusy(true);
@@ -591,7 +567,6 @@ function App() {
 
   async function openCreateMenu() {
     setActionMenuOpen(false);
-    setLabMenuOpen(false);
     setLaunchMenuOpen(true);
     setFormMessage("");
     if (launch.hostMount && !browser) {
@@ -601,13 +576,6 @@ function App() {
         setFormMessage(error instanceof Error ? error.message : String(error));
       }
     }
-  }
-
-  function openLabMenu() {
-    setActionMenuOpen(false);
-    setLaunchMenuOpen(false);
-    setLabMenuOpen(true);
-    setFormMessage("");
   }
 
   async function browse(path: string, mountIndex = browserMountIndex) {
@@ -731,53 +699,6 @@ function App() {
       });
       setLaunchMenuOpen(false);
       setSelectedId(`world:${world.id}`);
-      await refresh();
-    } catch (error) {
-      setFormMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function createKubernetesLab(event: React.FormEvent) {
-    event.preventDefault();
-    if (!lab.name.trim()) {
-      setFormMessage("Enter a lab name.");
-      return;
-    }
-    setBusy(true);
-    setFormMessage("");
-    try {
-      const result = await api<{ lab: { name: string }; worlds: World[] }>("/api/labs/kubernetes", {
-        method: "POST",
-        token,
-        body: {
-          name: lab.name.trim(),
-          controlPlanes: Number(lab.controlPlanes || 1),
-          workers: Number(lab.workers || 0),
-          cpu: lab.cpu,
-          memory: lab.memory,
-          writableLayerSize: lab.writableLayerSize,
-          profile: lab.profile,
-          cni: lab.cni,
-          podCidr: lab.podCidr,
-          serviceCidr: lab.serviceCidr,
-          apiServerPort: Number(lab.apiServerPort || 6443),
-          nodePorts: parsePortList(lab.nodePorts),
-          joinToken: lab.joinToken,
-          extraArgs: parseLines(lab.extraArgs),
-          sysctls: parseKeyValueLines(lab.sysctls),
-          network: {
-            type: "tap",
-            mode: "tap",
-            allowInternetAccess: lab.allowInternetAccess,
-            denyOut: parseCsv(lab.denyOut)
-          }
-        }
-      });
-      setLabMenuOpen(false);
-      setSelectedId(result.worlds[0] ? `world:${result.worlds[0].id}` : null);
-      setStatus(`Created K8s lab ${result.lab.name} with ${result.worlds.length} sandboxes`);
       await refresh();
     } catch (error) {
       setFormMessage(error instanceof Error ? error.message : String(error));
@@ -969,10 +890,9 @@ function App() {
       <aside className="activityBar">
         <button
           ref={activityMenuRef}
-          className={`activityButton ${actionMenuOpen || launchMenuOpen || labMenuOpen ? "active" : ""}`}
+          className={`activityButton ${actionMenuOpen || launchMenuOpen ? "active" : ""}`}
           onClick={() => {
             setLaunchMenuOpen(false);
-            setLabMenuOpen(false);
             setActionMenuOpen((value) => !value);
           }}
           title="Menu"
@@ -986,7 +906,6 @@ function App() {
             setActiveView("sandboxes");
             setActionMenuOpen(false);
             setLaunchMenuOpen(false);
-            setLabMenuOpen(false);
           }}
           title="Sandboxes"
           type="button"
@@ -999,7 +918,6 @@ function App() {
             setActiveView("network");
             setActionMenuOpen(false);
             setLaunchMenuOpen(false);
-            setLabMenuOpen(false);
           }}
           title="Network"
           type="button"
@@ -1013,10 +931,6 @@ function App() {
           <button className="actionMenuItem" onClick={() => void openCreateMenu()} type="button">
             <Plus size={16} />
             <span>Create Sandbox</span>
-          </button>
-          <button className="actionMenuItem" onClick={openLabMenu} type="button">
-            <Layers size={16} />
-            <span>Create K8s Lab</span>
           </button>
         </section>
       ) : null}
@@ -1139,16 +1053,8 @@ function App() {
             </div>
           </div>
 
-          <div className="splitFields">
-            <div>
-              <label>Network mode</label>
-              <input value={launch.networkMode} onChange={(event) => setLaunch({ ...launch, networkMode: event.target.value })} placeholder="tap" />
-            </div>
-            <div>
-              <label>Expose ports</label>
-              <input value={launch.exposedPorts} onChange={(event) => setLaunch({ ...launch, exposedPorts: event.target.value })} placeholder="6443,30000,30001" />
-            </div>
-          </div>
+          <label>Expose ports</label>
+          <input value={launch.exposedPorts} onChange={(event) => setLaunch({ ...launch, exposedPorts: event.target.value })} placeholder="6443,30000,30001" />
 
           <div className="splitFields">
             <div>
@@ -1225,22 +1131,7 @@ function App() {
             </>
           ) : null}
 
-          <div className="togglePair">
-            <label className="checkRow compactCheck">
-              <input
-                type="checkbox"
-                checked={launch.kubernetesEnabled}
-                onChange={(event) => setLaunch({
-                  ...launch,
-                  kubernetesEnabled: event.target.checked,
-                  exposedPorts: event.target.checked && !launch.exposedPorts.trim() ? "6443,30000,30001" : launch.exposedPorts,
-                  kubernetesNodePorts: event.target.checked && !launch.kubernetesNodePorts.trim() ? "30000,30001" : launch.kubernetesNodePorts
-                })}
-              />
-              <span>
-                <strong>K8s</strong>
-              </span>
-            </label>
+          <div className="toggleRow">
             <label className="checkRow compactCheck">
               <input
                 type="checkbox"
@@ -1253,79 +1144,6 @@ function App() {
               </span>
             </label>
           </div>
-
-          {launch.kubernetesEnabled ? (
-            <div className="structuredEditor">
-              <div className="splitFields">
-                <div>
-                  <label>K8s profile</label>
-                  <input value={launch.kubernetesProfile} onChange={(event) => setLaunch({ ...launch, kubernetesProfile: event.target.value })} placeholder="k3s" />
-                </div>
-                <div>
-                  <label>Cluster name</label>
-                  <input value={launch.kubernetesClusterName} onChange={(event) => setLaunch({ ...launch, kubernetesClusterName: event.target.value })} placeholder="kakurizai" />
-                </div>
-              </div>
-              <div className="splitFields">
-                <div>
-                  <label>Node role</label>
-                  <select value={launch.kubernetesNodeRole} onChange={(event) => setLaunch({ ...launch, kubernetesNodeRole: event.target.value })}>
-                    <option value="control-plane">control-plane</option>
-                    <option value="worker">worker</option>
-                    <option value="standalone">standalone</option>
-                  </select>
-                </div>
-                <div>
-                  <label>Node name</label>
-                  <input value={launch.kubernetesNodeName} onChange={(event) => setLaunch({ ...launch, kubernetesNodeName: event.target.value })} placeholder="sandbox name" />
-                </div>
-              </div>
-              <div className="splitFields">
-                <div>
-                  <label>API server port</label>
-                  <input inputMode="numeric" value={launch.kubernetesApiServerPort} onChange={(event) => setLaunch({ ...launch, kubernetesApiServerPort: event.target.value })} placeholder="6443" />
-                </div>
-                <div>
-                  <label>Node ports</label>
-                  <input value={launch.kubernetesNodePorts} onChange={(event) => setLaunch({ ...launch, kubernetesNodePorts: event.target.value })} placeholder="30000,30001" />
-                </div>
-              </div>
-              <div className="splitFields">
-                <div>
-                  <label>Pod CIDR</label>
-                  <input value={launch.kubernetesPodCidr} onChange={(event) => setLaunch({ ...launch, kubernetesPodCidr: event.target.value })} placeholder="10.42.0.0/16" />
-                </div>
-                <div>
-                  <label>Service CIDR</label>
-                  <input value={launch.kubernetesServiceCidr} onChange={(event) => setLaunch({ ...launch, kubernetesServiceCidr: event.target.value })} placeholder="10.43.0.0/16" />
-                </div>
-              </div>
-              <div className="splitFields">
-                <div>
-                  <label>CNI</label>
-                  <input value={launch.kubernetesCni} onChange={(event) => setLaunch({ ...launch, kubernetesCni: event.target.value })} placeholder="flannel" />
-                </div>
-                <div>
-                  <label>Advertise address</label>
-                  <input value={launch.kubernetesAdvertiseAddress} onChange={(event) => setLaunch({ ...launch, kubernetesAdvertiseAddress: event.target.value })} placeholder="sandbox IP" />
-                </div>
-              </div>
-              <div className="splitFields">
-                <div>
-                  <label>Join endpoint</label>
-                  <input value={launch.kubernetesJoinEndpoint} onChange={(event) => setLaunch({ ...launch, kubernetesJoinEndpoint: event.target.value })} placeholder="https://control-plane:6443" />
-                </div>
-                <div>
-                  <label>Join token</label>
-                  <input value={launch.kubernetesJoinToken} onChange={(event) => setLaunch({ ...launch, kubernetesJoinToken: event.target.value })} placeholder="k3s token" />
-                </div>
-              </div>
-              <label>Extra args</label>
-              <textarea value={launch.kubernetesExtraArgs} onChange={(event) => setLaunch({ ...launch, kubernetesExtraArgs: event.target.value })} placeholder="--disable=traefik" />
-              <label>Sysctls</label>
-              <textarea value={launch.kubernetesSysctls} onChange={(event) => setLaunch({ ...launch, kubernetesSysctls: event.target.value })} placeholder="net.ipv4.ip_forward=1" />
-            </div>
-          ) : null}
 
           {launch.vlanEnabled ? (
             <div className="splitFields">
@@ -1359,116 +1177,6 @@ function App() {
           <button className="primary wide" disabled={busy} type="submit">
             <Plus size={16} />
             {busy ? "Creating" : "Create"}
-          </button>
-        </form>
-      ) : null}
-
-      {labMenuOpen ? (
-        <form className="newSandboxMenu" onSubmit={createKubernetesLab} ref={labMenuRef}>
-          <header>
-            <strong>New K8s Lab</strong>
-            <button className="iconButton ghost" onClick={() => setLabMenuOpen(false)} title="Close" type="button">
-              <X size={16} />
-            </button>
-          </header>
-
-          <label>Lab name</label>
-          <input value={lab.name} onChange={(event) => setLab({ ...lab, name: event.target.value })} autoFocus />
-
-          <div className="splitFields">
-            <div>
-              <label>Control planes</label>
-              <input inputMode="numeric" value={lab.controlPlanes} onChange={(event) => setLab({ ...lab, controlPlanes: event.target.value })} />
-            </div>
-            <div>
-              <label>Workers</label>
-              <input inputMode="numeric" value={lab.workers} onChange={(event) => setLab({ ...lab, workers: event.target.value })} />
-            </div>
-          </div>
-
-          <div className="splitFields">
-            <div>
-              <label>CPU</label>
-              <input value={lab.cpu} onChange={(event) => setLab({ ...lab, cpu: event.target.value })} />
-            </div>
-            <div>
-              <label>Memory</label>
-              <input value={lab.memory} onChange={(event) => setLab({ ...lab, memory: event.target.value })} />
-            </div>
-          </div>
-
-          <div className="splitFields">
-            <div>
-              <label>Disk size</label>
-              <input value={lab.writableLayerSize} onChange={(event) => setLab({ ...lab, writableLayerSize: event.target.value })} placeholder="2G" />
-            </div>
-            <div>
-              <label>K8s profile</label>
-              <input value={lab.profile} onChange={(event) => setLab({ ...lab, profile: event.target.value })} placeholder="k3s" />
-            </div>
-          </div>
-
-          <div className="splitFields">
-            <div>
-              <label>API server port</label>
-              <input inputMode="numeric" value={lab.apiServerPort} onChange={(event) => setLab({ ...lab, apiServerPort: event.target.value })} placeholder="6443" />
-            </div>
-            <div>
-              <label>Node ports</label>
-              <input value={lab.nodePorts} onChange={(event) => setLab({ ...lab, nodePorts: event.target.value })} placeholder="30000,30001" />
-            </div>
-          </div>
-
-          <div className="splitFields">
-            <div>
-              <label>Pod CIDR</label>
-              <input value={lab.podCidr} onChange={(event) => setLab({ ...lab, podCidr: event.target.value })} placeholder="10.42.0.0/16" />
-            </div>
-            <div>
-              <label>Service CIDR</label>
-              <input value={lab.serviceCidr} onChange={(event) => setLab({ ...lab, serviceCidr: event.target.value })} placeholder="10.43.0.0/16" />
-            </div>
-          </div>
-
-          <div className="splitFields">
-            <div>
-              <label>CNI</label>
-              <input value={lab.cni} onChange={(event) => setLab({ ...lab, cni: event.target.value })} placeholder="flannel" />
-            </div>
-            <div>
-              <label>Join token</label>
-              <input value={lab.joinToken} onChange={(event) => setLab({ ...lab, joinToken: event.target.value })} placeholder="auto/manual token" />
-            </div>
-          </div>
-
-          <label>Extra args</label>
-          <textarea value={lab.extraArgs} onChange={(event) => setLab({ ...lab, extraArgs: event.target.value })} placeholder="--disable=traefik" />
-
-          <label>Sysctls</label>
-          <textarea value={lab.sysctls} onChange={(event) => setLab({ ...lab, sysctls: event.target.value })} placeholder="net.ipv4.ip_forward=1" />
-
-          <div className="toggleRow">
-            <label className="checkRow">
-              <input
-                type="checkbox"
-                checked={lab.allowInternetAccess}
-                onChange={(event) => setLab({ ...lab, allowInternetAccess: event.target.checked })}
-              />
-              <span>
-                <strong>Internet egress</strong>
-                <small>Apply to every lab sandbox</small>
-              </span>
-            </label>
-          </div>
-
-          <label>Deny egress CIDRs</label>
-          <input value={lab.denyOut} onChange={(event) => setLab({ ...lab, denyOut: event.target.value })} placeholder="10.0.0.0/8,172.16.0.0/12" />
-
-          {formMessage ? <div className="formMessage">{formMessage}</div> : null}
-
-          <button className="primary wide" disabled={busy} type="submit">
-            <Layers size={16} />
-            {busy ? "Creating" : "Create lab"}
           </button>
         </form>
       ) : null}
@@ -1565,7 +1273,6 @@ function App() {
               busy={busy}
               selectedTemplate={selectedTemplate}
               selectedNetwork={selectedNetwork}
-              selectedKubernetes={selectedKubernetes}
               onProbe={runNetworkProbe}
               onSaveNetwork={saveNetworkSettings}
               onSelectSandbox={setSelectedId}
@@ -1682,7 +1389,6 @@ function NetworkWorkspace({
   busy,
   selectedTemplate,
   selectedNetwork,
-  selectedKubernetes,
   onProbe,
   onSaveNetwork,
   onSelectSandbox
@@ -1695,7 +1401,6 @@ function NetworkWorkspace({
   busy: boolean;
   selectedTemplate?: CubeTemplate | null;
   selectedNetwork?: NetworkConfig | null;
-  selectedKubernetes?: KubernetesConfig | null;
   onProbe: (live?: boolean) => Promise<void>;
   onSaveNetwork: (world: World, network: NetworkConfig, kubernetes: KubernetesConfig) => Promise<void>;
   onSelectSandbox: (key: string) => void;
@@ -1753,7 +1458,6 @@ function NetworkWorkspace({
           <Metric label="Port mode" value={selected.runtime?.exposedPortMode || "-"} />
           <Metric label="Requested port" value={selected.runtime?.requestedContainerPort ? String(selected.runtime.requestedContainerPort) : "-"} />
           <Metric label="Domain" value={cube?.config?.sandboxDomain || "-"} />
-          <Metric label="Network mode" value={selectedNetwork?.mode || "tap"} />
           <Metric label="Configured ports" value={formatList(selectedNetwork?.exposedPorts)} />
           <Metric label="DNS" value={formatList(selectedNetwork?.dns?.servers)} />
           <Metric label="DNS search" value={formatList(selectedNetwork?.dns?.searches)} />
@@ -1763,18 +1467,10 @@ function NetworkWorkspace({
           <Metric label="NAT forwards" value={formatPortForwardSummary(selectedNetwork?.nat?.portForwards)} />
           <Metric label="VLAN" value={formatVlanSummary(selectedNetwork?.vlan)} />
           <Metric label="Egress rules" value={String(selectedNetwork?.rules?.length || 0)} />
-          <Metric label="Kubernetes" value={selectedKubernetes?.enabled ? selectedKubernetes.profile || "enabled" : "disabled"} />
-          <Metric label="K8s cluster" value={selectedKubernetes?.enabled ? selectedKubernetes.clusterName || "kakurizai" : "-"} />
-          <Metric label="K8s role" value={selectedKubernetes?.enabled ? selectedKubernetes.nodeRole || "control-plane" : "-"} />
-          <Metric label="K8s node" value={selectedKubernetes?.enabled ? selectedKubernetes.nodeName || selected.name : "-"} />
-          <Metric label="K8s CIDRs" value={selectedKubernetes?.enabled ? `${selectedKubernetes.podCidr || "-"} / ${selectedKubernetes.serviceCidr || "-"}` : "-"} />
-          <Metric label="K8s join" value={selectedKubernetes?.enabled ? selectedKubernetes.joinEndpoint || "-" : "-"} />
-          <Metric label="K8s sysctls" value={selectedKubernetes?.enabled ? formatSysctls(selectedKubernetes.sysctls) : "-"} />
         </div>
       </DetailSection>
 
-      <DetailSection icon={<Layers size={16} />} title="Lab and Reachability">
-        <KubernetesLabSummary rows={rows} cube={cube} probe={networkProbe} />
+      <DetailSection icon={<Layers size={16} />} title="Reachability">
         <ConnectivityMatrix rows={rows} cube={cube} probe={networkProbe} />
         <PortTable ports={selected.runtime?.portMappings || []} />
       </DetailSection>
@@ -2251,18 +1947,10 @@ function NetworkEditor({
         }
       }}
     >
-      <div className="splitFields">
-        <div>
-          <label>Network type</label>
-          <select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })}>
-            <option value="tap">tap</option>
-          </select>
-        </div>
-        <div>
-          <label>Network mode</label>
-          <input value={form.mode} onChange={(event) => setForm({ ...form, mode: event.target.value })} placeholder="tap" />
-        </div>
-      </div>
+      <label>Network type</label>
+      <select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })}>
+        <option value="tap">tap</option>
+      </select>
       <div className="splitFields">
         <div>
           <label>Expose ports</label>
@@ -2352,23 +2040,7 @@ function NetworkEditor({
           />
         </>
       ) : null}
-      <div className="togglePair">
-        <label className="checkRow compactCheck">
-          <input
-            type="checkbox"
-            checked={form.kubernetesEnabled}
-            onChange={(event) => setForm({
-              ...form,
-              kubernetesEnabled: event.target.checked,
-              exposedPorts: event.target.checked && !form.exposedPorts.trim() ? "6443,30000,30001" : form.exposedPorts,
-              nodePorts: event.target.checked && !form.nodePorts.trim() ? "30000,30001" : form.nodePorts,
-              kubernetesNodeRole: event.target.checked && !form.kubernetesNodeRole ? "control-plane" : form.kubernetesNodeRole
-            })}
-          />
-          <span>
-            <strong>K8s</strong>
-          </span>
-        </label>
+      <div className="toggleRow">
         <label className="checkRow compactCheck">
           <input
             type="checkbox"
@@ -2395,78 +2067,6 @@ function NetworkEditor({
             <label>Bridge name</label>
             <input value={form.vlanBridgeName} onChange={(event) => setForm({ ...form, vlanBridgeName: event.target.value })} placeholder="br100" />
           </div>
-        </div>
-      ) : null}
-      {form.kubernetesEnabled ? (
-        <div className="structuredEditor">
-          <div className="splitFields">
-            <div>
-              <label>K8s profile</label>
-              <input value={form.kubernetesProfile} onChange={(event) => setForm({ ...form, kubernetesProfile: event.target.value })} placeholder="k3s" />
-            </div>
-            <div>
-              <label>Cluster name</label>
-              <input value={form.kubernetesClusterName} onChange={(event) => setForm({ ...form, kubernetesClusterName: event.target.value })} placeholder="kakurizai" />
-            </div>
-          </div>
-          <div className="splitFields">
-            <div>
-              <label>Node role</label>
-              <select value={form.kubernetesNodeRole} onChange={(event) => setForm({ ...form, kubernetesNodeRole: event.target.value })}>
-                <option value="control-plane">control-plane</option>
-                <option value="worker">worker</option>
-                <option value="standalone">standalone</option>
-              </select>
-            </div>
-            <div>
-              <label>Node name</label>
-              <input value={form.kubernetesNodeName} onChange={(event) => setForm({ ...form, kubernetesNodeName: event.target.value })} placeholder={world.name} />
-            </div>
-          </div>
-          <div className="splitFields">
-            <div>
-              <label>API server port</label>
-              <input inputMode="numeric" value={form.apiServerPort} onChange={(event) => setForm({ ...form, apiServerPort: event.target.value })} placeholder="6443" />
-            </div>
-            <div>
-              <label>Node ports</label>
-              <input value={form.nodePorts} onChange={(event) => setForm({ ...form, nodePorts: event.target.value })} placeholder="30000,30001" />
-            </div>
-          </div>
-          <div className="splitFields">
-            <div>
-              <label>Pod CIDR</label>
-              <input value={form.kubernetesPodCidr} onChange={(event) => setForm({ ...form, kubernetesPodCidr: event.target.value })} placeholder="10.42.0.0/16" />
-            </div>
-            <div>
-              <label>Service CIDR</label>
-              <input value={form.kubernetesServiceCidr} onChange={(event) => setForm({ ...form, kubernetesServiceCidr: event.target.value })} placeholder="10.43.0.0/16" />
-            </div>
-          </div>
-          <div className="splitFields">
-            <div>
-              <label>CNI</label>
-              <input value={form.kubernetesCni} onChange={(event) => setForm({ ...form, kubernetesCni: event.target.value })} placeholder="flannel" />
-            </div>
-            <div>
-              <label>Advertise address</label>
-              <input value={form.kubernetesAdvertiseAddress} onChange={(event) => setForm({ ...form, kubernetesAdvertiseAddress: event.target.value })} placeholder="sandbox IP" />
-            </div>
-          </div>
-          <div className="splitFields">
-            <div>
-              <label>Join endpoint</label>
-              <input value={form.kubernetesJoinEndpoint} onChange={(event) => setForm({ ...form, kubernetesJoinEndpoint: event.target.value })} placeholder="https://control-plane:6443" />
-            </div>
-            <div>
-              <label>Join token</label>
-              <input value={form.kubernetesJoinToken} onChange={(event) => setForm({ ...form, kubernetesJoinToken: event.target.value })} placeholder="k3s token" />
-            </div>
-          </div>
-          <label>Extra args</label>
-          <textarea value={form.kubernetesExtraArgs} onChange={(event) => setForm({ ...form, kubernetesExtraArgs: event.target.value })} placeholder="--disable=traefik" />
-          <label>Sysctls</label>
-          <textarea value={form.kubernetesSysctls} onChange={(event) => setForm({ ...form, kubernetesSysctls: event.target.value })} placeholder="net.ipv4.ip_forward=1" />
         </div>
       ) : null}
       <EgressRuleEditor
@@ -2690,7 +2290,6 @@ function SwitchNetworkPanel({
   const ports = buildSwitchPorts(rows, selected, cube?.config?.networkType || "tap", probe);
   const selectedPort = ports.find((port) => port.row.key === selected.key) || ports[0];
   const inUse = ports.filter((port) => port.state !== "disabled").length;
-  const k8sCount = ports.filter((port) => port.kubernetes.enabled).length;
   return (
     <div className="switchPanel">
       <div className="switchToolbar">
@@ -2698,14 +2297,8 @@ function SwitchNetworkPanel({
           <strong>KakuriZai Switch</strong>
           <span>{selected.host || selected.runtime?.hostIp || "local"} / {ports.length} ports</span>
         </div>
-        <div className="switchTabs" aria-label="Network views">
-          <span className="active">Ports</span>
-          <span>Insights</span>
-          <span>VLANs</span>
-        </div>
         <div className="switchStats">
           <span>{inUse} in use</span>
-          <span>{k8sCount} K8s</span>
         </div>
       </div>
 
@@ -2735,7 +2328,6 @@ function SwitchNetworkPanel({
         <div className="switchLegend">
           <span><i className="legendDot ok" /> Reachable</span>
           <span><i className="legendDot warn" /> Blocked</span>
-          <span><i className="legendDot k8s" /> K8s</span>
           <span><i className="legendDot muted" /> Planned</span>
         </div>
       </div>
@@ -2770,7 +2362,7 @@ function ConnectivityMatrix({ rows, cube, probe }: { rows: InventoryRow[]; cube:
   if (!rows.length) return <div className="sectionEmpty">No sandbox connectivity metadata.</div>;
   if (probe?.edges?.length) {
     return (
-      <div className="dataTable networkMatrix">
+      <div className="dataTable networkMatrix probeMatrix">
         <div className="dataRow head">
           <span>Source</span>
           <span>Target</span>
@@ -2803,7 +2395,6 @@ function ConnectivityMatrix({ rows, cube, probe }: { rows: InventoryRow[]; cube:
         <span>Egress</span>
         <span>NAT</span>
         <span>Forwards</span>
-        <span>K8s</span>
       </div>
       {rows.map((row) => {
         const network = networkForRow(row, cube?.config?.networkType || "tap");
@@ -2815,39 +2406,9 @@ function ConnectivityMatrix({ rows, cube, probe }: { rows: InventoryRow[]; cube:
             <span>{formatBool(network.allowInternetAccess)}</span>
             <span>{formatNatSummary(network.nat)}</span>
             <span>{formatPortForwardSummary(network.nat?.portForwards) || formatRuntimePortSummary(row.runtime?.portMappings || []) || "-"}</span>
-            <span>{formatKubernetesNode(kubernetesForRow(row))}</span>
           </div>
         );
       })}
-    </div>
-  );
-}
-
-function KubernetesLabSummary({ rows, cube, probe }: { rows: InventoryRow[]; cube: CubeInspect | null; probe?: NetworkProbePlan | null }) {
-  const labs = buildKubernetesLabRows(rows, cube?.config?.networkType || "tap", probe);
-  if (!labs.length) return null;
-  return (
-    <div className="dataTable k8sLabMatrix">
-      <div className="dataRow head">
-        <span>Cluster</span>
-        <span>Control planes</span>
-        <span>Workers</span>
-        <span>API / join</span>
-        <span>CIDRs</span>
-        <span>Node ports</span>
-        <span>Network</span>
-      </div>
-      {labs.map((lab) => (
-        <div className="dataRow" key={lab.cluster}>
-          <span>{lab.cluster}</span>
-          <span>{lab.controlPlanes || "-"}</span>
-          <span>{lab.workers || "-"}</span>
-          <span>{lab.endpoints || "-"}</span>
-          <span>{lab.cidrs || "-"}</span>
-          <span>{lab.nodePorts || "-"}</span>
-          <span>{lab.network || "-"}</span>
-        </div>
-      ))}
     </div>
   );
 }
@@ -3168,114 +2729,36 @@ function buildSwitchPorts(rows: InventoryRow[], selected: InventoryRow, fallback
   );
   return rows.map((row, index) => {
     const network = networkForRow(row, fallbackType);
-    const kubernetes = kubernetesForRow(row);
     const edge = row.world ? edgeByTarget.get(row.world.id) : null;
     const forward = formatPortForwardSummary(network.nat?.portForwards) || formatRuntimePortSummary(row.runtime?.portMappings || []);
     const hasRuntime = Boolean(row.runtime?.sandboxIp || row.sandboxId);
-    const tone = switchPortTone(row, kubernetes, edge, hasRuntime);
+    const tone = switchPortTone(row, edge, hasRuntime);
     const profile = [
-      network.mode || network.type || "tap",
+      network.type || "tap",
       network.vlan?.enabled ? `vlan ${network.vlan.vlanId || ""}`.trim() : "",
-      kubernetes.enabled ? kubernetes.nodeRole || "k8s" : ""
+      network.nat?.enabled ? "nat" : ""
     ].filter(Boolean).join(" / ");
     return {
       index: index + 1,
       row,
       tone,
       state: hasRuntime ? "in-use" : "disabled",
-      label: kubernetes.enabled ? "K8s" : network.type || "TAP",
-      badge: network.nat?.enabled ? "NAT" : kubernetes.enabled ? kubernetes.nodeRole || "K8s" : "TAP",
+      label: network.type || "TAP",
+      badge: network.nat?.enabled ? "NAT" : "TAP",
       operation: row.status || "-",
       profile,
       connection: row.runtime?.sandboxIp || shortId(row.sandboxId) || "-",
       forward: forward || "-",
-      probe: row.key === selected.key ? "selected" : edge ? probeLabel(edge) : "not probed",
-      kubernetes
+      probe: row.key === selected.key ? "selected" : edge ? probeLabel(edge) : "not probed"
     };
   });
 }
 
-function switchPortTone(row: InventoryRow, kubernetes: KubernetesConfig, edge?: ProbeEdge | null, hasRuntime = false) {
+function switchPortTone(row: InventoryRow, edge?: ProbeEdge | null, hasRuntime = false) {
   if (edge?.reachable === true) return "ok";
   if (edge?.reachable === false) return "warn";
-  if (kubernetes.enabled) return "k8s";
   if (hasRuntime && /running|ready/i.test(row.status || "")) return "ok";
   return "muted";
-}
-
-function formatKubernetesNode(value?: KubernetesConfig | null) {
-  if (!value?.enabled) return "-";
-  return [
-    value.clusterName || "kakurizai",
-    value.nodeRole || "control-plane",
-    value.nodeName || value.profile || "k3s"
-  ].join("/");
-}
-
-function buildKubernetesLabRows(rows: InventoryRow[], fallbackType = "tap", probe?: NetworkProbePlan | null) {
-  const probeByWorldId = new Map((probe?.nodes || []).map((node) => [node.worldId, node]));
-  const labs = new Map<string, {
-    cluster: string;
-    controlPlanes: Set<string>;
-    workers: Set<string>;
-    endpoints: Set<string>;
-    cidrs: Set<string>;
-    nodePorts: Set<string>;
-    network: Set<string>;
-  }>();
-  for (const row of rows) {
-    const baseKubernetes = kubernetesForRow(row);
-    const probeKubernetes = row.world ? probeByWorldId.get(row.world.id)?.kubernetes : null;
-    const kubernetes = probeKubernetes?.enabled ? { ...baseKubernetes, ...probeKubernetes } : baseKubernetes;
-    if (!kubernetes.enabled) continue;
-    const cluster = kubernetes.clusterName || "kakurizai";
-    let lab = labs.get(cluster);
-    if (!lab) {
-      lab = {
-        cluster,
-        controlPlanes: new Set(),
-        workers: new Set(),
-        endpoints: new Set(),
-        cidrs: new Set(),
-        nodePorts: new Set(),
-        network: new Set()
-      };
-      labs.set(cluster, lab);
-    }
-    const nodeLabel = formatKubernetesLabNode(row, kubernetes);
-    if (kubernetes.nodeRole === "worker") lab.workers.add(nodeLabel);
-    else lab.controlPlanes.add(nodeLabel);
-    const apiPort = kubernetes.apiServerPort || 6443;
-    if (kubernetes.joinEndpoint) lab.endpoints.add(kubernetes.joinEndpoint);
-    else if (kubernetes.nodeRole !== "worker") lab.endpoints.add(`https://${row.runtime?.sandboxIp || kubernetes.nodeName || row.name}:${apiPort}`);
-    if (kubernetes.podCidr || kubernetes.serviceCidr) lab.cidrs.add(`${kubernetes.podCidr || "-"} / ${kubernetes.serviceCidr || "-"}`);
-    for (const port of kubernetes.nodePorts || []) lab.nodePorts.add(String(port));
-    const network = networkForRow(row, fallbackType);
-    lab.network.add(formatBool(network.allowInternetAccess));
-    const natSummary = formatNatSummary(network.nat);
-    if (natSummary !== "disabled") lab.network.add(natSummary);
-    const forwardSummary = formatPortForwardSummary(network.nat?.portForwards) || formatRuntimePortSummary(row.runtime?.portMappings || []);
-    if (forwardSummary) lab.network.add(`fw ${forwardSummary}`);
-  }
-  return [...labs.values()].map((lab) => ({
-    cluster: lab.cluster,
-    controlPlanes: formatSet(lab.controlPlanes),
-    workers: formatSet(lab.workers),
-    endpoints: formatSet(lab.endpoints),
-    cidrs: formatSet(lab.cidrs),
-    nodePorts: formatSet(lab.nodePorts),
-    network: formatSet(lab.network)
-  })).sort((left, right) => left.cluster.localeCompare(right.cluster));
-}
-
-function formatKubernetesLabNode(row: InventoryRow, kubernetes: KubernetesConfig) {
-  const name = kubernetes.nodeName || row.name;
-  const ip = row.runtime?.sandboxIp;
-  return ip ? `${name} ${ip}` : name;
-}
-
-function formatSet(values: Set<string>) {
-  return [...values].filter(Boolean).join(", ");
 }
 
 function formatSysctls(value?: Record<string, string> | null) {
