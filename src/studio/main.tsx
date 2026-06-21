@@ -324,6 +324,33 @@ type LaunchMount = {
   mode: string;
 };
 
+type NatForwardDraft = {
+  name: string;
+  protocol: string;
+  listenAddress: string;
+  hostPort: string;
+  sandboxPort: string;
+  targetAddress: string;
+};
+
+type EgressInjectDraft = {
+  header: string;
+  secret: string;
+  format: string;
+};
+
+type EgressRuleDraft = {
+  name: string;
+  sni: string;
+  host: string;
+  methods: string;
+  path: string;
+  scheme: string;
+  allow: boolean;
+  audit: string;
+  injects: EgressInjectDraft[];
+};
+
 type InventoryRow = {
   key: string;
   name: string;
@@ -404,7 +431,7 @@ function App() {
     allowInternetAccess: true,
     allowOut: "",
     denyOut: "10.0.0.0/8,100.64.0.0/10,172.16.0.0/12,192.168.0.0/18",
-    rulesJson: "[]",
+    egressRules: [] as EgressRuleDraft[],
     vlanEnabled: false,
     vlanId: "",
     vlanHostInterface: "",
@@ -414,7 +441,7 @@ function App() {
     natOutboundInterface: "",
     natSubnet: "",
     natGateway: "",
-    natPortForwardsJson: "[]",
+    natPortForwards: [] as NatForwardDraft[],
     kubernetesEnabled: false
   });
   const [browser, setBrowser] = React.useState<BrowseResult | null>(null);
@@ -595,7 +622,7 @@ function App() {
             allowInternetAccess: launch.allowInternetAccess,
             allowOut: parseCsv(launch.allowOut),
             denyOut: parseCsv(launch.denyOut),
-            rules: parseJsonArray(launch.rulesJson, "egress rules"),
+            rules: egressRuleDraftsToRules(launch.egressRules),
             vlan: {
               enabled: launch.vlanEnabled,
               vlanId: launch.vlanId ? Number(launch.vlanId) : null,
@@ -608,7 +635,7 @@ function App() {
               outboundInterface: launch.natOutboundInterface,
               subnet: launch.natSubnet,
               gateway: launch.natGateway,
-              portForwards: parseJsonArray(launch.natPortForwardsJson, "NAT port forwards")
+              portForwards: natForwardDraftsToForwards(launch.natPortForwards)
             }
           },
           kubernetes: {
@@ -1024,8 +1051,10 @@ function App() {
                   </span>
                 </label>
               </div>
-              <label>NAT forwards JSON</label>
-              <textarea value={launch.natPortForwardsJson} onChange={(event) => setLaunch({ ...launch, natPortForwardsJson: event.target.value })} placeholder='[{"name":"ssh","protocol":"tcp","hostPort":2222,"sandboxPort":22}]' />
+              <NatForwardEditor
+                forwards={launch.natPortForwards}
+                onChange={(natPortForwards) => setLaunch({ ...launch, natPortForwards })}
+              />
             </>
           ) : null}
 
@@ -1078,8 +1107,10 @@ function App() {
           <label>Deny egress CIDRs</label>
           <input value={launch.denyOut} onChange={(event) => setLaunch({ ...launch, denyOut: event.target.value })} placeholder="10.0.0.0/8,172.16.0.0/12" />
 
-          <label>Egress rules JSON</label>
-          <textarea value={launch.rulesJson} onChange={(event) => setLaunch({ ...launch, rulesJson: event.target.value })} placeholder='[{"name":"allow-api","match":{"host":"api.example.com"},"action":{"allow":true}}]' />
+          <EgressRuleEditor
+            rules={launch.egressRules}
+            onChange={(egressRules) => setLaunch({ ...launch, egressRules })}
+          />
 
           <div className="sectionEmpty inlineNote">VLAN and NAT bridge settings are stored as KakuriZai tap metadata unless the installed CubeSandbox runtime consumes the matching annotations.</div>
 
@@ -1653,7 +1684,7 @@ function NetworkEditor({
     allowInternetAccess: configuredNetwork.allowInternetAccess ?? true,
     allowOut: formatList(configuredNetwork.allowOut),
     denyOut: formatList(configuredNetwork.denyOut),
-    rulesJson: formatJsonArray(configuredNetwork.rules),
+    egressRules: rulesToEgressRuleDrafts(configuredNetwork.rules),
     vlanEnabled: Boolean(configuredNetwork.vlan?.enabled),
     vlanId: configuredNetwork.vlan?.vlanId ? String(configuredNetwork.vlan.vlanId) : "",
     vlanHostInterface: configuredNetwork.vlan?.hostInterface || "",
@@ -1663,7 +1694,7 @@ function NetworkEditor({
     natOutboundInterface: configuredNetwork.nat?.outboundInterface || "",
     natSubnet: configuredNetwork.nat?.subnet || "",
     natGateway: configuredNetwork.nat?.gateway || "",
-    natPortForwardsJson: formatJsonArray(configuredNetwork.nat?.portForwards),
+    natPortForwards: forwardsToNatForwardDrafts(configuredNetwork.nat?.portForwards),
     kubernetesEnabled: Boolean(configuredKubernetes.enabled),
     kubernetesProfile: configuredKubernetes.profile || "k3s",
     apiServerPort: String(configuredKubernetes.apiServerPort || 6443),
@@ -1681,7 +1712,7 @@ function NetworkEditor({
       allowInternetAccess: configuredNetwork.allowInternetAccess ?? true,
       allowOut: formatList(configuredNetwork.allowOut),
       denyOut: formatList(configuredNetwork.denyOut),
-      rulesJson: formatJsonArray(configuredNetwork.rules),
+      egressRules: rulesToEgressRuleDrafts(configuredNetwork.rules),
       vlanEnabled: Boolean(configuredNetwork.vlan?.enabled),
       vlanId: configuredNetwork.vlan?.vlanId ? String(configuredNetwork.vlan.vlanId) : "",
       vlanHostInterface: configuredNetwork.vlan?.hostInterface || "",
@@ -1691,7 +1722,7 @@ function NetworkEditor({
       natOutboundInterface: configuredNetwork.nat?.outboundInterface || "",
       natSubnet: configuredNetwork.nat?.subnet || "",
       natGateway: configuredNetwork.nat?.gateway || "",
-      natPortForwardsJson: formatJsonArray(configuredNetwork.nat?.portForwards),
+      natPortForwards: forwardsToNatForwardDrafts(configuredNetwork.nat?.portForwards),
       kubernetesEnabled: Boolean(configuredKubernetes.enabled),
       kubernetesProfile: configuredKubernetes.profile || "k3s",
       apiServerPort: String(configuredKubernetes.apiServerPort || 6443),
@@ -1725,7 +1756,7 @@ function NetworkEditor({
               allowInternetAccess: form.allowInternetAccess,
               allowOut: parseCsv(form.allowOut),
               denyOut: parseCsv(form.denyOut),
-              rules: parseJsonArray(form.rulesJson, "egress rules"),
+              rules: egressRuleDraftsToRules(form.egressRules),
               vlan: {
                 enabled: form.vlanEnabled,
                 vlanId: form.vlanId ? Number(form.vlanId) : null,
@@ -1738,7 +1769,7 @@ function NetworkEditor({
                 outboundInterface: form.natOutboundInterface,
                 subnet: form.natSubnet,
                 gateway: form.natGateway,
-                portForwards: parseJsonArray(form.natPortForwardsJson, "NAT port forwards")
+                portForwards: natForwardDraftsToForwards(form.natPortForwards)
               }
             },
             {
@@ -1848,8 +1879,10 @@ function NetworkEditor({
               </span>
             </label>
           </div>
-          <label>NAT forwards JSON</label>
-          <textarea value={form.natPortForwardsJson} onChange={(event) => setForm({ ...form, natPortForwardsJson: event.target.value })} placeholder='[{"name":"ssh","protocol":"tcp","hostPort":2222,"sandboxPort":22}]' />
+          <NatForwardEditor
+            forwards={form.natPortForwards}
+            onChange={(natPortForwards) => setForm({ ...form, natPortForwards })}
+          />
         </>
       ) : null}
       <div className="togglePair">
@@ -1909,12 +1942,208 @@ function NetworkEditor({
           </div>
         </div>
       ) : null}
-      <label>Egress rules JSON</label>
-      <textarea value={form.rulesJson} onChange={(event) => setForm({ ...form, rulesJson: event.target.value })} placeholder='[{"name":"allow-api","match":{"host":"api.example.com"},"action":{"allow":true}}]' />
+      <EgressRuleEditor
+        rules={form.egressRules}
+        onChange={(egressRules) => setForm({ ...form, egressRules })}
+      />
       {error ? <div className="fieldError">{error}</div> : null}
       <button className="primary" disabled={busy} type="submit">Save network</button>
       <div className="sectionEmpty inlineNote">VLAN and NAT bridge settings are stored as KakuriZai tap metadata unless the installed CubeSandbox runtime consumes the matching annotations.</div>
     </form>
+  );
+}
+
+function NatForwardEditor({ forwards, onChange }: { forwards: NatForwardDraft[]; onChange: (forwards: NatForwardDraft[]) => void }) {
+  function update(index: number, patch: Partial<NatForwardDraft>) {
+    onChange(forwards.map((forward, forwardIndex) => forwardIndex === index ? { ...forward, ...patch } : forward));
+  }
+
+  function add() {
+    onChange([...forwards, emptyNatForwardDraft(forwards.length)]);
+  }
+
+  function remove(index: number) {
+    onChange(forwards.filter((_, forwardIndex) => forwardIndex !== index));
+  }
+
+  return (
+    <div className="structuredEditor">
+      <div className="fieldHeader">
+        <label>NAT forwards</label>
+        <button className="ghost smallButton" type="button" onClick={add}>
+          <Plus size={14} />
+          Add
+        </button>
+      </div>
+      {forwards.length ? forwards.map((forward, index) => (
+        <div className="structuredRow" key={index}>
+          <div className="fieldHeader">
+            <strong>{forward.name || `forward-${index + 1}`}</strong>
+            <button className="iconButton dangerIcon" type="button" onClick={() => remove(index)} title="Remove forward">
+              <Trash2 size={15} />
+            </button>
+          </div>
+          <div className="splitFields">
+            <div>
+              <label>Name</label>
+              <input value={forward.name} onChange={(event) => update(index, { name: event.target.value })} placeholder={`forward-${index + 1}`} />
+            </div>
+            <div>
+              <label>Protocol</label>
+              <select value={forward.protocol} onChange={(event) => update(index, { protocol: event.target.value })}>
+                <option value="tcp">tcp</option>
+                <option value="udp">udp</option>
+              </select>
+            </div>
+          </div>
+          <div className="splitFields">
+            <div>
+              <label>Listen address</label>
+              <input value={forward.listenAddress} onChange={(event) => update(index, { listenAddress: event.target.value })} placeholder="0.0.0.0" />
+            </div>
+            <div>
+              <label>Host port</label>
+              <input inputMode="numeric" value={forward.hostPort} onChange={(event) => update(index, { hostPort: event.target.value })} placeholder="2222" />
+            </div>
+          </div>
+          <div className="splitFields">
+            <div>
+              <label>Sandbox port</label>
+              <input inputMode="numeric" value={forward.sandboxPort} onChange={(event) => update(index, { sandboxPort: event.target.value })} placeholder="22" />
+            </div>
+            <div>
+              <label>Target address</label>
+              <input value={forward.targetAddress} onChange={(event) => update(index, { targetAddress: event.target.value })} placeholder="sandbox IP" />
+            </div>
+          </div>
+        </div>
+      )) : <div className="sectionEmpty inlineNote">No NAT forwards configured.</div>}
+    </div>
+  );
+}
+
+function EgressRuleEditor({ rules, onChange }: { rules: EgressRuleDraft[]; onChange: (rules: EgressRuleDraft[]) => void }) {
+  function update(index: number, patch: Partial<EgressRuleDraft>) {
+    onChange(rules.map((rule, ruleIndex) => ruleIndex === index ? { ...rule, ...patch } : rule));
+  }
+
+  function add() {
+    onChange([...rules, emptyEgressRuleDraft(rules.length)]);
+  }
+
+  function remove(index: number) {
+    onChange(rules.filter((_, ruleIndex) => ruleIndex !== index));
+  }
+
+  function updateInject(ruleIndex: number, injectIndex: number, patch: Partial<EgressInjectDraft>) {
+    const rule = rules[ruleIndex];
+    const injects = rule.injects.map((inject, current) => current === injectIndex ? { ...inject, ...patch } : inject);
+    update(ruleIndex, { injects });
+  }
+
+  function addInject(ruleIndex: number) {
+    const rule = rules[ruleIndex];
+    update(ruleIndex, { injects: [...rule.injects, emptyEgressInjectDraft()] });
+  }
+
+  function removeInject(ruleIndex: number, injectIndex: number) {
+    const rule = rules[ruleIndex];
+    update(ruleIndex, { injects: rule.injects.filter((_, current) => current !== injectIndex) });
+  }
+
+  return (
+    <div className="structuredEditor">
+      <div className="fieldHeader">
+        <label>Egress rules</label>
+        <button className="ghost smallButton" type="button" onClick={add}>
+          <Plus size={14} />
+          Add
+        </button>
+      </div>
+      {rules.length ? rules.map((rule, index) => (
+        <div className="structuredRow" key={index}>
+          <div className="fieldHeader">
+            <strong>{rule.name || `rule-${index + 1}`}</strong>
+            <button className="iconButton dangerIcon" type="button" onClick={() => remove(index)} title="Remove rule">
+              <Trash2 size={15} />
+            </button>
+          </div>
+          <div className="splitFields">
+            <div>
+              <label>Name</label>
+              <input value={rule.name} onChange={(event) => update(index, { name: event.target.value })} placeholder={`rule-${index + 1}`} />
+            </div>
+            <label className="checkRow compactCheck inlineCheck">
+              <input type="checkbox" checked={rule.allow} onChange={(event) => update(index, { allow: event.target.checked })} />
+              <span>
+                <strong>Allow</strong>
+                <small>Uncheck to block</small>
+              </span>
+            </label>
+          </div>
+          <div className="splitFields">
+            <div>
+              <label>Host</label>
+              <input value={rule.host} onChange={(event) => update(index, { host: event.target.value })} placeholder="api.example.com" />
+            </div>
+            <div>
+              <label>SNI</label>
+              <input value={rule.sni} onChange={(event) => update(index, { sni: event.target.value })} placeholder="api.example.com" />
+            </div>
+          </div>
+          <div className="splitFields">
+            <div>
+              <label>Methods</label>
+              <input value={rule.methods} onChange={(event) => update(index, { methods: event.target.value })} placeholder="GET,POST" />
+            </div>
+            <div>
+              <label>Scheme</label>
+              <select value={rule.scheme} onChange={(event) => update(index, { scheme: event.target.value })}>
+                <option value="">any</option>
+                <option value="http">http</option>
+                <option value="https">https</option>
+              </select>
+            </div>
+          </div>
+          <div className="splitFields">
+            <div>
+              <label>Path</label>
+              <input value={rule.path} onChange={(event) => update(index, { path: event.target.value })} placeholder="/v1/*" />
+            </div>
+            <div>
+              <label>Audit</label>
+              <input value={rule.audit} onChange={(event) => update(index, { audit: event.target.value })} placeholder="log" />
+            </div>
+          </div>
+          <div className="fieldHeader nestedHeader">
+            <label>Header injections</label>
+            <button className="ghost smallButton" type="button" onClick={() => addInject(index)}>
+              <Plus size={14} />
+              Add
+            </button>
+          </div>
+          {rule.injects.length ? rule.injects.map((inject, injectIndex) => (
+            <div className="splitFields compactFields" key={injectIndex}>
+              <div>
+                <label>Header</label>
+                <input value={inject.header} onChange={(event) => updateInject(index, injectIndex, { header: event.target.value })} placeholder="Authorization" />
+              </div>
+              <div>
+                <label>Secret</label>
+                <input value={inject.secret} onChange={(event) => updateInject(index, injectIndex, { secret: event.target.value })} placeholder="secret ref" />
+              </div>
+              <div>
+                <label>Format</label>
+                <input value={inject.format} onChange={(event) => updateInject(index, injectIndex, { format: event.target.value })} placeholder="Bearer {secret}" />
+              </div>
+              <button className="iconButton dangerIcon fieldAlignedButton" type="button" onClick={() => removeInject(index, injectIndex)} title="Remove injection">
+                <Trash2 size={15} />
+              </button>
+            </div>
+          )) : null}
+        </div>
+      )) : <div className="sectionEmpty inlineNote">No L7 egress rules configured.</div>}
+    </div>
   );
 }
 
@@ -2368,10 +2597,6 @@ function formatList(value?: Array<string | number> | string | null) {
   return String(value);
 }
 
-function formatJsonArray(value?: unknown[] | null) {
-  return JSON.stringify(value || [], null, 2);
-}
-
 function maxSizeLabel(values: Array<string | null | undefined>) {
   let best = "";
   for (const value of values) {
@@ -2424,20 +2649,136 @@ function parsePortList(value: string) {
   });
 }
 
-function parseJsonArray(value: string, name: string) {
-  const trimmed = String(value || "").trim();
-  if (!trimmed) return [];
-  const parsed = JSON.parse(trimmed);
-  if (!Array.isArray(parsed)) throw new Error(`${name} must be a JSON array`);
-  return parsed;
-}
-
 function parsePortAnnotation(value?: string | null) {
   if (!value) return [];
   return String(value)
     .split(/[: ,]+/)
     .map((item) => Number(item))
     .filter((port) => Number.isInteger(port) && port > 0 && port <= 65535);
+}
+
+function emptyNatForwardDraft(index: number): NatForwardDraft {
+  return {
+    name: "",
+    protocol: "tcp",
+    listenAddress: "",
+    hostPort: "",
+    sandboxPort: "",
+    targetAddress: ""
+  };
+}
+
+function forwardsToNatForwardDrafts(value?: PortForwardConfig[] | null): NatForwardDraft[] {
+  return (value || []).map((forward, index) => ({
+    name: String(forward.name || `forward-${index + 1}`),
+    protocol: String(forward.protocol || "tcp"),
+    listenAddress: String(forward.listenAddress || ""),
+    hostPort: forward.hostPort == null ? "" : String(forward.hostPort),
+    sandboxPort: forward.sandboxPort == null ? "" : String(forward.sandboxPort),
+    targetAddress: String(forward.targetAddress || "")
+  }));
+}
+
+function natForwardDraftsToForwards(drafts: NatForwardDraft[]): PortForwardConfig[] {
+  return drafts.filter(hasNatForwardDraftContent).map((draft, index) => ({
+    name: draft.name.trim() || `forward-${index + 1}`,
+    protocol: draft.protocol || "tcp",
+    ...(draft.listenAddress.trim() ? { listenAddress: draft.listenAddress.trim() } : {}),
+    hostPort: parseRequiredPort(draft.hostPort, "NAT host port"),
+    sandboxPort: parseRequiredPort(draft.sandboxPort, "NAT sandbox port"),
+    ...(draft.targetAddress.trim() ? { targetAddress: draft.targetAddress.trim() } : {})
+  }));
+}
+
+function hasNatForwardDraftContent(draft: NatForwardDraft) {
+  return [draft.name, draft.listenAddress, draft.hostPort, draft.sandboxPort, draft.targetAddress]
+    .some((value) => String(value || "").trim()) || draft.protocol !== "tcp";
+}
+
+function emptyEgressInjectDraft(): EgressInjectDraft {
+  return { header: "", secret: "", format: "" };
+}
+
+function emptyEgressRuleDraft(index: number): EgressRuleDraft {
+  return {
+    name: "",
+    sni: "",
+    host: "",
+    methods: "",
+    path: "",
+    scheme: "",
+    allow: true,
+    audit: "",
+    injects: []
+  };
+}
+
+function rulesToEgressRuleDrafts(value?: EgressRule[] | null): EgressRuleDraft[] {
+  return (value || []).map((rule, index) => {
+    const source = rule as {
+      name?: string;
+      match?: { sni?: string; host?: string; method?: string[]; methods?: string[]; path?: string; scheme?: string };
+      action?: { allow?: boolean; audit?: string; inject?: EgressInjectDraft[] };
+    };
+    return {
+      name: String(source.name || `rule-${index + 1}`),
+      sni: String(source.match?.sni || ""),
+      host: String(source.match?.host || ""),
+      methods: formatList(source.match?.method || source.match?.methods || []),
+      path: String(source.match?.path || ""),
+      scheme: String(source.match?.scheme || ""),
+      allow: source.action?.allow !== false,
+      audit: String(source.action?.audit || ""),
+      injects: (source.action?.inject || []).map((inject) => ({
+        header: String(inject.header || ""),
+        secret: String(inject.secret || ""),
+        format: String(inject.format || "")
+      }))
+    };
+  });
+}
+
+function egressRuleDraftsToRules(drafts: EgressRuleDraft[]): EgressRule[] {
+  return drafts.filter(hasEgressRuleDraftContent).map((draft, index) => {
+    const match = {
+      ...(draft.sni.trim() ? { sni: draft.sni.trim() } : {}),
+      ...(draft.host.trim() ? { host: draft.host.trim() } : {}),
+      ...(parseCsv(draft.methods).length ? { method: parseCsv(draft.methods) } : {}),
+      ...(draft.path.trim() ? { path: draft.path.trim() } : {}),
+      ...(draft.scheme.trim() ? { scheme: draft.scheme.trim() } : {})
+    };
+    const inject = draft.injects
+      .map((item) => ({
+        header: item.header.trim(),
+        secret: item.secret.trim(),
+        ...(item.format.trim() ? { format: item.format.trim() } : {})
+      }))
+      .filter((item) => item.header && item.secret);
+    return {
+      name: draft.name.trim() || `rule-${index + 1}`,
+      ...(Object.keys(match).length ? { match } : {}),
+      action: {
+        allow: draft.allow,
+        ...(draft.audit.trim() ? { audit: draft.audit.trim() } : {}),
+        ...(inject.length ? { inject } : {})
+      }
+    };
+  });
+}
+
+function hasEgressRuleDraftContent(draft: EgressRuleDraft) {
+  return !draft.allow
+    || [draft.name, draft.sni, draft.host, draft.methods, draft.path, draft.scheme, draft.audit]
+      .some((value) => String(value || "").trim())
+    || draft.injects.some((inject) => [inject.header, inject.secret, inject.format].some((value) => String(value || "").trim()));
+}
+
+function parseRequiredPort(value: string, name: string) {
+  const port = Number(String(value || "").trim());
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`${name} must be a TCP/UDP port between 1 and 65535`);
+  }
+  return port;
 }
 
 function ensureLaunchMounts(mounts?: LaunchMount[]) {

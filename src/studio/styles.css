@@ -939,6 +939,42 @@ label {
   justify-self: start;
 }
 
+.structuredEditor {
+  display: grid;
+  gap: 10px;
+}
+
+.structuredRow {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #111217;
+  padding: 10px;
+}
+
+.structuredRow > .fieldHeader:first-child {
+  margin-bottom: 2px;
+}
+
+.structuredRow .fieldHeader strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #ededf0;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nestedHeader {
+  margin-top: 2px;
+}
+
+.fieldAlignedButton {
+  align-self: end;
+  margin-bottom: 1px;
+}
+
 .probeToolbar {
   min-width: 0;
   display: flex;
