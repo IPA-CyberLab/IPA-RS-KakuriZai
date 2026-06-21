@@ -76,13 +76,13 @@ Studio can create and edit the TAP network settings stored on each sandbox:
 - internet egress, allow/deny CIDRs, and L7 egress rules
 - NAT metadata, masquerade mode, outbound interface, subnet/gateway, and port-forward definitions
 - VLAN metadata for host-side bridge integrations
-- Kubernetes lab profile, cluster name, node role, node name, CIDRs, CNI, join endpoint/token, API server port, node ports, extra args, and required sysctls
+- Kubernetes lab profile, cluster name, node role, node name, CIDRs, CNI, join endpoint/token, API server port, node ports, extra args, and editable sysctls
 
 CubeSandbox OSS accepts `network_type=tap`, exposed ports, DNS config, and `cube_network_config` egress policy directly. NAT and VLAN bridge settings are persisted as KakuriZai annotations so host-side integrations or future CubeSandbox plugins can consume them.
 
 Studio also includes a network probe action. It builds a sandbox-to-sandbox reachability plan from CubeSandbox runtime IPs, then can execute ICMP/TCP checks from each provisioned sandbox and render reachable, blocked, and unknown paths in the Network view.
 
-For multi-sandbox Kubernetes experiments, use the Studio action menu's `Create K8s Lab` flow to create a batch of control-plane and worker sandboxes with shared TAP egress policy, exposed API/node ports, CNI, pod/service CIDRs, join token, and extra kubelet/runtime args. The generated worlds are named from the lab prefix, for example `demo-cp-1` and `demo-worker-1`, and carry `kakurizai.lab` plus `kakurizai.kubernetes.*` annotations and labels for runtime bootstrappers or host-side automation.
+For multi-sandbox Kubernetes experiments, use the Studio action menu's `Create K8s Lab` flow to create a batch of control-plane and worker sandboxes with shared TAP egress policy, exposed API/node ports, CNI, pod/service CIDRs, join token, sysctls, and extra kubelet/runtime args. The generated worlds are named from the lab prefix, for example `demo-cp-1` and `demo-worker-1`, and carry `kakurizai.lab` plus `kakurizai.kubernetes.*` annotations and labels for runtime bootstrappers or host-side automation.
 
 You can also compose a lab manually by using the same cluster name across sandboxes and setting each sandbox role to `control-plane`, `worker`, or `standalone`.
 

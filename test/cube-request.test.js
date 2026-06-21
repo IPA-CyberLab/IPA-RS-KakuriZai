@@ -240,7 +240,11 @@ test("cube request carries network, DNS, and Kubernetes lab settings", async () 
         joinToken: "token-123",
         extraArgs: ["--disable=traefik"],
         apiServerPort: 6443,
-        nodePorts: [30000]
+        nodePorts: [30000],
+        sysctls: {
+          "net.ipv4.ip_forward": "1",
+          "net.ipv4.conf.all.route_localnet": "1"
+        }
       }
     }
   });
@@ -271,6 +275,7 @@ test("cube request carries network, DNS, and Kubernetes lab settings", async () 
   assert.match(request.containers[0].dns_config.searches.join(","), /cluster\.local/);
   assert.equal(request.containers[0].security_context.privileged, true);
   assert.equal(request.containers[0].sysctls["net.ipv4.ip_forward"], "1");
+  assert.equal(request.containers[0].sysctls["net.ipv4.conf.all.route_localnet"], "1");
 });
 
 test("cube request carries TAP NAT, VLAN, forward, and L7 egress settings", async () => {

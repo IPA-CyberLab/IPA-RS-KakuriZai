@@ -24,6 +24,10 @@ test("creates a multi-node Kubernetes lab with shared cluster metadata", async (
     apiServerPort: 6443,
     nodePorts: [30080],
     joinToken: "token-123",
+    sysctls: {
+      "net.ipv4.ip_forward": "1",
+      "net.ipv4.conf.all.route_localnet": "1"
+    },
     network: {
       allowInternetAccess: false,
       denyOut: ["10.0.0.0/8"]
@@ -48,6 +52,7 @@ test("creates a multi-node Kubernetes lab with shared cluster metadata", async (
   assert.equal(worker.backendConfig.kubernetes.nodeRole, "worker");
   assert.equal(worker.backendConfig.kubernetes.joinEndpoint, "https://demo-lab-cp-1:6443");
   assert.equal(worker.backendConfig.kubernetes.joinToken, "token-123");
+  assert.equal(worker.backendConfig.kubernetes.sysctls["net.ipv4.conf.all.route_localnet"], "1");
   assert.equal(worker.labels["kakurizai.lab"], "demo-lab");
   assert.equal(worker.labels["kakurizai.kubernetes.nodeRole"], "worker");
 });

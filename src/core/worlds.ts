@@ -265,6 +265,7 @@ function kubernetesNodeConfig(input, defaults) {
     joinToken: input.joinToken || input.kubernetes?.joinToken,
     advertiseAddress: input.advertiseAddress || input.kubernetes?.advertiseAddress,
     extraArgs: input.extraArgs || input.kubernetes?.extraArgs,
+    sysctls: input.sysctls || input.kubernetes?.sysctls,
     apiServerPort: defaults.apiServerPort,
     nodePorts: defaults.nodePorts
   });

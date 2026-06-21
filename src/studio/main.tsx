@@ -208,6 +208,7 @@ type KubernetesConfig = {
   extraArgs?: string[];
   apiServerPort?: number;
   nodePorts?: number[];
+  sysctls?: Record<string, string>;
 };
 
 type RuntimeSandbox = {
@@ -474,7 +475,8 @@ function App() {
     kubernetesJoinEndpoint: "",
     kubernetesJoinToken: "",
     kubernetesAdvertiseAddress: "",
-    kubernetesExtraArgs: ""
+    kubernetesExtraArgs: "",
+    kubernetesSysctls: defaultKubernetesSysctlsText()
   });
   const [lab, setLab] = React.useState({
     name: "kakurizai-lab",
@@ -491,6 +493,7 @@ function App() {
     nodePorts: "30000,30001",
     joinToken: "",
     extraArgs: "--disable=traefik",
+    sysctls: defaultKubernetesSysctlsText(),
     allowInternetAccess: true,
     denyOut: "10.0.0.0/8,100.64.0.0/10,172.16.0.0/12,192.168.0.0/18"
   });
@@ -712,7 +715,8 @@ function App() {
             joinEndpoint: launch.kubernetesJoinEndpoint,
             joinToken: launch.kubernetesJoinToken,
             advertiseAddress: launch.kubernetesAdvertiseAddress,
-            extraArgs: parseLines(launch.kubernetesExtraArgs)
+            extraArgs: parseLines(launch.kubernetesExtraArgs),
+            sysctls: parseKeyValueLines(launch.kubernetesSysctls)
           }
         }
       });
@@ -753,6 +757,7 @@ function App() {
           nodePorts: parsePortList(lab.nodePorts),
           joinToken: lab.joinToken,
           extraArgs: parseLines(lab.extraArgs),
+          sysctls: parseKeyValueLines(lab.sysctls),
           network: {
             type: "tap",
             mode: "tap",
@@ -1277,6 +1282,8 @@ function App() {
               </div>
               <label>Extra args</label>
               <textarea value={launch.kubernetesExtraArgs} onChange={(event) => setLaunch({ ...launch, kubernetesExtraArgs: event.target.value })} placeholder="--disable=traefik" />
+              <label>Sysctls</label>
+              <textarea value={launch.kubernetesSysctls} onChange={(event) => setLaunch({ ...launch, kubernetesSysctls: event.target.value })} placeholder="net.ipv4.ip_forward=1" />
             </div>
           ) : null}
 
@@ -1396,6 +1403,9 @@ function App() {
 
           <label>Extra args</label>
           <textarea value={lab.extraArgs} onChange={(event) => setLab({ ...lab, extraArgs: event.target.value })} placeholder="--disable=traefik" />
+
+          <label>Sysctls</label>
+          <textarea value={lab.sysctls} onChange={(event) => setLab({ ...lab, sysctls: event.target.value })} placeholder="net.ipv4.ip_forward=1" />
 
           <div className="toggleRow">
             <label className="checkRow">
@@ -1594,6 +1604,7 @@ function App() {
                   <Metric label="K8s node" value={selected.world?.backendConfig?.kubernetes?.enabled ? selected.world.backendConfig.kubernetes.nodeName || selected.name : "-"} />
                   <Metric label="K8s CIDRs" value={selected.world?.backendConfig?.kubernetes?.enabled ? `${selected.world.backendConfig.kubernetes.podCidr || "-"} / ${selected.world.backendConfig.kubernetes.serviceCidr || "-"}` : "-"} />
                   <Metric label="K8s join" value={selected.world?.backendConfig?.kubernetes?.enabled ? selected.world.backendConfig.kubernetes.joinEndpoint || "-" : "-"} />
+                  <Metric label="K8s sysctls" value={selected.world?.backendConfig?.kubernetes?.enabled ? formatSysctls(selected.world.backendConfig.kubernetes.sysctls) : "-"} />
                 </div>
                 <ConnectivityMatrix rows={inventory} cube={cube} probe={networkProbe} />
                 <PortTable ports={selected.runtime?.portMappings || []} />
@@ -2012,6 +2023,7 @@ function NetworkEditor({
     kubernetesJoinToken: configuredKubernetes.joinToken || "",
     kubernetesAdvertiseAddress: configuredKubernetes.advertiseAddress || "",
     kubernetesExtraArgs: formatLines(configuredKubernetes.extraArgs),
+    kubernetesSysctls: formatKeyValueLines(configuredKubernetes.sysctls || defaultKubernetesSysctls()),
     apiServerPort: String(configuredKubernetes.apiServerPort || 6443),
     nodePorts: formatList(configuredKubernetes.nodePorts)
   });
@@ -2050,6 +2062,7 @@ function NetworkEditor({
       kubernetesJoinToken: configuredKubernetes.joinToken || "",
       kubernetesAdvertiseAddress: configuredKubernetes.advertiseAddress || "",
       kubernetesExtraArgs: formatLines(configuredKubernetes.extraArgs),
+      kubernetesSysctls: formatKeyValueLines(configuredKubernetes.sysctls || defaultKubernetesSysctls()),
       apiServerPort: String(configuredKubernetes.apiServerPort || 6443),
       nodePorts: formatList(configuredKubernetes.nodePorts)
     });
@@ -2111,7 +2124,8 @@ function NetworkEditor({
               advertiseAddress: form.kubernetesAdvertiseAddress,
               extraArgs: parseLines(form.kubernetesExtraArgs),
               apiServerPort: Number(form.apiServerPort || 6443),
-              nodePorts: parsePortList(form.nodePorts)
+              nodePorts: parsePortList(form.nodePorts),
+              sysctls: parseKeyValueLines(form.kubernetesSysctls)
             }
           );
         } catch (nextError) {
@@ -2334,6 +2348,8 @@ function NetworkEditor({
           </div>
           <label>Extra args</label>
           <textarea value={form.kubernetesExtraArgs} onChange={(event) => setForm({ ...form, kubernetesExtraArgs: event.target.value })} placeholder="--disable=traefik" />
+          <label>Sysctls</label>
+          <textarea value={form.kubernetesSysctls} onChange={(event) => setForm({ ...form, kubernetesSysctls: event.target.value })} placeholder="net.ipv4.ip_forward=1" />
         </div>
       ) : null}
       <EgressRuleEditor
@@ -2967,6 +2983,11 @@ function formatKubernetesNode(value?: KubernetesConfig | null) {
   ].join("/");
 }
 
+function formatSysctls(value?: Record<string, string> | null) {
+  if (!value || !Object.keys(value).length) return "-";
+  return Object.entries(value).map(([key, sysctlValue]) => `${key}=${sysctlValue}`).join(",");
+}
+
 function probeLabel(edge: ProbeEdge) {
   if (edge.reachable === true) return "reachable";
   if (edge.reachable === false) return "blocked";
@@ -3004,6 +3025,23 @@ function formatLines(value?: Array<string | number> | string | null) {
   if (!value) return "";
   if (Array.isArray(value)) return value.join("\n");
   return String(value);
+}
+
+function formatKeyValueLines(value?: Record<string, string> | null) {
+  if (!value) return "";
+  return Object.entries(value).map(([key, nextValue]) => `${key}=${nextValue}`).join("\n");
+}
+
+function defaultKubernetesSysctls() {
+  return {
+    "net.ipv4.ip_forward": "1",
+    "net.bridge.bridge-nf-call-iptables": "1",
+    "net.bridge.bridge-nf-call-ip6tables": "1"
+  };
+}
+
+function defaultKubernetesSysctlsText() {
+  return formatKeyValueLines(defaultKubernetesSysctls());
 }
 
 function maxSizeLabel(values: Array<string | null | undefined>) {
@@ -3053,6 +3091,21 @@ function parseLines(value: string) {
     .split(/\r?\n/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function parseKeyValueLines(value: string) {
+  const result: Record<string, string> = {};
+  for (const rawLine of String(value || "").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const separator = line.indexOf("=");
+    if (separator <= 0) throw new Error(`Invalid key=value line: ${line}`);
+    const key = line.slice(0, separator).trim();
+    const nextValue = line.slice(separator + 1).trim();
+    if (!key || !nextValue) throw new Error(`Invalid key=value line: ${line}`);
+    result[key] = nextValue;
+  }
+  return result;
 }
 
 function parsePortList(value: string) {
