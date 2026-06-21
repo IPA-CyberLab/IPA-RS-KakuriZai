@@ -29,6 +29,7 @@ Every Studio operation has a CLI equivalent:
 | Studio operation | CLI |
 | --- | --- |
 | Create sandbox | `agctl create --source <folder> --name <name> --backend cube-sandbox-overlay` |
+| Create K8s Lab | `agctl lab kubernetes --name <name> --control-planes 1 --workers 2` |
 | Refresh/list sandboxes | `agctl list` or `agctl list --json` |
 | Select/show details | `agctl show <sandbox>` or `agctl show <sandbox> --json` |
 | File button | `agctl file <sandbox>` or `agctl open <sandbox> file` |
@@ -38,7 +39,7 @@ Every Studio operation has a CLI equivalent:
 | Apply button | `agctl apply <sandbox>` |
 | Remove button | `agctl remove <sandbox>` with interactive confirmation, or `agctl remove <sandbox> --yes` |
 
-Automation can use `--json` on `list`, `show`, `changed`, `apply`, and `remove`.
+Automation can use `--json` on `list`, `show`, `changed`, `apply`, `lab kubernetes`, and `remove`.
 
 ## Authentication
 

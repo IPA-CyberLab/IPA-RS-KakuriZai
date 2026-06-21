@@ -17,6 +17,7 @@ import {
 import {
   applyWorld,
   changedPaths,
+  createKubernetesLab,
   createWorld,
   execWorld,
   getWorld,
@@ -48,6 +49,8 @@ export async function main(argv) {
   }
   if (command === "changed") return changed(config, argv.slice(1));
   if (command === "apply") return apply(config, argv.slice(1));
+  if (command === "lab") return lab(config, argv.slice(1));
+  if (command === "k8s-lab") return kubernetesLab(config, argv.slice(1));
   if (command === "export" || command === "manifest") return manifest(config, argv.slice(1));
   if (command === "terraform") return terraform(config, argv.slice(1));
   if (command === "auth") return auth(config, argv.slice(1));
@@ -64,6 +67,7 @@ function help() {
 Sandbox commands:
   agctl create --source <folder> --name <name> [--backend cube-sandbox-overlay]
   agctl create --name <name> --no-host-mount [--network tap] [--expose-port 6443]
+  agctl lab kubernetes --name <name> [--control-planes 1] [--workers 2] [--json]
   agctl apply -f sandbox.yaml [--json]
   agctl export <sandbox> --yaml
   agctl terraform export <sandbox|--file sandbox.yaml> --out ./terraform
@@ -78,6 +82,7 @@ Sandbox commands:
   agctl shell <sandbox>
   agctl changed <sandbox> [--json]
   agctl apply <sandbox> [--dry-run] [--json]
+  agctl lab kubernetes --name <name> [--json]
   agctl pause <sandbox> [--json]
   agctl resume <sandbox> [--json]
   agctl remove <sandbox> --yes
@@ -246,6 +251,62 @@ async function applyManifest(config, file, args) {
   console.log(`${result.action} ${result.world.name}`);
 }
 
+async function lab(config, args) {
+  const subcommand = args.shift();
+  if (subcommand === "kubernetes" || subcommand === "k8s") return kubernetesLab(config, args);
+  throw new Error("lab supports: kubernetes");
+}
+
+async function kubernetesLab(config, args) {
+  const name = takeOption(args, "--name") || takeOption(args, "-n");
+  if (!name) throw new Error("lab kubernetes requires --name");
+  const controlPlanes = takeOption(args, "--control-planes") || takeOption(args, "--control-plane-count");
+  const workers = takeOption(args, "--workers") || takeOption(args, "--worker-count");
+  const writableLayerSize = takeOption(args, "--writable-layer-size") || takeOption(args, "--disk");
+  const apiServerPort = takeOption(args, "--api-server-port");
+  const nodePorts = [
+    ...splitOptionValues(takeRepeatedOption(args, "--node-port")),
+    ...splitOptionValues(takeRepeatedOption(args, "--node-ports"))
+  ];
+  const allowInternet = takeOption(args, "--allow-internet-access");
+  const result = await createKubernetesLab(config, {
+    name,
+    controlPlanes: controlPlanes == null ? undefined : Number(controlPlanes),
+    workers: workers == null ? undefined : Number(workers),
+    cpu: takeOption(args, "--cpu") || undefined,
+    memory: takeOption(args, "--memory") || undefined,
+    writableLayerSize: writableLayerSize || undefined,
+    profile: takeOption(args, "--profile") || undefined,
+    cni: takeOption(args, "--cni") || undefined,
+    podCidr: takeOption(args, "--pod-cidr") || undefined,
+    serviceCidr: takeOption(args, "--service-cidr") || undefined,
+    apiServerPort: apiServerPort == null ? undefined : Number(apiServerPort),
+    nodePorts: nodePorts.length ? nodePorts.map(Number) : undefined,
+    joinToken: takeOption(args, "--join-token") || undefined,
+    joinEndpoint: takeOption(args, "--join-endpoint") || undefined,
+    extraArgs: [
+      ...takeRepeatedOption(args, "--extra-arg"),
+      ...splitOptionValues(takeRepeatedOption(args, "--extra-args"))
+    ],
+    sysctls: parseKeyValueOptions(takeRepeatedOption(args, "--sysctl")),
+    network: {
+      type: "tap",
+      mode: takeOption(args, "--network-mode") || "tap",
+      ...(allowInternet == null ? {} : { allowInternetAccess: parseBooleanOption(allowInternet) }),
+      allowOut: splitOptionValues(takeRepeatedOption(args, "--allow-out-cidr")),
+      denyOut: splitOptionValues(takeRepeatedOption(args, "--deny-out-cidr"))
+    }
+  });
+  if (args.includes("--json")) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  console.log(`created Kubernetes lab ${result.lab.name}`);
+  for (const world of result.worlds) {
+    console.log(`${world.name}\t${world.status}\t${world.sandbox?.id || world.sandbox?.status || "none"}`);
+  }
+}
+
 async function manifest(config, args) {
   const ref = args.find((arg) => !arg.startsWith("-"));
   if (!ref) throw new Error("export requires a sandbox name or id");
@@ -353,6 +414,26 @@ function takeFlag(args, name) {
   if (index < 0) return false;
   args.splice(index, 1);
   return true;
+}
+
+function splitOptionValues(values) {
+  return values
+    .flatMap((value) => String(value || "").split(/[,\n\s]+/))
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function parseKeyValueOptions(values) {
+  const result = {};
+  for (const item of values) {
+    const separator = String(item || "").indexOf("=");
+    if (separator <= 0) throw new Error(`expected key=value: ${item}`);
+    const key = String(item).slice(0, separator).trim();
+    const value = String(item).slice(separator + 1).trim();
+    if (!key || !value) throw new Error(`expected key=value: ${item}`);
+    result[key] = value;
+  }
+  return result;
 }
 
 function parseMountOption(value) {

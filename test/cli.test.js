@@ -64,6 +64,7 @@ test("help exposes CLI equivalents for Studio buttons", async () => {
   const result = await runCli(await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-help-")), ["help"]);
   for (const command of [
     "agctl show <sandbox>",
+    "agctl lab kubernetes --name <name>",
     "agctl file <sandbox>",
     "agctl terminal <sandbox>",
     "agctl vscode <sandbox>",
@@ -75,6 +76,38 @@ test("help exposes CLI equivalents for Studio buttons", async () => {
   ]) {
     assert.match(result.stdout, new RegExp(escapeRegExp(command)));
   }
+});
+
+test("cli creates Kubernetes lab batches", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cli-k8s-lab-"));
+  const home = path.join(tmp, "home");
+
+  const created = JSON.parse((await runCli(home, [
+    "lab",
+    "kubernetes",
+    "--name",
+    "cli-lab",
+    "--control-planes",
+    "1",
+    "--workers",
+    "1",
+    "--node-ports",
+    "30080,30081",
+    "--deny-out-cidr",
+    "10.0.0.0/8",
+    "--sysctl",
+    "net.ipv4.conf.all.route_localnet=1",
+    "--json"
+  ])).stdout);
+
+  assert.equal(created.lab.name, "cli-lab");
+  assert.deepEqual(created.worlds.map((world) => world.name), ["cli-lab-cp-1", "cli-lab-worker-1"]);
+  const worker = created.worlds.find((world) => world.name === "cli-lab-worker-1");
+  assert.equal(worker.backendConfig.kubernetes.nodeRole, "worker");
+  assert.equal(worker.backendConfig.kubernetes.joinEndpoint, "https://cli-lab-cp-1:6443");
+  assert.deepEqual(worker.backendConfig.kubernetes.nodePorts, [30080, 30081]);
+  assert.equal(worker.backendConfig.kubernetes.sysctls["net.ipv4.conf.all.route_localnet"], "1");
+  assert.deepEqual(worker.backendConfig.network.denyOut, ["10.0.0.0/8"]);
 });
 
 test("cli applies sandbox yaml and exports terraform bundle", async () => {
