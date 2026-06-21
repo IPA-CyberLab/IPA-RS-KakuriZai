@@ -400,6 +400,7 @@ type InventoryRow = {
 type StateFilter = "all" | "running" | "paused" | "other";
 type AppView = "sandboxes" | "network";
 type ThemeMode = "dark" | "light";
+type DnsPresetKey = "default" | "cloudflare" | "google" | "quad9" | "custom";
 
 const mountModes = [
   {
@@ -419,6 +420,13 @@ const mountModes = [
   }
 ];
 const diskUnits = ["M", "G", "T"] as const;
+const dnsPresets: Array<{ id: DnsPresetKey; label: string; servers: string[]; summary: string }> = [
+  { id: "default", label: "Default", servers: [], summary: "Use CubeSandbox or image default DNS." },
+  { id: "cloudflare", label: "Cloudflare", servers: ["1.1.1.1", "1.0.0.1"], summary: "1.1.1.1, 1.0.0.1" },
+  { id: "google", label: "Google", servers: ["8.8.8.8", "8.8.4.4"], summary: "8.8.8.8, 8.8.4.4" },
+  { id: "quad9", label: "Quad9", servers: ["9.9.9.9", "149.112.112.112"], summary: "9.9.9.9, 149.112.112.112" },
+  { id: "custom", label: "Custom", servers: [], summary: "Set DNS servers, searches, and options." }
+];
 
 function Root() {
   const shellWorldId = shellWorldIdFromLocation();
@@ -1069,19 +1077,12 @@ function App() {
           <label>Sandbox IP</label>
           <input value={launch.sandboxIp} onChange={(event) => setLaunch({ ...launch, sandboxIp: event.target.value })} placeholder="auto, e.g. 192.168.1.50" />
 
-          <div className="splitFields">
-            <div>
-              <label>DNS servers</label>
-              <input value={launch.dnsServers} onChange={(event) => setLaunch({ ...launch, dnsServers: event.target.value })} placeholder="8.8.8.8,1.1.1.1" />
-            </div>
-            <div>
-              <label>DNS searches</label>
-              <input value={launch.dnsSearches} onChange={(event) => setLaunch({ ...launch, dnsSearches: event.target.value })} placeholder="svc.cluster.local,cluster.local" />
-            </div>
-          </div>
-
-          <label>DNS options</label>
-          <input value={launch.dnsOptions} onChange={(event) => setLaunch({ ...launch, dnsOptions: event.target.value })} placeholder="ndots:5" />
+          <DnsSettings
+            servers={launch.dnsServers}
+            searches={launch.dnsSearches}
+            options={launch.dnsOptions}
+            onChange={(next) => setLaunch((current) => ({ ...current, ...next }))}
+          />
 
           <div className="togglePair">
             <div className="networkOptionCard">
@@ -1804,6 +1805,73 @@ function DiskEditor({
   );
 }
 
+function DnsSettings({
+  servers,
+  searches,
+  options,
+  onChange
+}: {
+  servers: string;
+  searches: string;
+  options: string;
+  onChange: (next: { dnsServers: string; dnsSearches: string; dnsOptions: string }) => void;
+}) {
+  const inferredPreset = dnsPresetForDraft(servers, searches, options);
+  const [selectedPresetId, setSelectedPresetId] = React.useState<DnsPresetKey>(inferredPreset);
+  const selectedPreset = dnsPresets.find((candidate) => candidate.id === selectedPresetId) || dnsPresets[0];
+  const isCustom = selectedPresetId === "custom";
+
+  React.useEffect(() => {
+    setSelectedPresetId(inferredPreset);
+  }, [inferredPreset, servers, searches, options]);
+
+  function selectPreset(nextPreset: DnsPresetKey) {
+    const selected = dnsPresets.find((candidate) => candidate.id === nextPreset) || dnsPresets[0];
+    setSelectedPresetId(selected.id);
+    if (selected.id === "custom") {
+      onChange({ dnsServers: servers, dnsSearches: searches, dnsOptions: options });
+      return;
+    }
+    onChange({
+      dnsServers: selected.servers.join(","),
+      dnsSearches: "",
+      dnsOptions: ""
+    });
+  }
+
+  return (
+    <section className="dnsSettingsCard">
+      <div className="dnsSettingsTop">
+        <label>
+          <span>DNS</span>
+          <select value={selectedPresetId} onChange={(event) => selectPreset(event.target.value as DnsPresetKey)}>
+            {dnsPresets.map((candidate) => (
+              <option key={candidate.id} value={candidate.id}>{candidate.label}</option>
+            ))}
+          </select>
+        </label>
+        <small>{isCustom ? customDnsSummary(servers, searches, options) : selectedPreset.summary}</small>
+      </div>
+      {isCustom ? (
+        <div className="dnsCustomFields">
+          <div>
+            <label>Servers</label>
+            <input value={servers} onChange={(event) => onChange({ dnsServers: event.target.value, dnsSearches: searches, dnsOptions: options })} placeholder="8.8.8.8,1.1.1.1" />
+          </div>
+          <div>
+            <label>Search domains</label>
+            <input value={searches} onChange={(event) => onChange({ dnsServers: servers, dnsSearches: event.target.value, dnsOptions: options })} placeholder="svc.cluster.local,cluster.local" />
+          </div>
+          <div>
+            <label>Options</label>
+            <input value={options} onChange={(event) => onChange({ dnsServers: servers, dnsSearches: searches, dnsOptions: event.target.value })} placeholder="ndots:5" />
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function NetworkEditor({
   world,
   runtimeNetworkType,
@@ -1974,18 +2042,12 @@ function NetworkEditor({
       <label>Sandbox IP</label>
       <input value={form.sandboxIp} onChange={(event) => setForm({ ...form, sandboxIp: event.target.value })} placeholder={runtimeSandboxIp || "auto, e.g. 192.168.1.50"} />
 
-      <label>DNS servers</label>
-      <input value={form.dnsServers} onChange={(event) => setForm({ ...form, dnsServers: event.target.value })} placeholder="8.8.8.8,1.1.1.1" />
-      <div className="splitFields">
-        <div>
-          <label>DNS searches</label>
-          <input value={form.dnsSearches} onChange={(event) => setForm({ ...form, dnsSearches: event.target.value })} placeholder="svc.cluster.local,cluster.local" />
-        </div>
-        <div>
-          <label>DNS options</label>
-          <input value={form.dnsOptions} onChange={(event) => setForm({ ...form, dnsOptions: event.target.value })} placeholder="ndots:5" />
-        </div>
-      </div>
+      <DnsSettings
+        servers={form.dnsServers}
+        searches={form.dnsSearches}
+        options={form.dnsOptions}
+        onChange={(next) => setForm((current) => ({ ...current, ...next }))}
+      />
       <div className="togglePair">
         <div className="networkOptionCard">
           <label className="checkRow compactCheck">
@@ -2804,6 +2866,30 @@ function formatLines(value?: Array<string | number> | string | null) {
   if (!value) return "";
   if (Array.isArray(value)) return value.join("\n");
   return String(value);
+}
+
+function dnsPresetForDraft(servers: string, searches: string, options: string): DnsPresetKey {
+  const serverList = parseCsv(servers);
+  if (parseCsv(searches).length || parseCsv(options).length) return "custom";
+  if (!serverList.length) return "default";
+  const match = dnsPresets.find((preset) => {
+    if (preset.id === "default" || preset.id === "custom") return false;
+    return sameStringList(serverList, preset.servers);
+  });
+  return match?.id || "custom";
+}
+
+function customDnsSummary(servers: string, searches: string, options: string) {
+  const parts = [
+    parseCsv(servers).length ? `${parseCsv(servers).length} servers` : "",
+    parseCsv(searches).length ? `${parseCsv(searches).length} searches` : "",
+    parseCsv(options).length ? `${parseCsv(options).length} options` : ""
+  ].filter(Boolean);
+  return parts.length ? parts.join(" / ") : "No custom DNS values.";
+}
+
+function sameStringList(left: string[], right: string[]) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function formatKeyValueLines(value?: Record<string, string> | null) {
