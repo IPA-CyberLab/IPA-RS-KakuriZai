@@ -61,6 +61,92 @@ const PUBLIC_IPV4_CIDRS = [
   "208.0.0.0/4"
 ];
 
+function datapathDropCidrsForNetwork(network = {}) {
+  const dropCidrs = new Set(network.denyOut || []);
+  if (network.allowInternetAccess === false || network.nat?.enabled === false) {
+    for (const cidr of PUBLIC_IPV4_CIDRS) dropCidrs.add(cidr);
+  } else if (network.allowOut?.length) {
+    for (const cidr of ipv4CidrsOutsideAllow(network.allowOut)) dropCidrs.add(cidr);
+  }
+  return [...dropCidrs].filter(Boolean);
+}
+
+function ipv4CidrsOutsideAllow(allowCidrs = []) {
+  const allowRanges = allowCidrs.map(cidrToRange).filter(Boolean);
+  if (!allowRanges.length) return [];
+  let remaining = [{ start: 0, end: 0xffffffff }];
+  for (const allowRange of allowRanges) {
+    remaining = subtractRange(remaining, allowRange);
+  }
+  return remaining.flatMap(rangeToCidrs);
+}
+
+function cidrToRange(cidr) {
+  const [ip, prefixText = "32"] = String(cidr || "").trim().split("/");
+  const base = ipv4ToInt(ip);
+  const prefix = Number(prefixText);
+  if (base === null || !Number.isInteger(prefix) || prefix < 0 || prefix > 32) return null;
+  const size = 2 ** (32 - prefix);
+  const start = Math.floor(base / size) * size;
+  return { start, end: start + size - 1 };
+}
+
+function ipv4ToInt(ip) {
+  const parts = String(ip || "").trim().split(".");
+  if (parts.length !== 4) return null;
+  let value = 0;
+  for (const part of parts) {
+    if (!/^\d+$/.test(part)) return null;
+    const octet = Number(part);
+    if (!Number.isInteger(octet) || octet < 0 || octet > 255) return null;
+    value = value * 256 + octet;
+  }
+  return value;
+}
+
+function subtractRange(ranges, cut) {
+  const next = [];
+  for (const range of ranges) {
+    if (cut.end < range.start || cut.start > range.end) {
+      next.push(range);
+      continue;
+    }
+    if (cut.start > range.start) next.push({ start: range.start, end: cut.start - 1 });
+    if (cut.end < range.end) next.push({ start: cut.end + 1, end: range.end });
+  }
+  return next;
+}
+
+function rangeToCidrs(range) {
+  const cidrs = [];
+  let start = range.start;
+  while (start <= range.end) {
+    let size = lowestAlignedBlockSize(start);
+    const remaining = range.end - start + 1;
+    while (size > remaining) size /= 2;
+    const prefix = 32 - Math.log2(size);
+    cidrs.push(`${intToIpv4(start)}/${prefix}`);
+    start += size;
+  }
+  return cidrs;
+}
+
+function lowestAlignedBlockSize(value) {
+  if (value === 0) return 0x100000000;
+  let size = 1;
+  while (size < 0x100000000 && value % (size * 2) === 0) size *= 2;
+  return size;
+}
+
+function intToIpv4(value) {
+  return [
+    Math.floor(value / 0x1000000) % 256,
+    Math.floor(value / 0x10000) % 256,
+    Math.floor(value / 0x100) % 256,
+    value % 256
+  ].join(".");
+}
+
 export class CubeSandboxClient {
   constructor(config = {}) {
     this.config = config;
@@ -368,11 +454,7 @@ export class CubeSandboxClient {
     const bpftool = resolveSystemCommand(this.config.bpftool || "bpftool", ["/usr/sbin/bpftool", "/sbin/bpftool"]);
     if (!tc || !bpftool) return { skipped: true, reason: "tc or bpftool not found" };
 
-    const dropCidrs = new Set(network.denyOut || []);
-    if (network.allowInternetAccess === false || network.nat?.enabled === false) {
-      for (const cidr of PUBLIC_IPV4_CIDRS) dropCidrs.add(cidr);
-    }
-    const cidrs = [...dropCidrs].filter(Boolean);
+    const cidrs = datapathDropCidrsForNetwork(network);
 
     const startPref = 100;
     const endPref = 249;

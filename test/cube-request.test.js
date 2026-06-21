@@ -494,3 +494,39 @@ test("network config validates NAT forward ports", () => {
     /hostPort/
   );
 });
+
+test("NAT forwards do not force outbound NAT on", async () => {
+  const network = normalizeNetworkConfig({
+    type: "tap",
+    nat: {
+      enabled: false,
+      portForwards: [{ name: "ssh", protocol: "tcp", hostPort: 2222, sandboxPort: 22 }]
+    }
+  });
+  assert.equal(network.nat.enabled, false);
+  assert.deepEqual(network.nat.portForwards, [
+    {
+      name: "ssh",
+      protocol: "tcp",
+      listenAddress: null,
+      hostPort: 2222,
+      sandboxPort: 22,
+      targetAddress: null
+    }
+  ]);
+
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-nat-forward-"));
+  const config = await loadConfig({ home: path.join(tmp, "home"), createSecrets: false });
+  const store = new WorldStore(config);
+  const world = await store.create({
+    name: "forward-only",
+    backend: "cube-sandbox-overlay",
+    backendConfig: {
+      network
+    }
+  });
+  const request = buildCubeSandboxRequest(world, { template: "base" });
+  assert.equal(request.annotations["kakurizai.network.nat.enabled"], "false");
+  assert.equal(request.annotations["kakurizai.network.nat"], undefined);
+  assert.deepEqual(JSON.parse(request.annotations["kakurizai.network.portForwards"]), network.nat.portForwards);
+});

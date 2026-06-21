@@ -72,26 +72,27 @@ export function normalizeKubernetesConfig(input = {}) {
 }
 
 export function normalizeNatConfig(input = {}) {
-  if (!input || input.enabled === false) {
+  const portForwards = normalizePortForwards(input?.portForwards || input?.forwards || []);
+  if (!input) {
     return {
       enabled: false,
       masquerade: false,
       outboundInterface: null,
       subnet: null,
       gateway: null,
-      portForwards: []
+      portForwards
     };
   }
-  const portForwards = normalizePortForwards(input.portForwards || input.forwards || []);
   const outboundInterface = cleanString(input.outboundInterface || input.interface || input.iface || "");
   const subnet = cleanString(input.subnet || input.cidr || "");
   const gateway = cleanString(input.gateway || "");
+  const enabled = input.enabled === false ? false : Boolean(input.enabled || input.masquerade || outboundInterface || subnet || gateway);
   return {
-    enabled: Boolean(input.enabled || input.masquerade || outboundInterface || subnet || gateway || portForwards.length),
-    masquerade: input.masquerade !== false,
-    outboundInterface: outboundInterface || null,
-    subnet: subnet || null,
-    gateway: gateway || null,
+    enabled,
+    masquerade: enabled ? input.masquerade !== false : false,
+    outboundInterface: enabled ? outboundInterface || null : null,
+    subnet: enabled ? subnet || null : null,
+    gateway: enabled ? gateway || null : null,
     portForwards
   };
 }

@@ -178,7 +178,7 @@ function applyNetworkAnnotations(annotations, network) {
   else delete annotations["kakurizai.network.sandboxIp"];
   setJsonAnnotation(annotations, "kakurizai.network.vlan", vlan.enabled ? vlan : null);
   setJsonAnnotation(annotations, "kakurizai.network.nat", nat.enabled ? nat : null);
-  setJsonAnnotation(annotations, "kakurizai.network.portForwards", nat.enabled && nat.portForwards?.length ? nat.portForwards : null);
+  setJsonAnnotation(annotations, "kakurizai.network.portForwards", nat.portForwards?.length ? nat.portForwards : null);
 }
 
 function kubernetesAnnotations(kubernetes) {

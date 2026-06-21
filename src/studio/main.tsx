@@ -479,10 +479,6 @@ function App() {
     vlanHostInterface: "",
     vlanBridgeName: "",
     natEnabled: true,
-    natMasquerade: true,
-    natOutboundInterface: "",
-    natSubnet: "",
-    natGateway: "",
     natPortForwards: [] as NatForwardDraft[],
     kubernetesEnabled: false,
     kubernetesProfile: "k3s",
@@ -691,11 +687,8 @@ function App() {
               bridgeName: launch.vlanBridgeName
             },
             nat: {
-              enabled: launch.natEnabled || launch.natPortForwards.some(hasNatForwardDraftContent),
-              masquerade: launch.natEnabled ? launch.natMasquerade : false,
-              outboundInterface: launch.natOutboundInterface,
-              subnet: launch.natSubnet,
-              gateway: launch.natGateway,
+              enabled: launch.natEnabled,
+              masquerade: launch.natEnabled,
               portForwards: natForwardDraftsToForwards(launch.natPortForwards)
             }
           },
@@ -1119,40 +1112,9 @@ function App() {
                 />
                 <span>
                   <strong>Outbound NAT</strong>
-                  <small>SNAT for outbound traffic</small>
+                  <small>Allow public outbound SNAT</small>
                 </span>
               </label>
-              {launch.natEnabled ? (
-                <>
-                  <div className="networkOptionFields">
-                    <div>
-                      <label>NAT subnet</label>
-                      <input value={launch.natSubnet} onChange={(event) => setLaunch({ ...launch, natSubnet: event.target.value })} placeholder="10.244.0.0/16" />
-                    </div>
-                    <div>
-                      <label>NAT gateway</label>
-                      <input value={launch.natGateway} onChange={(event) => setLaunch({ ...launch, natGateway: event.target.value })} placeholder="10.244.0.1" />
-                    </div>
-                  </div>
-                  <div className="networkOptionFields">
-                    <div>
-                      <label>Outbound interface</label>
-                      <input value={launch.natOutboundInterface} onChange={(event) => setLaunch({ ...launch, natOutboundInterface: event.target.value })} placeholder="tailscale0" />
-                    </div>
-                    <label className="checkRow compactCheck inlineCheck">
-                      <input
-                        type="checkbox"
-                        checked={launch.natMasquerade}
-                        onChange={(event) => setLaunch({ ...launch, natMasquerade: event.target.checked })}
-                      />
-                      <span>
-                        <strong>Masquerade</strong>
-                        <small>SNAT egress</small>
-                      </span>
-                    </label>
-                  </div>
-                </>
-              ) : null}
             </div>
           </div>
 
@@ -1197,7 +1159,7 @@ function App() {
             onChange={(egressRules) => setLaunch({ ...launch, egressRules })}
           />
 
-          <div className="sectionEmpty inlineNote">VLAN and NAT bridge settings are stored as KakuriZai tap metadata unless the installed CubeSandbox runtime consumes the matching annotations.</div>
+          <div className="sectionEmpty inlineNote">VLAN settings are stored as KakuriZai tap metadata unless the installed CubeSandbox runtime consumes the matching annotations.</div>
 
           {formMessage ? <div className="formMessage">{formMessage}</div> : null}
 
@@ -1905,10 +1867,6 @@ function NetworkEditor({
     vlanHostInterface: configuredNetwork.vlan?.hostInterface || "",
     vlanBridgeName: configuredNetwork.vlan?.bridgeName || "",
     natEnabled: configuredNetwork.nat?.enabled ?? false,
-    natMasquerade: configuredNetwork.nat?.masquerade ?? true,
-    natOutboundInterface: configuredNetwork.nat?.outboundInterface || "",
-    natSubnet: configuredNetwork.nat?.subnet || "",
-    natGateway: configuredNetwork.nat?.gateway || "",
     natPortForwards: forwardsToNatForwardDrafts(configuredNetwork.nat?.portForwards),
     kubernetesEnabled: Boolean(configuredKubernetes.enabled),
     kubernetesProfile: configuredKubernetes.profile || "k3s",
@@ -1945,10 +1903,6 @@ function NetworkEditor({
       vlanHostInterface: configuredNetwork.vlan?.hostInterface || "",
       vlanBridgeName: configuredNetwork.vlan?.bridgeName || "",
       natEnabled: configuredNetwork.nat?.enabled ?? false,
-      natMasquerade: configuredNetwork.nat?.masquerade ?? true,
-      natOutboundInterface: configuredNetwork.nat?.outboundInterface || "",
-      natSubnet: configuredNetwork.nat?.subnet || "",
-      natGateway: configuredNetwork.nat?.gateway || "",
       natPortForwards: forwardsToNatForwardDrafts(configuredNetwork.nat?.portForwards),
       kubernetesEnabled: Boolean(configuredKubernetes.enabled),
       kubernetesProfile: configuredKubernetes.profile || "k3s",
@@ -2003,11 +1957,8 @@ function NetworkEditor({
                 bridgeName: form.vlanBridgeName
               },
               nat: {
-                enabled: form.natEnabled || form.natPortForwards.some(hasNatForwardDraftContent),
-                masquerade: form.natEnabled ? form.natMasquerade : false,
-                outboundInterface: form.natOutboundInterface,
-                subnet: form.natSubnet,
-                gateway: form.natGateway,
+                enabled: form.natEnabled,
+                masquerade: form.natEnabled,
                 portForwards: natForwardDraftsToForwards(form.natPortForwards)
               }
             },
@@ -2083,40 +2034,9 @@ function NetworkEditor({
             />
             <span>
               <strong>Outbound NAT</strong>
-              <small>SNAT for outbound traffic</small>
+              <small>Allow public outbound SNAT</small>
             </span>
           </label>
-          {form.natEnabled ? (
-            <>
-              <div className="networkOptionFields">
-                <div>
-                  <label>NAT subnet</label>
-                  <input value={form.natSubnet} onChange={(event) => setForm({ ...form, natSubnet: event.target.value })} placeholder="10.244.0.0/16" />
-                </div>
-                <div>
-                  <label>NAT gateway</label>
-                  <input value={form.natGateway} onChange={(event) => setForm({ ...form, natGateway: event.target.value })} placeholder="10.244.0.1" />
-                </div>
-              </div>
-              <div className="networkOptionFields">
-                <div>
-                  <label>Outbound interface</label>
-                  <input value={form.natOutboundInterface} onChange={(event) => setForm({ ...form, natOutboundInterface: event.target.value })} placeholder="tailscale0" />
-                </div>
-                <label className="checkRow compactCheck inlineCheck">
-                  <input
-                    type="checkbox"
-                    checked={form.natMasquerade}
-                    onChange={(event) => setForm({ ...form, natMasquerade: event.target.checked })}
-                  />
-                  <span>
-                    <strong>Masquerade</strong>
-                    <small>SNAT egress</small>
-                  </span>
-                </label>
-              </div>
-            </>
-          ) : null}
         </div>
       </div>
       <NatForwardEditor
@@ -2752,11 +2672,7 @@ function formatBool(value?: boolean | null) {
 
 function formatNatSummary(value?: NatConfig | null) {
   if (!value?.enabled) return "disabled";
-  if (value.masquerade === false && !value.subnet && !value.gateway && !value.outboundInterface) return "disabled";
-  const parts = [value.masquerade === false ? "routed" : "masquerade"];
-  if (value.subnet) parts.push(value.subnet);
-  if (value.outboundInterface) parts.push(`via ${value.outboundInterface}`);
-  return parts.join(" ");
+  return "outbound snat";
 }
 
 function formatVlanSummary(value?: VlanConfig | null) {
@@ -3136,6 +3052,8 @@ function slugMountName(value: string) {
 function networkForRow(row: InventoryRow, fallbackType = "tap"): NetworkConfig {
   const annotations = row.runtime?.annotations || {};
   if (row.world) return effectiveNetworkForWorld(row.world, annotations["kakurizai.network.type"] || fallbackType);
+  const natAnnotation = parseAnnotationJson<NatConfig>(annotations["kakurizai.network.nat"]);
+  const portForwards = parseAnnotationJson<PortForwardConfig[]>(annotations["kakurizai.network.portForwards"]) || natAnnotation?.portForwards || [];
   return {
     type: annotations["kakurizai.network.type"] || fallbackType,
     mode: annotations["kakurizai.network.mode"] || annotations["kakurizai.network.type"] || fallbackType,
@@ -3145,7 +3063,7 @@ function networkForRow(row: InventoryRow, fallbackType = "tap"): NetworkConfig {
     denyOut: [],
     rules: [],
     vlan: parseAnnotationJson<VlanConfig>(annotations["kakurizai.network.vlan"]) || { enabled: false },
-    nat: parseAnnotationJson<NatConfig>(annotations["kakurizai.network.nat"]) || { enabled: annotations["kakurizai.network.nat.enabled"] === "true", portForwards: [] },
+    nat: { ...(natAnnotation || { enabled: annotations["kakurizai.network.nat.enabled"] === "true" }), portForwards },
     dns: { servers: [], searches: [], options: [] }
   };
 }
