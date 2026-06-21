@@ -670,8 +670,8 @@ function App() {
               bridgeName: launch.vlanBridgeName
             },
             nat: {
-              enabled: launch.natEnabled,
-              masquerade: launch.natMasquerade,
+              enabled: launch.natEnabled || launch.natPortForwards.some(hasNatForwardDraftContent),
+              masquerade: launch.natEnabled ? launch.natMasquerade : false,
               outboundInterface: launch.natOutboundInterface,
               subnet: launch.natSubnet,
               gateway: launch.natGateway,
@@ -1078,8 +1078,8 @@ function App() {
                 onChange={(event) => setLaunch({ ...launch, allowInternetAccess: event.target.checked })}
               />
               <span>
-                <strong>Internet egress</strong>
-                <small>Allow outbound access</small>
+                <strong>Internet access</strong>
+                <small>Allow outbound traffic</small>
               </span>
             </label>
             <label className="checkRow compactCheck">
@@ -1089,8 +1089,8 @@ function App() {
                 onChange={(event) => setLaunch({ ...launch, natEnabled: event.target.checked })}
               />
               <span>
-                <strong>NAT</strong>
-                <small>Outbound and forwards</small>
+                <strong>Outbound NAT</strong>
+                <small>SNAT for outbound traffic</small>
               </span>
             </label>
           </div>
@@ -1124,12 +1124,13 @@ function App() {
                   </span>
                 </label>
               </div>
-              <NatForwardEditor
-                forwards={launch.natPortForwards}
-                onChange={(natPortForwards) => setLaunch({ ...launch, natPortForwards })}
-              />
             </>
           ) : null}
+
+          <NatForwardEditor
+            forwards={launch.natPortForwards}
+            onChange={(natPortForwards) => setLaunch({ ...launch, natPortForwards })}
+          />
 
           <div className="toggleRow">
             <label className="checkRow compactCheck">
@@ -1462,9 +1463,9 @@ function NetworkWorkspace({
           <Metric label="DNS" value={formatList(selectedNetwork?.dns?.servers)} />
           <Metric label="DNS search" value={formatList(selectedNetwork?.dns?.searches)} />
           <Metric label="DNS options" value={formatList(selectedNetwork?.dns?.options)} />
-          <Metric label="Internet egress" value={formatBool(selectedNetwork?.allowInternetAccess)} />
-          <Metric label="NAT" value={formatNatSummary(selectedNetwork?.nat)} />
-          <Metric label="NAT forwards" value={formatPortForwardSummary(selectedNetwork?.nat?.portForwards)} />
+          <Metric label="Internet access" value={formatBool(selectedNetwork?.allowInternetAccess)} />
+          <Metric label="Outbound NAT" value={formatNatSummary(selectedNetwork?.nat)} />
+          <Metric label="Port forwards" value={formatPortForwardSummary(selectedNetwork?.nat?.portForwards)} />
           <Metric label="VLAN" value={formatVlanSummary(selectedNetwork?.vlan)} />
           <Metric label="Egress rules" value={String(selectedNetwork?.rules?.length || 0)} />
         </div>
@@ -1916,8 +1917,8 @@ function NetworkEditor({
                 bridgeName: form.vlanBridgeName
               },
               nat: {
-                enabled: form.natEnabled,
-                masquerade: form.natMasquerade,
+                enabled: form.natEnabled || form.natPortForwards.some(hasNatForwardDraftContent),
+                masquerade: form.natEnabled ? form.natMasquerade : false,
                 outboundInterface: form.natOutboundInterface,
                 subnet: form.natSubnet,
                 gateway: form.natGateway,
@@ -1989,8 +1990,8 @@ function NetworkEditor({
             onChange={(event) => setForm({ ...form, allowInternetAccess: event.target.checked })}
           />
           <span>
-            <strong>Internet egress</strong>
-            <small>Set CubeNetworkConfig</small>
+            <strong>Internet access</strong>
+            <small>Allow outbound traffic</small>
           </span>
         </label>
         <label className="checkRow compactCheck">
@@ -2000,8 +2001,8 @@ function NetworkEditor({
             onChange={(event) => setForm({ ...form, natEnabled: event.target.checked })}
           />
           <span>
-            <strong>NAT</strong>
-            <small>Outbound and forwards</small>
+            <strong>Outbound NAT</strong>
+            <small>SNAT for outbound traffic</small>
           </span>
         </label>
       </div>
@@ -2034,12 +2035,12 @@ function NetworkEditor({
               </span>
             </label>
           </div>
-          <NatForwardEditor
-            forwards={form.natPortForwards}
-            onChange={(natPortForwards) => setForm({ ...form, natPortForwards })}
-          />
         </>
       ) : null}
+      <NatForwardEditor
+        forwards={form.natPortForwards}
+        onChange={(natPortForwards) => setForm({ ...form, natPortForwards })}
+      />
       <div className="toggleRow">
         <label className="checkRow compactCheck">
           <input
@@ -2096,7 +2097,7 @@ function NatForwardEditor({ forwards, onChange }: { forwards: NatForwardDraft[];
   return (
     <div className="structuredEditor">
       <div className="fieldHeader">
-        <label>NAT forwards</label>
+        <label>Ingress port forwards</label>
         <button className="ghost smallButton" type="button" onClick={add}>
           <Plus size={14} />
           Add
@@ -2144,7 +2145,7 @@ function NatForwardEditor({ forwards, onChange }: { forwards: NatForwardDraft[];
             </div>
           </div>
         </div>
-      )) : <div className="sectionEmpty inlineNote">No NAT forwards configured.</div>}
+      )) : <div className="sectionEmpty inlineNote">No ingress port forwards configured.</div>}
     </div>
   );
 }
@@ -2339,7 +2340,7 @@ function SwitchNetworkPanel({
           <span>Operation</span>
           <span>Profile</span>
           <span>Connection</span>
-          <span>NAT / Forward</span>
+          <span>Port forward</span>
           <span>Probe</span>
         </div>
         {ports.map((port) => (
@@ -2393,8 +2394,8 @@ function ConnectivityMatrix({ rows, cube, probe }: { rows: InventoryRow[]; cube:
         <span>Sandbox IP</span>
         <span>Path</span>
         <span>Egress</span>
-        <span>NAT</span>
-        <span>Forwards</span>
+        <span>Outbound NAT</span>
+        <span>Port forwards</span>
       </div>
       {rows.map((row) => {
         const network = networkForRow(row, cube?.config?.networkType || "tap");
@@ -2693,6 +2694,7 @@ function formatBool(value?: boolean | null) {
 
 function formatNatSummary(value?: NatConfig | null) {
   if (!value?.enabled) return "disabled";
+  if (value.masquerade === false && !value.subnet && !value.gateway && !value.outboundInterface) return "disabled";
   const parts = [value.masquerade === false ? "routed" : "masquerade"];
   if (value.subnet) parts.push(value.subnet);
   if (value.outboundInterface) parts.push(`via ${value.outboundInterface}`);
@@ -2733,10 +2735,13 @@ function buildSwitchPorts(rows: InventoryRow[], selected: InventoryRow, fallback
     const forward = formatPortForwardSummary(network.nat?.portForwards) || formatRuntimePortSummary(row.runtime?.portMappings || []);
     const hasRuntime = Boolean(row.runtime?.sandboxIp || row.sandboxId);
     const tone = switchPortTone(row, edge, hasRuntime);
+    const outboundNat = formatNatSummary(network.nat) !== "disabled";
+    const hasForward = Boolean(network.nat?.portForwards?.length);
     const profile = [
       network.type || "tap",
       network.vlan?.enabled ? `vlan ${network.vlan.vlanId || ""}`.trim() : "",
-      network.nat?.enabled ? "nat" : ""
+      outboundNat ? "outbound nat" : "",
+      hasForward ? "ingress forward" : ""
     ].filter(Boolean).join(" / ");
     return {
       index: index + 1,
@@ -2744,7 +2749,7 @@ function buildSwitchPorts(rows: InventoryRow[], selected: InventoryRow, fallback
       tone,
       state: hasRuntime ? "in-use" : "disabled",
       label: network.type || "TAP",
-      badge: network.nat?.enabled ? "NAT" : "TAP",
+      badge: outboundNat ? "SNAT" : hasForward ? "FWD" : "TAP",
       operation: row.status || "-",
       profile,
       connection: row.runtime?.sandboxIp || shortId(row.sandboxId) || "-",
@@ -2931,8 +2936,8 @@ function natForwardDraftsToForwards(drafts: NatForwardDraft[]): PortForwardConfi
     name: draft.name.trim() || `forward-${index + 1}`,
     protocol: draft.protocol || "tcp",
     ...(draft.listenAddress.trim() ? { listenAddress: draft.listenAddress.trim() } : {}),
-    hostPort: parseRequiredPort(draft.hostPort, "NAT host port"),
-    sandboxPort: parseRequiredPort(draft.sandboxPort, "NAT sandbox port"),
+    hostPort: parseRequiredPort(draft.hostPort, "port forward host port"),
+    sandboxPort: parseRequiredPort(draft.sandboxPort, "port forward sandbox port"),
     ...(draft.targetAddress.trim() ? { targetAddress: draft.targetAddress.trim() } : {})
   }));
 }
