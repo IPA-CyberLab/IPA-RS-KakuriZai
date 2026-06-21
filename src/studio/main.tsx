@@ -196,6 +196,16 @@ type EgressRule = Record<string, unknown>;
 type KubernetesConfig = {
   enabled?: boolean;
   profile?: string;
+  clusterName?: string;
+  nodeRole?: string;
+  nodeName?: string;
+  cni?: string;
+  podCidr?: string;
+  serviceCidr?: string;
+  joinEndpoint?: string;
+  joinToken?: string;
+  advertiseAddress?: string;
+  extraArgs?: string[];
   apiServerPort?: number;
   nodePorts?: number[];
 };
@@ -295,6 +305,13 @@ type ProbeNode = {
   sandboxIp?: string | null;
   host?: string | null;
   canProbe?: boolean;
+  kubernetes?: {
+    enabled?: boolean;
+    profile?: string;
+    clusterName?: string;
+    nodeRole?: string;
+    nodeName?: string;
+  };
 };
 
 type ProbeEdge = {
@@ -442,7 +459,20 @@ function App() {
     natSubnet: "",
     natGateway: "",
     natPortForwards: [] as NatForwardDraft[],
-    kubernetesEnabled: false
+    kubernetesEnabled: false,
+    kubernetesProfile: "k3s",
+    kubernetesClusterName: "kakurizai",
+    kubernetesNodeRole: "control-plane",
+    kubernetesNodeName: "",
+    kubernetesCni: "flannel",
+    kubernetesPodCidr: "10.42.0.0/16",
+    kubernetesServiceCidr: "10.43.0.0/16",
+    kubernetesApiServerPort: "6443",
+    kubernetesNodePorts: "30000,30001",
+    kubernetesJoinEndpoint: "",
+    kubernetesJoinToken: "",
+    kubernetesAdvertiseAddress: "",
+    kubernetesExtraArgs: ""
   });
   const [browser, setBrowser] = React.useState<BrowseResult | null>(null);
   const [browserMountIndex, setBrowserMountIndex] = React.useState(0);
@@ -640,9 +670,19 @@ function App() {
           },
           kubernetes: {
             enabled: launch.kubernetesEnabled,
-            profile: "k3s",
-            apiServerPort: 6443,
-            nodePorts: launch.kubernetesEnabled ? [30000, 30001] : []
+            profile: launch.kubernetesProfile,
+            clusterName: launch.kubernetesClusterName,
+            nodeRole: launch.kubernetesNodeRole,
+            nodeName: launch.kubernetesNodeName,
+            cni: launch.kubernetesCni,
+            podCidr: launch.kubernetesPodCidr,
+            serviceCidr: launch.kubernetesServiceCidr,
+            apiServerPort: Number(launch.kubernetesApiServerPort || 6443),
+            nodePorts: launch.kubernetesEnabled ? parsePortList(launch.kubernetesNodePorts) : [],
+            joinEndpoint: launch.kubernetesJoinEndpoint,
+            joinToken: launch.kubernetesJoinToken,
+            advertiseAddress: launch.kubernetesAdvertiseAddress,
+            extraArgs: parseLines(launch.kubernetesExtraArgs)
           }
         }
       });
@@ -1066,7 +1106,8 @@ function App() {
                 onChange={(event) => setLaunch({
                   ...launch,
                   kubernetesEnabled: event.target.checked,
-                  exposedPorts: event.target.checked && !launch.exposedPorts.trim() ? "6443,30000,30001" : launch.exposedPorts
+                  exposedPorts: event.target.checked && !launch.exposedPorts.trim() ? "6443,30000,30001" : launch.exposedPorts,
+                  kubernetesNodePorts: event.target.checked && !launch.kubernetesNodePorts.trim() ? "30000,30001" : launch.kubernetesNodePorts
                 })}
               />
               <span>
@@ -1086,6 +1127,77 @@ function App() {
               </span>
             </label>
           </div>
+
+          {launch.kubernetesEnabled ? (
+            <div className="structuredEditor">
+              <div className="splitFields">
+                <div>
+                  <label>K8s profile</label>
+                  <input value={launch.kubernetesProfile} onChange={(event) => setLaunch({ ...launch, kubernetesProfile: event.target.value })} placeholder="k3s" />
+                </div>
+                <div>
+                  <label>Cluster name</label>
+                  <input value={launch.kubernetesClusterName} onChange={(event) => setLaunch({ ...launch, kubernetesClusterName: event.target.value })} placeholder="kakurizai" />
+                </div>
+              </div>
+              <div className="splitFields">
+                <div>
+                  <label>Node role</label>
+                  <select value={launch.kubernetesNodeRole} onChange={(event) => setLaunch({ ...launch, kubernetesNodeRole: event.target.value })}>
+                    <option value="control-plane">control-plane</option>
+                    <option value="worker">worker</option>
+                    <option value="standalone">standalone</option>
+                  </select>
+                </div>
+                <div>
+                  <label>Node name</label>
+                  <input value={launch.kubernetesNodeName} onChange={(event) => setLaunch({ ...launch, kubernetesNodeName: event.target.value })} placeholder="sandbox name" />
+                </div>
+              </div>
+              <div className="splitFields">
+                <div>
+                  <label>API server port</label>
+                  <input inputMode="numeric" value={launch.kubernetesApiServerPort} onChange={(event) => setLaunch({ ...launch, kubernetesApiServerPort: event.target.value })} placeholder="6443" />
+                </div>
+                <div>
+                  <label>Node ports</label>
+                  <input value={launch.kubernetesNodePorts} onChange={(event) => setLaunch({ ...launch, kubernetesNodePorts: event.target.value })} placeholder="30000,30001" />
+                </div>
+              </div>
+              <div className="splitFields">
+                <div>
+                  <label>Pod CIDR</label>
+                  <input value={launch.kubernetesPodCidr} onChange={(event) => setLaunch({ ...launch, kubernetesPodCidr: event.target.value })} placeholder="10.42.0.0/16" />
+                </div>
+                <div>
+                  <label>Service CIDR</label>
+                  <input value={launch.kubernetesServiceCidr} onChange={(event) => setLaunch({ ...launch, kubernetesServiceCidr: event.target.value })} placeholder="10.43.0.0/16" />
+                </div>
+              </div>
+              <div className="splitFields">
+                <div>
+                  <label>CNI</label>
+                  <input value={launch.kubernetesCni} onChange={(event) => setLaunch({ ...launch, kubernetesCni: event.target.value })} placeholder="flannel" />
+                </div>
+                <div>
+                  <label>Advertise address</label>
+                  <input value={launch.kubernetesAdvertiseAddress} onChange={(event) => setLaunch({ ...launch, kubernetesAdvertiseAddress: event.target.value })} placeholder="sandbox IP" />
+                </div>
+              </div>
+              <div className="splitFields">
+                <div>
+                  <label>Join endpoint</label>
+                  <input value={launch.kubernetesJoinEndpoint} onChange={(event) => setLaunch({ ...launch, kubernetesJoinEndpoint: event.target.value })} placeholder="https://control-plane:6443" />
+                </div>
+                <div>
+                  <label>Join token</label>
+                  <input value={launch.kubernetesJoinToken} onChange={(event) => setLaunch({ ...launch, kubernetesJoinToken: event.target.value })} placeholder="k3s token" />
+                </div>
+              </div>
+              <label>Extra args</label>
+              <textarea value={launch.kubernetesExtraArgs} onChange={(event) => setLaunch({ ...launch, kubernetesExtraArgs: event.target.value })} placeholder="--disable=traefik" />
+            </div>
+          ) : null}
 
           {launch.vlanEnabled ? (
             <div className="splitFields">
@@ -1289,6 +1401,11 @@ function App() {
                   <Metric label="VLAN" value={formatVlanSummary(selectedNetwork?.vlan)} />
                   <Metric label="Egress rules" value={String(selectedNetwork?.rules?.length || 0)} />
                   <Metric label="Kubernetes" value={selected.world?.backendConfig?.kubernetes?.enabled ? selected.world.backendConfig.kubernetes.profile || "enabled" : "disabled"} />
+                  <Metric label="K8s cluster" value={selected.world?.backendConfig?.kubernetes?.enabled ? selected.world.backendConfig.kubernetes.clusterName || "kakurizai" : "-"} />
+                  <Metric label="K8s role" value={selected.world?.backendConfig?.kubernetes?.enabled ? selected.world.backendConfig.kubernetes.nodeRole || "control-plane" : "-"} />
+                  <Metric label="K8s node" value={selected.world?.backendConfig?.kubernetes?.enabled ? selected.world.backendConfig.kubernetes.nodeName || selected.name : "-"} />
+                  <Metric label="K8s CIDRs" value={selected.world?.backendConfig?.kubernetes?.enabled ? `${selected.world.backendConfig.kubernetes.podCidr || "-"} / ${selected.world.backendConfig.kubernetes.serviceCidr || "-"}` : "-"} />
+                  <Metric label="K8s join" value={selected.world?.backendConfig?.kubernetes?.enabled ? selected.world.backendConfig.kubernetes.joinEndpoint || "-" : "-"} />
                 </div>
                 <ConnectivityMatrix rows={inventory} cube={cube} probe={networkProbe} />
                 <PortTable ports={selected.runtime?.portMappings || []} />
@@ -1697,6 +1814,16 @@ function NetworkEditor({
     natPortForwards: forwardsToNatForwardDrafts(configuredNetwork.nat?.portForwards),
     kubernetesEnabled: Boolean(configuredKubernetes.enabled),
     kubernetesProfile: configuredKubernetes.profile || "k3s",
+    kubernetesClusterName: configuredKubernetes.clusterName || "kakurizai",
+    kubernetesNodeRole: configuredKubernetes.nodeRole || "control-plane",
+    kubernetesNodeName: configuredKubernetes.nodeName || "",
+    kubernetesCni: configuredKubernetes.cni || "flannel",
+    kubernetesPodCidr: configuredKubernetes.podCidr || "10.42.0.0/16",
+    kubernetesServiceCidr: configuredKubernetes.serviceCidr || "10.43.0.0/16",
+    kubernetesJoinEndpoint: configuredKubernetes.joinEndpoint || "",
+    kubernetesJoinToken: configuredKubernetes.joinToken || "",
+    kubernetesAdvertiseAddress: configuredKubernetes.advertiseAddress || "",
+    kubernetesExtraArgs: formatLines(configuredKubernetes.extraArgs),
     apiServerPort: String(configuredKubernetes.apiServerPort || 6443),
     nodePorts: formatList(configuredKubernetes.nodePorts)
   });
@@ -1725,6 +1852,16 @@ function NetworkEditor({
       natPortForwards: forwardsToNatForwardDrafts(configuredNetwork.nat?.portForwards),
       kubernetesEnabled: Boolean(configuredKubernetes.enabled),
       kubernetesProfile: configuredKubernetes.profile || "k3s",
+      kubernetesClusterName: configuredKubernetes.clusterName || "kakurizai",
+      kubernetesNodeRole: configuredKubernetes.nodeRole || "control-plane",
+      kubernetesNodeName: configuredKubernetes.nodeName || "",
+      kubernetesCni: configuredKubernetes.cni || "flannel",
+      kubernetesPodCidr: configuredKubernetes.podCidr || "10.42.0.0/16",
+      kubernetesServiceCidr: configuredKubernetes.serviceCidr || "10.43.0.0/16",
+      kubernetesJoinEndpoint: configuredKubernetes.joinEndpoint || "",
+      kubernetesJoinToken: configuredKubernetes.joinToken || "",
+      kubernetesAdvertiseAddress: configuredKubernetes.advertiseAddress || "",
+      kubernetesExtraArgs: formatLines(configuredKubernetes.extraArgs),
       apiServerPort: String(configuredKubernetes.apiServerPort || 6443),
       nodePorts: formatList(configuredKubernetes.nodePorts)
     });
@@ -1775,6 +1912,16 @@ function NetworkEditor({
             {
               enabled: form.kubernetesEnabled,
               profile: form.kubernetesProfile,
+              clusterName: form.kubernetesClusterName,
+              nodeRole: form.kubernetesNodeRole,
+              nodeName: form.kubernetesNodeName,
+              cni: form.kubernetesCni,
+              podCidr: form.kubernetesPodCidr,
+              serviceCidr: form.kubernetesServiceCidr,
+              joinEndpoint: form.kubernetesJoinEndpoint,
+              joinToken: form.kubernetesJoinToken,
+              advertiseAddress: form.kubernetesAdvertiseAddress,
+              extraArgs: parseLines(form.kubernetesExtraArgs),
               apiServerPort: Number(form.apiServerPort || 6443),
               nodePorts: parsePortList(form.nodePorts)
             }
@@ -1894,7 +2041,8 @@ function NetworkEditor({
               ...form,
               kubernetesEnabled: event.target.checked,
               exposedPorts: event.target.checked && !form.exposedPorts.trim() ? "6443,30000,30001" : form.exposedPorts,
-              nodePorts: event.target.checked && !form.nodePorts.trim() ? "30000,30001" : form.nodePorts
+              nodePorts: event.target.checked && !form.nodePorts.trim() ? "30000,30001" : form.nodePorts,
+              kubernetesNodeRole: event.target.checked && !form.kubernetesNodeRole ? "control-plane" : form.kubernetesNodeRole
             })}
           />
           <span>
@@ -1931,15 +2079,73 @@ function NetworkEditor({
         </div>
       ) : null}
       {form.kubernetesEnabled ? (
-        <div className="splitFields">
-          <div>
-            <label>K8s profile</label>
-            <input value={form.kubernetesProfile} onChange={(event) => setForm({ ...form, kubernetesProfile: event.target.value })} placeholder="k3s" />
+        <div className="structuredEditor">
+          <div className="splitFields">
+            <div>
+              <label>K8s profile</label>
+              <input value={form.kubernetesProfile} onChange={(event) => setForm({ ...form, kubernetesProfile: event.target.value })} placeholder="k3s" />
+            </div>
+            <div>
+              <label>Cluster name</label>
+              <input value={form.kubernetesClusterName} onChange={(event) => setForm({ ...form, kubernetesClusterName: event.target.value })} placeholder="kakurizai" />
+            </div>
           </div>
-          <div>
-            <label>Node ports</label>
-            <input value={form.nodePorts} onChange={(event) => setForm({ ...form, nodePorts: event.target.value })} placeholder="30000,30001" />
+          <div className="splitFields">
+            <div>
+              <label>Node role</label>
+              <select value={form.kubernetesNodeRole} onChange={(event) => setForm({ ...form, kubernetesNodeRole: event.target.value })}>
+                <option value="control-plane">control-plane</option>
+                <option value="worker">worker</option>
+                <option value="standalone">standalone</option>
+              </select>
+            </div>
+            <div>
+              <label>Node name</label>
+              <input value={form.kubernetesNodeName} onChange={(event) => setForm({ ...form, kubernetesNodeName: event.target.value })} placeholder={world.name} />
+            </div>
           </div>
+          <div className="splitFields">
+            <div>
+              <label>API server port</label>
+              <input inputMode="numeric" value={form.apiServerPort} onChange={(event) => setForm({ ...form, apiServerPort: event.target.value })} placeholder="6443" />
+            </div>
+            <div>
+              <label>Node ports</label>
+              <input value={form.nodePorts} onChange={(event) => setForm({ ...form, nodePorts: event.target.value })} placeholder="30000,30001" />
+            </div>
+          </div>
+          <div className="splitFields">
+            <div>
+              <label>Pod CIDR</label>
+              <input value={form.kubernetesPodCidr} onChange={(event) => setForm({ ...form, kubernetesPodCidr: event.target.value })} placeholder="10.42.0.0/16" />
+            </div>
+            <div>
+              <label>Service CIDR</label>
+              <input value={form.kubernetesServiceCidr} onChange={(event) => setForm({ ...form, kubernetesServiceCidr: event.target.value })} placeholder="10.43.0.0/16" />
+            </div>
+          </div>
+          <div className="splitFields">
+            <div>
+              <label>CNI</label>
+              <input value={form.kubernetesCni} onChange={(event) => setForm({ ...form, kubernetesCni: event.target.value })} placeholder="flannel" />
+            </div>
+            <div>
+              <label>Advertise address</label>
+              <input value={form.kubernetesAdvertiseAddress} onChange={(event) => setForm({ ...form, kubernetesAdvertiseAddress: event.target.value })} placeholder="sandbox IP" />
+            </div>
+          </div>
+          <div className="splitFields">
+            <div>
+              <label>Join endpoint</label>
+              <input value={form.kubernetesJoinEndpoint} onChange={(event) => setForm({ ...form, kubernetesJoinEndpoint: event.target.value })} placeholder="https://control-plane:6443" />
+            </div>
+            <div>
+              <label>Join token</label>
+              <input value={form.kubernetesJoinToken} onChange={(event) => setForm({ ...form, kubernetesJoinToken: event.target.value })} placeholder="k3s token" />
+            </div>
+          </div>
+          <label>Extra args</label>
+          <textarea value={form.kubernetesExtraArgs} onChange={(event) => setForm({ ...form, kubernetesExtraArgs: event.target.value })} placeholder="--disable=traefik" />
         </div>
       ) : null}
       <EgressRuleEditor
@@ -2249,7 +2455,7 @@ function ConnectivityMatrix({ rows, cube, probe }: { rows: InventoryRow[]; cube:
             <span>{formatBool(network.allowInternetAccess)}</span>
             <span>{formatNatSummary(network.nat)}</span>
             <span>{formatPortForwardSummary(network.nat?.portForwards) || formatRuntimePortSummary(row.runtime?.portMappings || []) || "-"}</span>
-            <span>{row.world?.backendConfig?.kubernetes?.enabled ? row.world.backendConfig.kubernetes.profile || "enabled" : "-"}</span>
+            <span>{formatKubernetesNode(row.world?.backendConfig?.kubernetes)}</span>
           </div>
         );
       })}
@@ -2564,6 +2770,15 @@ function formatRuntimePortSummary(value?: CubePortMapping[] | null) {
   return value.map((port) => `${port.host_port ?? "-"}->${port.container_port ?? "-"}`).join(",");
 }
 
+function formatKubernetesNode(value?: KubernetesConfig | null) {
+  if (!value?.enabled) return "-";
+  return [
+    value.clusterName || "kakurizai",
+    value.nodeRole || "control-plane",
+    value.nodeName || value.profile || "k3s"
+  ].join("/");
+}
+
 function probeLabel(edge: ProbeEdge) {
   if (edge.reachable === true) return "reachable";
   if (edge.reachable === false) return "blocked";
@@ -2594,6 +2809,12 @@ function formatBootstrapStatus(value?: { pending?: boolean; applied?: boolean; s
 function formatList(value?: Array<string | number> | string | null) {
   if (!value) return "";
   if (Array.isArray(value)) return value.join(",");
+  return String(value);
+}
+
+function formatLines(value?: Array<string | number> | string | null) {
+  if (!value) return "";
+  if (Array.isArray(value)) return value.join("\n");
   return String(value);
 }
 
@@ -2635,6 +2856,13 @@ function parseSizeToBytes(value: string) {
 function parseCsv(value: string) {
   return String(value || "")
     .split(/[,\n]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parseLines(value: string) {
+  return String(value || "")
+    .split(/\r?\n/)
     .map((item) => item.trim())
     .filter(Boolean);
 }

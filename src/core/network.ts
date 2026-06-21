@@ -42,9 +42,20 @@ export function normalizeKubernetesConfig(input = {}) {
   if (input === true) input = { enabled: true };
   const enabled = Boolean(input?.enabled);
   const profile = cleanString(input?.profile || "k3s");
+  const nodeRole = normalizeKubernetesRole(input?.nodeRole || input?.role || (enabled ? "control-plane" : "standalone"));
   return {
     enabled,
     profile,
+    clusterName: cleanString(input?.clusterName || input?.cluster || "kakurizai"),
+    nodeRole,
+    nodeName: cleanString(input?.nodeName || ""),
+    cni: cleanString(input?.cni || "flannel"),
+    podCidr: cleanString(input?.podCidr || input?.podCIDR || "10.42.0.0/16"),
+    serviceCidr: cleanString(input?.serviceCidr || input?.serviceCIDR || "10.43.0.0/16"),
+    joinEndpoint: cleanString(input?.joinEndpoint || input?.server || ""),
+    joinToken: cleanString(input?.joinToken || input?.token || ""),
+    advertiseAddress: cleanString(input?.advertiseAddress || input?.advertiseIp || input?.advertiseIP || ""),
+    extraArgs: normalizeStringList(input?.extraArgs || input?.args),
     apiServerPort: normalizePort(input?.apiServerPort || 6443, "kubernetes.apiServerPort"),
     nodePorts: normalizePortList(input?.nodePorts || (enabled ? [30000, 30001] : [])),
     sysctls: {
@@ -140,6 +151,14 @@ function normalizeVlanId(value) {
     throw new Error("vlan.id must be between 1 and 4094");
   }
   return number;
+}
+
+function normalizeKubernetesRole(value) {
+  const role = cleanString(value || "standalone");
+  if (!["standalone", "control-plane", "worker"].includes(role)) {
+    throw new Error("kubernetes.nodeRole must be standalone, control-plane, or worker");
+  }
+  return role;
 }
 
 function normalizeDnsConfig(input = {}) {

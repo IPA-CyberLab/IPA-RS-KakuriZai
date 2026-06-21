@@ -15,6 +15,7 @@ export function buildNetworkProbePlan(worlds = [], runtimes = [], options = {}) 
       world.backendConfig?.network || { type: world.backendConfig?.networkType || "tap" },
       world.backendConfig?.kubernetes || {}
     );
+    const kubernetes = world.backendConfig?.kubernetes || {};
     return {
       worldId: world.id,
       name: world.name,
@@ -26,6 +27,13 @@ export function buildNetworkProbePlan(worlds = [], runtimes = [], options = {}) 
       networkMode: network.mode,
       nat: network.nat,
       vlan: network.vlan,
+      kubernetes: {
+        enabled: Boolean(kubernetes.enabled),
+        profile: kubernetes.profile || "k3s",
+        clusterName: kubernetes.clusterName || "kakurizai",
+        nodeRole: kubernetes.nodeRole || "standalone",
+        nodeName: kubernetes.nodeName || world.name
+      },
       allowInternetAccess: network.allowInternetAccess,
       exposedPorts: mergePorts([
         network.exposedPorts,

@@ -35,7 +35,11 @@ export async function createWorld(config, input) {
       "kakurizai.mountMode": mountMode,
       "kakurizai.hostMount": String(hostMount),
       "kakurizai.network.type": network.type,
-      "kakurizai.kubernetes": String(kubernetes.enabled)
+      "kakurizai.kubernetes": String(kubernetes.enabled),
+      ...(kubernetes.enabled ? {
+        "kakurizai.kubernetes.cluster": kubernetes.clusterName,
+        "kakurizai.kubernetes.nodeRole": kubernetes.nodeRole
+      } : {})
     },
     backendConfig: {
       hostMount,

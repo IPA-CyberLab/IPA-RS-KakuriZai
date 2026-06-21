@@ -76,11 +76,13 @@ Studio can create and edit the TAP network settings stored on each sandbox:
 - internet egress, allow/deny CIDRs, and L7 egress rules
 - NAT metadata, masquerade mode, outbound interface, subnet/gateway, and port-forward definitions
 - VLAN metadata for host-side bridge integrations
-- Kubernetes lab profile, API server port, node ports, and required sysctls
+- Kubernetes lab profile, cluster name, node role, node name, CIDRs, CNI, join endpoint/token, API server port, node ports, extra args, and required sysctls
 
 CubeSandbox OSS accepts `network_type=tap`, exposed ports, DNS config, and `cube_network_config` egress policy directly. NAT and VLAN bridge settings are persisted as KakuriZai annotations so host-side integrations or future CubeSandbox plugins can consume them.
 
 Studio also includes a network probe action. It builds a sandbox-to-sandbox reachability plan from CubeSandbox runtime IPs, then can execute ICMP/TCP checks from each provisioned sandbox and render reachable, blocked, and unknown paths in the Network view.
+
+For multi-sandbox Kubernetes experiments, use the same cluster name across sandboxes and set each sandbox role to `control-plane`, `worker`, or `standalone`. The generated Cube request carries this lab metadata as `kakurizai.kubernetes.*` annotations and labels for runtime bootstrappers or host-side automation.
 
 ## Backends
 

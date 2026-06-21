@@ -24,7 +24,15 @@ test("network probe plan maps worlds to sandbox IPs, ports, NAT forwards, and ed
             portForwards: [{ name: "ssh", protocol: "tcp", hostPort: 2222, sandboxPort: 22 }]
           }
         },
-        kubernetes: { enabled: true, apiServerPort: 6443, nodePorts: [30000] }
+        kubernetes: {
+          enabled: true,
+          profile: "k3s",
+          clusterName: "lab-a",
+          nodeRole: "control-plane",
+          nodeName: "cp-1",
+          apiServerPort: 6443,
+          nodePorts: [30000]
+        }
       }
     },
     {
@@ -48,6 +56,13 @@ test("network probe plan maps worlds to sandbox IPs, ports, NAT forwards, and ed
   assert.equal(plan.nodes.length, 2);
   assert.deepEqual(plan.nodes[0].exposedPorts, [6443, 8080, 13337, 30000]);
   assert.equal(plan.nodes[0].sandboxIp, "10.0.0.10");
+  assert.deepEqual(plan.nodes[0].kubernetes, {
+    enabled: true,
+    profile: "k3s",
+    clusterName: "lab-a",
+    nodeRole: "control-plane",
+    nodeName: "cp-1"
+  });
   assert.equal(plan.edges.length, 2);
   assert.equal(plan.edges[0].hostPath, "same-host");
   assert.equal(plan.edges[0].checks[0].kind, "icmp");

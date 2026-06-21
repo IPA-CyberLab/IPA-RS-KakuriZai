@@ -43,8 +43,7 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
           "kakurizai.workspace": workspace,
           "kakurizai.world": world.id,
           "kakurizai.mountMode": mountMode,
-          "kakurizai.kubernetes": String(kubernetes.enabled),
-          "kakurizai.kubernetes.profile": kubernetes.profile,
+          ...kubernetesAnnotations(kubernetes),
           ...(writableLayerSize ? { "cube.master.rootfs.writable_layer_size": writableLayerSize } : {})
         }
       }
@@ -59,15 +58,18 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
       "kakurizai.hostMount": String(mounts.length > 0),
       "kakurizai.mounts": JSON.stringify(mounts.map(publicMountSpec)),
       "kakurizai.overlayMounts": String(mounts.filter((mount) => mount.mode === "agctl-overlay").length),
-      "kakurizai.kubernetes": String(kubernetes.enabled),
-      "kakurizai.kubernetes.profile": kubernetes.profile,
+      ...kubernetesAnnotations(kubernetes),
       "cube.master.appsnapshot.template.id": cubeConfig.template || "kakurizai-base",
       "cube.master.appsnapshot.template.version": cubeConfig.templateVersion || "v2",
       ...writableLayerRequestAnnotations
     },
     labels: {
       "app.kubernetes.io/managed-by": "kakurizai",
-      "kakurizai.world": world.id
+      "kakurizai.world": world.id,
+      ...(kubernetes.enabled ? {
+        "kakurizai.kubernetes.cluster": kubernetes.clusterName,
+        "kakurizai.kubernetes.node-role": kubernetes.nodeRole
+      } : {})
     },
     instance_type: cubeConfig.instanceType || "cubebox",
     network_type: network.type || "tap",
@@ -113,8 +115,14 @@ export function applyNetworkToCubeRequest(request, networkInput = {}, kubernetes
     ...(request.annotations || {}),
     "kakurizai.network.type": request.network_type,
     "kakurizai.network.mode": network.mode || request.network_type,
-    "kakurizai.kubernetes": String(kubernetes.enabled),
-    "kakurizai.kubernetes.profile": kubernetes.profile
+    ...kubernetesAnnotations(kubernetes)
+  };
+  request.labels = {
+    ...(request.labels || {}),
+    ...(kubernetes.enabled ? {
+      "kakurizai.kubernetes.cluster": kubernetes.clusterName,
+      "kakurizai.kubernetes.node-role": kubernetes.nodeRole
+    } : {})
   };
   applyNetworkAnnotations(request.annotations, network);
   if (network.exposedPorts.length) {
@@ -131,8 +139,7 @@ export function applyNetworkToCubeRequest(request, networkInput = {}, kubernetes
       ...(container.annotations || {}),
       "kakurizai.network.type": request.network_type,
       "kakurizai.network.mode": network.mode || request.network_type,
-      "kakurizai.kubernetes": String(kubernetes.enabled),
-      "kakurizai.kubernetes.profile": kubernetes.profile
+      ...kubernetesAnnotations(kubernetes)
     };
     if (network.dns.servers.length || network.dns.searches.length || network.dns.options.length) {
       container.dns_config = {
@@ -166,6 +173,26 @@ function applyNetworkAnnotations(annotations, network) {
   setJsonAnnotation(annotations, "kakurizai.network.vlan", vlan.enabled ? vlan : null);
   setJsonAnnotation(annotations, "kakurizai.network.nat", nat.enabled ? nat : null);
   setJsonAnnotation(annotations, "kakurizai.network.portForwards", nat.enabled && nat.portForwards?.length ? nat.portForwards : null);
+}
+
+function kubernetesAnnotations(kubernetes) {
+  const annotations = {
+    "kakurizai.kubernetes": String(kubernetes.enabled),
+    "kakurizai.kubernetes.profile": kubernetes.profile,
+    "kakurizai.kubernetes.cluster": kubernetes.clusterName,
+    "kakurizai.kubernetes.nodeRole": kubernetes.nodeRole,
+    "kakurizai.kubernetes.nodeName": kubernetes.nodeName || "",
+    "kakurizai.kubernetes.cni": kubernetes.cni,
+    "kakurizai.kubernetes.podCidr": kubernetes.podCidr,
+    "kakurizai.kubernetes.serviceCidr": kubernetes.serviceCidr,
+    "kakurizai.kubernetes.apiServerPort": String(kubernetes.apiServerPort),
+    "kakurizai.kubernetes.nodePorts": (kubernetes.nodePorts || []).join(",")
+  };
+  if (kubernetes.joinEndpoint) annotations["kakurizai.kubernetes.joinEndpoint"] = kubernetes.joinEndpoint;
+  if (kubernetes.joinToken) annotations["kakurizai.kubernetes.joinToken"] = kubernetes.joinToken;
+  if (kubernetes.advertiseAddress) annotations["kakurizai.kubernetes.advertiseAddress"] = kubernetes.advertiseAddress;
+  if (kubernetes.extraArgs?.length) annotations["kakurizai.kubernetes.extraArgs"] = kubernetes.extraArgs.join("\n");
+  return annotations;
 }
 
 function setJsonAnnotation(annotations, key, value) {

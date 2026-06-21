@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { loadConfig } from "../dist/src/core/config.js";
-import { normalizeNetworkConfig } from "../dist/src/core/network.js";
+import { normalizeKubernetesConfig, normalizeNetworkConfig } from "../dist/src/core/network.js";
 import { parseSandboxManifest, manifestToCreateInput, writeTerraformBundle } from "../dist/src/core/spec.js";
 import { WorldStore } from "../dist/src/core/store.js";
 import { updateWorldConfig } from "../dist/src/core/worlds.js";
@@ -229,6 +229,16 @@ test("cube request carries network, DNS, and Kubernetes lab settings", async () 
       kubernetes: {
         enabled: true,
         profile: "k3s",
+        clusterName: "lab-a",
+        nodeRole: "control-plane",
+        nodeName: "cp-1",
+        cni: "flannel",
+        podCidr: "10.42.0.0/16",
+        serviceCidr: "10.43.0.0/16",
+        advertiseAddress: "10.0.0.20",
+        joinEndpoint: "https://10.0.0.20:6443",
+        joinToken: "token-123",
+        extraArgs: ["--disable=traefik"],
         apiServerPort: 6443,
         nodePorts: [30000]
       }
@@ -240,6 +250,19 @@ test("cube request carries network, DNS, and Kubernetes lab settings", async () 
   assert.equal(request.network_type, "tap");
   assert.deepEqual(request.exposed_ports, [6443, 8080, 30000]);
   assert.equal(request.annotations["com.exposed_ports"], "6443:8080:30000");
+  assert.equal(request.annotations["kakurizai.kubernetes.cluster"], "lab-a");
+  assert.equal(request.annotations["kakurizai.kubernetes.nodeRole"], "control-plane");
+  assert.equal(request.annotations["kakurizai.kubernetes.nodeName"], "cp-1");
+  assert.equal(request.annotations["kakurizai.kubernetes.cni"], "flannel");
+  assert.equal(request.annotations["kakurizai.kubernetes.podCidr"], "10.42.0.0/16");
+  assert.equal(request.annotations["kakurizai.kubernetes.serviceCidr"], "10.43.0.0/16");
+  assert.equal(request.annotations["kakurizai.kubernetes.joinEndpoint"], "https://10.0.0.20:6443");
+  assert.equal(request.annotations["kakurizai.kubernetes.joinToken"], "token-123");
+  assert.equal(request.annotations["kakurizai.kubernetes.advertiseAddress"], "10.0.0.20");
+  assert.equal(request.annotations["kakurizai.kubernetes.extraArgs"], "--disable=traefik");
+  assert.equal(request.labels["kakurizai.kubernetes.cluster"], "lab-a");
+  assert.equal(request.labels["kakurizai.kubernetes.node-role"], "control-plane");
+  assert.equal(request.containers[0].annotations["kakurizai.kubernetes.cluster"], "lab-a");
   assert.deepEqual(request.cube_network_config, {
     allowInternetAccess: false,
     denyOut: ["10.0.0.0/8"]
@@ -362,6 +385,10 @@ spec:
   kubernetes:
     enabled: true
     profile: k3s
+    clusterName: lab-a
+    nodeRole: worker
+    joinEndpoint: https://cp:6443
+    joinToken: token-123
 `);
 
   const input = manifestToCreateInput(manifest);
@@ -371,6 +398,9 @@ spec:
   assert.equal(input.cpu, "4000m");
   assert.equal(input.network.exposedPorts[0], 6443);
   assert.equal(input.kubernetes.enabled, true);
+  assert.equal(input.kubernetes.clusterName, "lab-a");
+  assert.equal(input.kubernetes.nodeRole, "worker");
+  assert.equal(input.kubernetes.joinEndpoint, "https://cp:6443");
 
   const result = await writeTerraformBundle(manifest, path.join(tmp, "tf"));
   assert.deepEqual(result.files.map((file) => path.basename(file)).sort(), ["README.md", "main.tf", "sandbox.yaml"]);
@@ -383,6 +413,14 @@ test("network config rejects unsupported CubeSandbox network types", () => {
   assert.throws(
     () => normalizeNetworkConfig({ type: "vlan", vlan: { enabled: true, vlanId: 100, hostInterface: "eth0" } }),
     /supports network\.type=tap only/
+  );
+});
+
+test("kubernetes config validates node roles", () => {
+  assert.equal(normalizeKubernetesConfig({ enabled: true, nodeRole: "worker" }).nodeRole, "worker");
+  assert.throws(
+    () => normalizeKubernetesConfig({ enabled: true, nodeRole: "database" }),
+    /nodeRole/
   );
 });
 
