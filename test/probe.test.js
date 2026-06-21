@@ -30,6 +30,9 @@ test("network probe plan maps worlds to sandbox IPs, ports, NAT forwards, and ed
           clusterName: "lab-a",
           nodeRole: "control-plane",
           nodeName: "cp-1",
+          podCidr: "10.42.0.0/16",
+          serviceCidr: "10.43.0.0/16",
+          joinEndpoint: "https://alpha:6443",
           apiServerPort: 6443,
           nodePorts: [30000]
         }
@@ -61,7 +64,12 @@ test("network probe plan maps worlds to sandbox IPs, ports, NAT forwards, and ed
     profile: "k3s",
     clusterName: "lab-a",
     nodeRole: "control-plane",
-    nodeName: "cp-1"
+    nodeName: "cp-1",
+    podCidr: "10.42.0.0/16",
+    serviceCidr: "10.43.0.0/16",
+    joinEndpoint: "https://alpha:6443",
+    apiServerPort: 6443,
+    nodePorts: [30000]
   });
   assert.equal(plan.edges.length, 2);
   assert.equal(plan.edges[0].hostPath, "same-host");

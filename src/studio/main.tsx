@@ -312,6 +312,11 @@ type ProbeNode = {
     clusterName?: string;
     nodeRole?: string;
     nodeName?: string;
+    podCidr?: string;
+    serviceCidr?: string;
+    joinEndpoint?: string;
+    apiServerPort?: number;
+    nodePorts?: number[];
   };
 };
 
@@ -509,6 +514,7 @@ function App() {
   const selectedTemplate = findTemplateForSandbox(cube, selected);
   const selectedNode = findNodeForSandbox(cube, selected);
   const selectedNetwork = selected ? networkForRow(selected, selectedTemplate?.networkType || cube?.config?.networkType || "tap") : null;
+  const selectedKubernetes = selected ? kubernetesForRow(selected) : null;
 
   React.useEffect(() => {
     api<AuthConfig>("/api/auth/config", { token: null })
@@ -1598,14 +1604,15 @@ function App() {
                   <Metric label="NAT forwards" value={formatPortForwardSummary(selectedNetwork?.nat?.portForwards)} />
                   <Metric label="VLAN" value={formatVlanSummary(selectedNetwork?.vlan)} />
                   <Metric label="Egress rules" value={String(selectedNetwork?.rules?.length || 0)} />
-                  <Metric label="Kubernetes" value={selected.world?.backendConfig?.kubernetes?.enabled ? selected.world.backendConfig.kubernetes.profile || "enabled" : "disabled"} />
-                  <Metric label="K8s cluster" value={selected.world?.backendConfig?.kubernetes?.enabled ? selected.world.backendConfig.kubernetes.clusterName || "kakurizai" : "-"} />
-                  <Metric label="K8s role" value={selected.world?.backendConfig?.kubernetes?.enabled ? selected.world.backendConfig.kubernetes.nodeRole || "control-plane" : "-"} />
-                  <Metric label="K8s node" value={selected.world?.backendConfig?.kubernetes?.enabled ? selected.world.backendConfig.kubernetes.nodeName || selected.name : "-"} />
-                  <Metric label="K8s CIDRs" value={selected.world?.backendConfig?.kubernetes?.enabled ? `${selected.world.backendConfig.kubernetes.podCidr || "-"} / ${selected.world.backendConfig.kubernetes.serviceCidr || "-"}` : "-"} />
-                  <Metric label="K8s join" value={selected.world?.backendConfig?.kubernetes?.enabled ? selected.world.backendConfig.kubernetes.joinEndpoint || "-" : "-"} />
-                  <Metric label="K8s sysctls" value={selected.world?.backendConfig?.kubernetes?.enabled ? formatSysctls(selected.world.backendConfig.kubernetes.sysctls) : "-"} />
+                  <Metric label="Kubernetes" value={selectedKubernetes?.enabled ? selectedKubernetes.profile || "enabled" : "disabled"} />
+                  <Metric label="K8s cluster" value={selectedKubernetes?.enabled ? selectedKubernetes.clusterName || "kakurizai" : "-"} />
+                  <Metric label="K8s role" value={selectedKubernetes?.enabled ? selectedKubernetes.nodeRole || "control-plane" : "-"} />
+                  <Metric label="K8s node" value={selectedKubernetes?.enabled ? selectedKubernetes.nodeName || selected.name : "-"} />
+                  <Metric label="K8s CIDRs" value={selectedKubernetes?.enabled ? `${selectedKubernetes.podCidr || "-"} / ${selectedKubernetes.serviceCidr || "-"}` : "-"} />
+                  <Metric label="K8s join" value={selectedKubernetes?.enabled ? selectedKubernetes.joinEndpoint || "-" : "-"} />
+                  <Metric label="K8s sysctls" value={selectedKubernetes?.enabled ? formatSysctls(selectedKubernetes.sysctls) : "-"} />
                 </div>
+                <KubernetesLabSummary rows={inventory} cube={cube} probe={networkProbe} />
                 <ConnectivityMatrix rows={inventory} cube={cube} probe={networkProbe} />
                 <PortTable ports={selected.runtime?.portMappings || []} />
               </DetailSection>
@@ -2659,10 +2666,39 @@ function ConnectivityMatrix({ rows, cube, probe }: { rows: InventoryRow[]; cube:
             <span>{formatBool(network.allowInternetAccess)}</span>
             <span>{formatNatSummary(network.nat)}</span>
             <span>{formatPortForwardSummary(network.nat?.portForwards) || formatRuntimePortSummary(row.runtime?.portMappings || []) || "-"}</span>
-            <span>{formatKubernetesNode(row.world?.backendConfig?.kubernetes)}</span>
+            <span>{formatKubernetesNode(kubernetesForRow(row))}</span>
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function KubernetesLabSummary({ rows, cube, probe }: { rows: InventoryRow[]; cube: CubeInspect | null; probe?: NetworkProbePlan | null }) {
+  const labs = buildKubernetesLabRows(rows, cube?.config?.networkType || "tap", probe);
+  if (!labs.length) return null;
+  return (
+    <div className="dataTable k8sLabMatrix">
+      <div className="dataRow head">
+        <span>Cluster</span>
+        <span>Control planes</span>
+        <span>Workers</span>
+        <span>API / join</span>
+        <span>CIDRs</span>
+        <span>Node ports</span>
+        <span>Network</span>
+      </div>
+      {labs.map((lab) => (
+        <div className="dataRow" key={lab.cluster}>
+          <span>{lab.cluster}</span>
+          <span>{lab.controlPlanes || "-"}</span>
+          <span>{lab.workers || "-"}</span>
+          <span>{lab.endpoints || "-"}</span>
+          <span>{lab.cidrs || "-"}</span>
+          <span>{lab.nodePorts || "-"}</span>
+          <span>{lab.network || "-"}</span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -2983,6 +3019,72 @@ function formatKubernetesNode(value?: KubernetesConfig | null) {
   ].join("/");
 }
 
+function buildKubernetesLabRows(rows: InventoryRow[], fallbackType = "tap", probe?: NetworkProbePlan | null) {
+  const probeByWorldId = new Map((probe?.nodes || []).map((node) => [node.worldId, node]));
+  const labs = new Map<string, {
+    cluster: string;
+    controlPlanes: Set<string>;
+    workers: Set<string>;
+    endpoints: Set<string>;
+    cidrs: Set<string>;
+    nodePorts: Set<string>;
+    network: Set<string>;
+  }>();
+  for (const row of rows) {
+    const baseKubernetes = kubernetesForRow(row);
+    const probeKubernetes = row.world ? probeByWorldId.get(row.world.id)?.kubernetes : null;
+    const kubernetes = probeKubernetes?.enabled ? { ...baseKubernetes, ...probeKubernetes } : baseKubernetes;
+    if (!kubernetes.enabled) continue;
+    const cluster = kubernetes.clusterName || "kakurizai";
+    let lab = labs.get(cluster);
+    if (!lab) {
+      lab = {
+        cluster,
+        controlPlanes: new Set(),
+        workers: new Set(),
+        endpoints: new Set(),
+        cidrs: new Set(),
+        nodePorts: new Set(),
+        network: new Set()
+      };
+      labs.set(cluster, lab);
+    }
+    const nodeLabel = formatKubernetesLabNode(row, kubernetes);
+    if (kubernetes.nodeRole === "worker") lab.workers.add(nodeLabel);
+    else lab.controlPlanes.add(nodeLabel);
+    const apiPort = kubernetes.apiServerPort || 6443;
+    if (kubernetes.joinEndpoint) lab.endpoints.add(kubernetes.joinEndpoint);
+    else if (kubernetes.nodeRole !== "worker") lab.endpoints.add(`https://${row.runtime?.sandboxIp || kubernetes.nodeName || row.name}:${apiPort}`);
+    if (kubernetes.podCidr || kubernetes.serviceCidr) lab.cidrs.add(`${kubernetes.podCidr || "-"} / ${kubernetes.serviceCidr || "-"}`);
+    for (const port of kubernetes.nodePorts || []) lab.nodePorts.add(String(port));
+    const network = networkForRow(row, fallbackType);
+    lab.network.add(formatBool(network.allowInternetAccess));
+    const natSummary = formatNatSummary(network.nat);
+    if (natSummary !== "disabled") lab.network.add(natSummary);
+    const forwardSummary = formatPortForwardSummary(network.nat?.portForwards) || formatRuntimePortSummary(row.runtime?.portMappings || []);
+    if (forwardSummary) lab.network.add(`fw ${forwardSummary}`);
+  }
+  return [...labs.values()].map((lab) => ({
+    cluster: lab.cluster,
+    controlPlanes: formatSet(lab.controlPlanes),
+    workers: formatSet(lab.workers),
+    endpoints: formatSet(lab.endpoints),
+    cidrs: formatSet(lab.cidrs),
+    nodePorts: formatSet(lab.nodePorts),
+    network: formatSet(lab.network)
+  })).sort((left, right) => left.cluster.localeCompare(right.cluster));
+}
+
+function formatKubernetesLabNode(row: InventoryRow, kubernetes: KubernetesConfig) {
+  const name = kubernetes.nodeName || row.name;
+  const ip = row.runtime?.sandboxIp;
+  return ip ? `${name} ${ip}` : name;
+}
+
+function formatSet(values: Set<string>) {
+  return [...values].filter(Boolean).join(", ");
+}
+
 function formatSysctls(value?: Record<string, string> | null) {
   if (!value || !Object.keys(value).length) return "-";
   return Object.entries(value).map(([key, sysctlValue]) => `${key}=${sysctlValue}`).join(",");
@@ -3281,6 +3383,31 @@ function networkForRow(row: InventoryRow, fallbackType = "tap"): NetworkConfig {
     vlan: parseAnnotationJson<VlanConfig>(annotations["kakurizai.network.vlan"]) || { enabled: false },
     nat: parseAnnotationJson<NatConfig>(annotations["kakurizai.network.nat"]) || { enabled: annotations["kakurizai.network.nat.enabled"] === "true", portForwards: [] },
     dns: { servers: [], searches: [], options: [] }
+  };
+}
+
+function kubernetesForRow(row: InventoryRow): KubernetesConfig {
+  if (row.world?.backendConfig?.kubernetes) return row.world.backendConfig.kubernetes;
+  const annotations = row.runtime?.annotations || {};
+  const hasKubernetes = annotations["kakurizai.kubernetes"] === "true" || Boolean(annotations["kakurizai.kubernetes.cluster"]);
+  if (!hasKubernetes) return { enabled: false };
+  const apiServerPort = Number(annotations["kakurizai.kubernetes.apiServerPort"] || 6443);
+  return {
+    enabled: annotations["kakurizai.kubernetes"] !== "false",
+    profile: annotations["kakurizai.kubernetes.profile"] || "k3s",
+    clusterName: annotations["kakurizai.kubernetes.cluster"] || "kakurizai",
+    nodeRole: annotations["kakurizai.kubernetes.nodeRole"] || "standalone",
+    nodeName: annotations["kakurizai.kubernetes.nodeName"] || row.name,
+    cni: annotations["kakurizai.kubernetes.cni"] || "flannel",
+    podCidr: annotations["kakurizai.kubernetes.podCidr"] || "10.42.0.0/16",
+    serviceCidr: annotations["kakurizai.kubernetes.serviceCidr"] || "10.43.0.0/16",
+    joinEndpoint: annotations["kakurizai.kubernetes.joinEndpoint"] || "",
+    joinToken: annotations["kakurizai.kubernetes.joinToken"] || "",
+    advertiseAddress: annotations["kakurizai.kubernetes.advertiseAddress"] || "",
+    extraArgs: parseLines(annotations["kakurizai.kubernetes.extraArgs"] || ""),
+    apiServerPort: Number.isInteger(apiServerPort) && apiServerPort > 0 ? apiServerPort : 6443,
+    nodePorts: parsePortAnnotation(annotations["kakurizai.kubernetes.nodePorts"]),
+    sysctls: parseAnnotationJson<Record<string, string>>(annotations["kakurizai.kubernetes.sysctls"]) || {}
   };
 }
 

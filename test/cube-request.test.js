@@ -264,6 +264,12 @@ test("cube request carries network, DNS, and Kubernetes lab settings", async () 
   assert.equal(request.annotations["kakurizai.kubernetes.joinToken"], "token-123");
   assert.equal(request.annotations["kakurizai.kubernetes.advertiseAddress"], "10.0.0.20");
   assert.equal(request.annotations["kakurizai.kubernetes.extraArgs"], "--disable=traefik");
+  assert.deepEqual(JSON.parse(request.annotations["kakurizai.kubernetes.sysctls"]), {
+    "net.ipv4.ip_forward": "1",
+    "net.bridge.bridge-nf-call-iptables": "1",
+    "net.bridge.bridge-nf-call-ip6tables": "1",
+    "net.ipv4.conf.all.route_localnet": "1"
+  });
   assert.equal(request.labels["kakurizai.kubernetes.cluster"], "lab-a");
   assert.equal(request.labels["kakurizai.kubernetes.node-role"], "control-plane");
   assert.equal(request.containers[0].annotations["kakurizai.kubernetes.cluster"], "lab-a");

@@ -32,7 +32,12 @@ export function buildNetworkProbePlan(worlds = [], runtimes = [], options = {}) 
         profile: kubernetes.profile || "k3s",
         clusterName: kubernetes.clusterName || "kakurizai",
         nodeRole: kubernetes.nodeRole || "standalone",
-        nodeName: kubernetes.nodeName || world.name
+        nodeName: kubernetes.nodeName || world.name,
+        podCidr: kubernetes.podCidr || "10.42.0.0/16",
+        serviceCidr: kubernetes.serviceCidr || "10.43.0.0/16",
+        joinEndpoint: kubernetes.joinEndpoint || "",
+        apiServerPort: kubernetes.apiServerPort || 6443,
+        nodePorts: kubernetes.nodePorts || []
       },
       allowInternetAccess: network.allowInternetAccess,
       exposedPorts: mergePorts([

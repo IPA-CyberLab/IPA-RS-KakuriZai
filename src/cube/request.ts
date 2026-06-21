@@ -192,6 +192,7 @@ function kubernetesAnnotations(kubernetes) {
   if (kubernetes.joinToken) annotations["kakurizai.kubernetes.joinToken"] = kubernetes.joinToken;
   if (kubernetes.advertiseAddress) annotations["kakurizai.kubernetes.advertiseAddress"] = kubernetes.advertiseAddress;
   if (kubernetes.extraArgs?.length) annotations["kakurizai.kubernetes.extraArgs"] = kubernetes.extraArgs.join("\n");
+  if (kubernetes.sysctls && Object.keys(kubernetes.sysctls).length) annotations["kakurizai.kubernetes.sysctls"] = JSON.stringify(kubernetes.sysctls);
   return annotations;
 }
 

@@ -1272,6 +1272,11 @@ label {
   grid-template-columns: 160px 130px minmax(230px, 1fr) 90px 160px 180px 90px;
 }
 
+.k8sLabMatrix .dataRow {
+  min-width: 1080px;
+  grid-template-columns: 160px 180px 180px minmax(210px, 1fr) 180px 120px 210px;
+}
+
 .nodeTable .dataRow {
   min-width: 840px;
   grid-template-columns: 150px 100px 150px 150px 110px 110px;
