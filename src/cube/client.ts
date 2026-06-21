@@ -7,6 +7,60 @@ import { commandExists } from "../core/fs.js";
 import { runCommand } from "../core/process.js";
 import { mountSpecsForWorld } from "./request.js";
 
+const PUBLIC_IPV4_CIDRS = [
+  "1.0.0.0/8",
+  "2.0.0.0/7",
+  "4.0.0.0/6",
+  "8.0.0.0/7",
+  "11.0.0.0/8",
+  "12.0.0.0/6",
+  "16.0.0.0/4",
+  "32.0.0.0/3",
+  "64.0.0.0/3",
+  "96.0.0.0/6",
+  "100.0.0.0/10",
+  "100.128.0.0/9",
+  "101.0.0.0/8",
+  "102.0.0.0/7",
+  "104.0.0.0/5",
+  "112.0.0.0/5",
+  "120.0.0.0/6",
+  "124.0.0.0/7",
+  "126.0.0.0/8",
+  "128.0.0.0/3",
+  "160.0.0.0/5",
+  "168.0.0.0/8",
+  "169.0.0.0/9",
+  "169.128.0.0/10",
+  "169.192.0.0/11",
+  "169.224.0.0/12",
+  "169.240.0.0/13",
+  "169.248.0.0/14",
+  "169.252.0.0/15",
+  "169.255.0.0/16",
+  "170.0.0.0/7",
+  "172.0.0.0/12",
+  "172.32.0.0/11",
+  "172.64.0.0/10",
+  "172.128.0.0/9",
+  "173.0.0.0/8",
+  "174.0.0.0/7",
+  "176.0.0.0/4",
+  "192.0.0.0/9",
+  "192.128.0.0/11",
+  "192.160.0.0/13",
+  "192.169.0.0/16",
+  "192.170.0.0/15",
+  "192.172.0.0/14",
+  "192.176.0.0/12",
+  "192.192.0.0/10",
+  "193.0.0.0/8",
+  "194.0.0.0/7",
+  "196.0.0.0/6",
+  "200.0.0.0/5",
+  "208.0.0.0/4"
+];
+
 export class CubeSandboxClient {
   constructor(config = {}) {
     this.config = config;
@@ -256,13 +310,15 @@ export class CubeSandboxClient {
       return { skipped: true, reason: "sandbox IP is not available", requestedIp, runtimeIp };
     }
     const firewall = await this.syncHostEgressRules(world, sandboxIps, network);
+    const datapath = await this.syncCubeDatapathEgressRules(world, sandboxIps, network);
     return {
       skipped: false,
       requestedIp,
       runtimeIp,
       sandboxIp: requestedIp || runtimeIp,
       sandboxIps,
-      firewall
+      firewall,
+      datapath
     };
   }
 
@@ -304,6 +360,79 @@ export class CubeSandboxClient {
       sudo: result.sudo || false,
       ruleCount: cidrRules.length,
       reason: result.code === 0 ? null : result.stderr || result.stdout || `iptables exited with ${result.code}`
+    };
+  }
+
+  async syncCubeDatapathEgressRules(world, sandboxIps, network = {}) {
+    const tc = resolveSystemCommand(this.config.tc || "tc", ["/usr/sbin/tc", "/sbin/tc"]);
+    const bpftool = resolveSystemCommand(this.config.bpftool || "bpftool", ["/usr/sbin/bpftool", "/sbin/bpftool"]);
+    if (!tc || !bpftool) return { skipped: true, reason: "tc or bpftool not found" };
+
+    const dropCidrs = new Set(network.denyOut || []);
+    if (network.allowInternetAccess === false || network.nat?.enabled === false) {
+      for (const cidr of PUBLIC_IPV4_CIDRS) dropCidrs.add(cidr);
+    }
+    const cidrs = [...dropCidrs].filter(Boolean);
+
+    const startPref = 100;
+    const endPref = 249;
+    if (cidrs.length > endPref - startPref + 1) {
+      return { skipped: true, reason: `too many tc egress rules: ${cidrs.length}` };
+    }
+
+    const blocks = sandboxIps.map((ip) => {
+      const dev = `z${ip}`;
+      const cleanup = `for pref in $(seq ${startPref} ${endPref}); do ${shellQuote(tc)} filter del dev ${shellQuote(dev)} ingress pref "$pref" 2>/dev/null || true; done`;
+      const restoreFromCube = [
+        `from_cube_id=$(${shellQuote(tc)} filter show dev ${shellQuote(dev)} ingress 2>/dev/null | awk '/from_cube/ { for (i = 1; i <= NF; i++) if ($i == "id") { print $(i + 1); exit } }')`,
+        `if [ -n "$from_cube_id" ]; then`,
+        `  pin=/sys/fs/bpf/kakurizai-from_cube-$from_cube_id`,
+        `  [ -e "$pin" ] || ${shellQuote(bpftool)} prog pin id "$from_cube_id" "$pin" 2>/dev/null || true`,
+        `  if ! ${shellQuote(tc)} filter show dev ${shellQuote(dev)} ingress 2>/dev/null | grep -q 'pref 1 .*from_cube'; then`,
+        `    ${shellQuote(tc)} filter del dev ${shellQuote(dev)} ingress pref 1 2>/dev/null || true`,
+        `    ${shellQuote(tc)} filter add dev ${shellQuote(dev)} ingress pref 1 bpf object-pinned "$pin" direct-action 2>/dev/null || true`,
+        `  fi`,
+        `  ${shellQuote(tc)} filter del dev ${shellQuote(dev)} ingress pref 1000 2>/dev/null || true`,
+        `fi`
+      ].join("\n");
+      if (!cidrs.length) {
+        return [
+          `if ip link show ${shellQuote(dev)} >/dev/null 2>&1; then`,
+          cleanup,
+          restoreFromCube,
+          `fi`
+        ].join("\n");
+      }
+
+      const addDrops = cidrs.map((cidr, index) => (
+        `${shellQuote(tc)} filter add dev ${shellQuote(dev)} ingress pref ${startPref + index} protocol ip flower dst_ip ${shellQuote(cidr)} action drop`
+      )).join("\n");
+      return [
+        `if ip link show ${shellQuote(dev)} >/dev/null 2>&1; then`,
+        `${shellQuote(tc)} qdisc add dev ${shellQuote(dev)} clsact 2>/dev/null || true`,
+        `from_cube_id=$(${shellQuote(tc)} filter show dev ${shellQuote(dev)} ingress 2>/dev/null | awk '/from_cube/ { for (i = 1; i <= NF; i++) if ($i == "id") { print $(i + 1); exit } }')`,
+        `if [ -n "$from_cube_id" ]; then`,
+        `  pin=/sys/fs/bpf/kakurizai-from_cube-$from_cube_id`,
+        `  [ -e "$pin" ] || ${shellQuote(bpftool)} prog pin id "$from_cube_id" "$pin" 2>/dev/null || true`,
+        `  if ! ${shellQuote(tc)} filter show dev ${shellQuote(dev)} ingress 2>/dev/null | grep -q 'pref 1000 .*from_cube'; then`,
+        `    ${shellQuote(tc)} filter add dev ${shellQuote(dev)} ingress pref 1000 bpf object-pinned "$pin" direct-action 2>/dev/null || true`,
+        `  fi`,
+        `  ${shellQuote(tc)} filter del dev ${shellQuote(dev)} ingress pref 1 2>/dev/null || true`,
+        cleanup,
+        addDrops,
+        `fi`,
+        `fi`
+      ].join("\n");
+    });
+
+    const result = await runHostNetworkCommand(blocks.join("\n"));
+    return {
+      skipped: false,
+      applied: result.code === 0,
+      code: result.code,
+      sudo: result.sudo || false,
+      ruleCount: cidrs.length * sandboxIps.length,
+      reason: result.code === 0 ? null : result.stderr || result.stdout || `tc exited with ${result.code}`
     };
   }
 
@@ -775,9 +904,17 @@ async function runHostNetworkCommand(script) {
 }
 
 function resolveIptables(configuredPath) {
-  const configured = commandExists(configuredPath || "iptables");
+  return resolveSystemCommand(configuredPath || "iptables", ["/usr/sbin/iptables", "/sbin/iptables"]);
+}
+
+function resolveSystemCommand(command, fallbackPaths = []) {
+  const configured = commandExists(command);
   if (configured) return configured;
-  return commandExists("/usr/sbin/iptables") || commandExists("/sbin/iptables");
+  for (const fallbackPath of fallbackPaths) {
+    const fallback = commandExists(fallbackPath);
+    if (fallback) return fallback;
+  }
+  return null;
 }
 
 function shouldRetryWithoutSudo(result) {
