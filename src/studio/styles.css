@@ -36,7 +36,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -77,7 +78,8 @@ button:disabled {
 }
 
 input,
-select {
+select,
+textarea {
   width: 100%;
   min-height: 32px;
   border: 1px solid var(--line);
@@ -98,8 +100,15 @@ input[type="checkbox"] {
 }
 
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
   border-color: var(--accent);
+}
+
+textarea {
+  min-height: 74px;
+  resize: vertical;
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 label {
@@ -355,6 +364,11 @@ label {
   border: 1px solid var(--line);
   border-radius: 6px;
   background: #101114;
+}
+
+.inlineCheck {
+  min-height: 32px;
+  align-self: end;
 }
 
 .folderBrowser {
@@ -942,6 +956,12 @@ label {
   gap: 10px;
 }
 
+.accessDetails {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+}
+
 .accessLauncher {
   min-width: 0;
   flex-wrap: nowrap;
@@ -1098,6 +1118,92 @@ label {
   grid-template-columns: 1fr 1fr;
 }
 
+.networkTopology {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) 120px minmax(160px, 1fr) 150px minmax(160px, 1fr);
+  gap: 10px;
+  align-items: stretch;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: #0d0e12;
+  padding: 10px;
+}
+
+.networkNode,
+.networkEdge,
+.networkPeerBand {
+  min-width: 0;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  border: 1px solid #24262d;
+  border-radius: 6px;
+  background: #111217;
+  padding: 10px;
+}
+
+.networkNode {
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+}
+
+.networkNode svg {
+  grid-row: span 2;
+  color: var(--accent);
+}
+
+.networkNode.active svg {
+  color: var(--green);
+}
+
+.networkNode span,
+.networkEdge small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 680;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.networkNode strong,
+.networkEdge span {
+  min-width: 0;
+  overflow: hidden;
+  color: #ededf0;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.networkEdge {
+  justify-items: center;
+  text-align: center;
+}
+
+.networkPeerBand {
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.networkPeerBand span {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  color: #d8d9de;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.networkMatrix .dataRow {
+  min-width: 980px;
+  grid-template-columns: 160px 130px minmax(230px, 1fr) 90px 160px 180px 90px;
+}
+
 .nodeTable .dataRow {
   min-width: 840px;
   grid-template-columns: 150px 100px 150px 150px 110px 110px;
@@ -1233,5 +1339,13 @@ label {
 
   .togglePair {
     grid-template-columns: 1fr;
+  }
+
+  .networkTopology {
+    grid-template-columns: 1fr;
+  }
+
+  .networkPeerBand {
+    grid-column: auto;
   }
 }

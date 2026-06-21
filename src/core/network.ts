@@ -12,11 +12,12 @@ export function normalizeNetworkConfig(input = {}) {
     type,
     mode: cleanString(source.mode || type),
     vlan: normalizeVlanConfig(source.vlan || {}),
+    nat: normalizeNatConfig(source.nat || source.natConfig || {}),
     exposedPorts,
     dns,
     allowOut: normalizeStringList(source.allowOut),
     denyOut: normalizeStringList(source.denyOut),
-    rules: Array.isArray(source.rules) ? source.rules : []
+    rules: normalizeEgressRules(source.rules)
   };
   if (allowInternetAccess !== undefined && allowInternetAccess !== null && allowInternetAccess !== "") {
     network.allowInternetAccess = Boolean(allowInternetAccess);
@@ -54,6 +55,31 @@ export function normalizeKubernetesConfig(input = {}) {
       } : {}),
       ...(input?.sysctls || {})
     }
+  };
+}
+
+export function normalizeNatConfig(input = {}) {
+  if (!input || input.enabled === false) {
+    return {
+      enabled: false,
+      masquerade: false,
+      outboundInterface: null,
+      subnet: null,
+      gateway: null,
+      portForwards: []
+    };
+  }
+  const portForwards = normalizePortForwards(input.portForwards || input.forwards || []);
+  const outboundInterface = cleanString(input.outboundInterface || input.interface || input.iface || "");
+  const subnet = cleanString(input.subnet || input.cidr || "");
+  const gateway = cleanString(input.gateway || "");
+  return {
+    enabled: Boolean(input.enabled || input.masquerade || outboundInterface || subnet || gateway || portForwards.length),
+    masquerade: input.masquerade !== false,
+    outboundInterface: outboundInterface || null,
+    subnet: subnet || null,
+    gateway: gateway || null,
+    portForwards
   };
 }
 
@@ -122,6 +148,57 @@ function normalizeDnsConfig(input = {}) {
     searches: normalizeStringList(input.searches),
     options: normalizeStringList(input.options)
   };
+}
+
+function normalizePortForwards(value) {
+  const raw = Array.isArray(value) ? value : [];
+  return raw.map((item, index) => {
+    if (!item || typeof item !== "object") throw new Error("nat.portForwards entries must be objects");
+    const protocol = cleanString(item.protocol || "tcp").toLowerCase();
+    if (!["tcp", "udp"].includes(protocol)) throw new Error("nat.portForwards.protocol must be tcp or udp");
+    const hostPort = item.hostPort ?? item.listenPort ?? item.externalPort;
+    const sandboxPort = item.sandboxPort ?? item.containerPort ?? item.targetPort;
+    return {
+      name: cleanString(item.name || `forward-${index + 1}`),
+      protocol,
+      listenAddress: cleanString(item.listenAddress || item.host || "") || null,
+      hostPort: normalizePort(hostPort, "nat.portForwards.hostPort"),
+      sandboxPort: normalizePort(sandboxPort, "nat.portForwards.sandboxPort"),
+      targetAddress: cleanString(item.targetAddress || item.destination || "") || null
+    };
+  });
+}
+
+function normalizeEgressRules(value) {
+  if (!value) return [];
+  if (!Array.isArray(value)) throw new Error("network.rules must be an array");
+  return value.map((rule, index) => {
+    if (!rule || typeof rule !== "object") throw new Error("network.rules entries must be objects");
+    const match = rule.match && typeof rule.match === "object" ? {
+      ...(cleanString(rule.match.sni || "") ? { sni: cleanString(rule.match.sni) } : {}),
+      ...(cleanString(rule.match.host || "") ? { host: cleanString(rule.match.host) } : {}),
+      ...(normalizeStringList(rule.match.method || rule.match.methods).length ? { method: normalizeStringList(rule.match.method || rule.match.methods) } : {}),
+      ...(cleanString(rule.match.path || "") ? { path: cleanString(rule.match.path) } : {}),
+      ...(cleanString(rule.match.scheme || "") ? { scheme: cleanString(rule.match.scheme) } : {})
+    } : undefined;
+    const actionSource = rule.action && typeof rule.action === "object" ? rule.action : {};
+    const action = {
+      allow: actionSource.allow !== undefined ? Boolean(actionSource.allow) : true,
+      ...(cleanString(actionSource.audit || "") ? { audit: cleanString(actionSource.audit) } : {}),
+      ...(Array.isArray(actionSource.inject) && actionSource.inject.length ? {
+        inject: actionSource.inject.map((inject) => ({
+          header: cleanString(inject.header),
+          secret: cleanString(inject.secret),
+          ...(cleanString(inject.format || "") ? { format: cleanString(inject.format) } : {})
+        })).filter((inject) => inject.header && inject.secret)
+      } : {})
+    };
+    return {
+      name: cleanString(rule.name || `rule-${index + 1}`),
+      ...(match && Object.keys(match).length ? { match } : {}),
+      action
+    };
+  });
 }
 
 function effectiveDnsConfig(dns, kubernetes) {

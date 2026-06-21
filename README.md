@@ -67,6 +67,19 @@ Each sandbox stores:
 
 Writes are represented in the upper layer or whiteout tree. Host source files are changed only by `agctl apply <sandbox>`.
 
+## TAP Networking
+
+Studio can create and edit the TAP network settings stored on each sandbox:
+
+- exposed ports
+- DNS servers, search domains, and resolver options
+- internet egress, allow/deny CIDRs, and L7 egress rules
+- NAT metadata, masquerade mode, outbound interface, subnet/gateway, and port-forward definitions
+- VLAN metadata for host-side bridge integrations
+- Kubernetes lab profile, API server port, node ports, and required sysctls
+
+CubeSandbox OSS accepts `network_type=tap`, exposed ports, DNS config, and `cube_network_config` egress policy directly. NAT and VLAN bridge settings are persisted as KakuriZai annotations so host-side integrations or future CubeSandbox plugins can consume them.
+
 ## Backends
 
 Default backend selection preserves the IsolatedAgent defaults:

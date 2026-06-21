@@ -112,9 +112,11 @@ export function applyNetworkToCubeRequest(request, networkInput = {}, kubernetes
   request.annotations = {
     ...(request.annotations || {}),
     "kakurizai.network.type": request.network_type,
+    "kakurizai.network.mode": network.mode || request.network_type,
     "kakurizai.kubernetes": String(kubernetes.enabled),
     "kakurizai.kubernetes.profile": kubernetes.profile
   };
+  applyNetworkAnnotations(request.annotations, network);
   if (network.exposedPorts.length) {
     request.annotations["com.exposed_ports"] = network.exposedPorts.join(":");
   } else {
@@ -128,6 +130,7 @@ export function applyNetworkToCubeRequest(request, networkInput = {}, kubernetes
     container.annotations = {
       ...(container.annotations || {}),
       "kakurizai.network.type": request.network_type,
+      "kakurizai.network.mode": network.mode || request.network_type,
       "kakurizai.kubernetes": String(kubernetes.enabled),
       "kakurizai.kubernetes.profile": kubernetes.profile
     };
@@ -152,6 +155,22 @@ export function applyNetworkToCubeRequest(request, networkInput = {}, kubernetes
     }
   }
   return request;
+}
+
+function applyNetworkAnnotations(annotations, network) {
+  const vlan = network.vlan || {};
+  const nat = network.nat || {};
+  annotations["kakurizai.network.vlan.enabled"] = String(Boolean(vlan.enabled));
+  annotations["kakurizai.network.nat.enabled"] = String(Boolean(nat.enabled));
+  annotations["kakurizai.network.nat.masquerade"] = String(Boolean(nat.masquerade));
+  setJsonAnnotation(annotations, "kakurizai.network.vlan", vlan.enabled ? vlan : null);
+  setJsonAnnotation(annotations, "kakurizai.network.nat", nat.enabled ? nat : null);
+  setJsonAnnotation(annotations, "kakurizai.network.portForwards", nat.enabled && nat.portForwards?.length ? nat.portForwards : null);
+}
+
+function setJsonAnnotation(annotations, key, value) {
+  if (value) annotations[key] = JSON.stringify(value);
+  else delete annotations[key];
 }
 
 function setupCommandForMounts(mounts, paths) {

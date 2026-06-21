@@ -250,6 +250,96 @@ test("cube request carries network, DNS, and Kubernetes lab settings", async () 
   assert.equal(request.containers[0].sysctls["net.ipv4.ip_forward"], "1");
 });
 
+test("cube request carries TAP NAT, VLAN, forward, and L7 egress settings", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-"));
+  const config = await loadConfig({ home: path.join(tmp, "home"), createSecrets: false });
+  const store = new WorldStore(config);
+  const world = await store.create({
+    name: "cube-tap-full",
+    backend: "cube-sandbox-overlay",
+    backendConfig: {
+      hostMount: false,
+      mountMode: "none",
+      network: {
+        type: "tap",
+        mode: "tap-nat",
+        exposedPorts: [22, 6443],
+        dns: {
+          servers: ["1.1.1.1"],
+          searches: ["svc.cluster.local"],
+          options: ["ndots:5"]
+        },
+        allowInternetAccess: true,
+        allowOut: ["0.0.0.0/0"],
+        denyOut: ["10.0.0.0/8"],
+        rules: [
+          {
+            name: "allow-api",
+            match: { host: "api.example.com", method: ["GET"] },
+            action: { allow: true, audit: "log" }
+          }
+        ],
+        vlan: {
+          enabled: true,
+          vlanId: 100,
+          hostInterface: "eth0",
+          bridgeName: "br100"
+        },
+        nat: {
+          enabled: true,
+          masquerade: true,
+          outboundInterface: "tailscale0",
+          subnet: "10.244.0.0/16",
+          gateway: "10.244.0.1",
+          portForwards: [
+            { name: "ssh", protocol: "tcp", hostPort: 2222, sandboxPort: 22 }
+          ]
+        }
+      }
+    }
+  });
+
+  const request = buildCubeSandboxRequest(world, { template: "base" });
+
+  assert.equal(request.network_type, "tap");
+  assert.equal(request.annotations["kakurizai.network.mode"], "tap-nat");
+  assert.equal(request.annotations["kakurizai.network.vlan.enabled"], "true");
+  assert.equal(request.annotations["kakurizai.network.nat.enabled"], "true");
+  assert.deepEqual(JSON.parse(request.annotations["kakurizai.network.vlan"]), {
+    enabled: true,
+    vlanId: 100,
+    hostInterface: "eth0",
+    bridgeName: "br100"
+  });
+  assert.deepEqual(JSON.parse(request.annotations["kakurizai.network.portForwards"]), [
+    {
+      name: "ssh",
+      protocol: "tcp",
+      listenAddress: null,
+      hostPort: 2222,
+      sandboxPort: 22,
+      targetAddress: null
+    }
+  ]);
+  assert.deepEqual(request.cube_network_config, {
+    allowInternetAccess: true,
+    allowOut: ["0.0.0.0/0"],
+    denyOut: ["10.0.0.0/8"],
+    rules: [
+      {
+        name: "allow-api",
+        match: { host: "api.example.com", method: ["GET"] },
+        action: { allow: true, audit: "log" }
+      }
+    ]
+  });
+  assert.deepEqual(request.containers[0].dns_config, {
+    servers: ["1.1.1.1"],
+    searches: ["svc.cluster.local"],
+    options: ["ndots:5"]
+  });
+});
+
 test("sandbox manifest drives create input and Terraform bundle", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-spec-"));
   const manifest = parseSandboxManifest(`
@@ -293,5 +383,18 @@ test("network config rejects unsupported CubeSandbox network types", () => {
   assert.throws(
     () => normalizeNetworkConfig({ type: "vlan", vlan: { enabled: true, vlanId: 100, hostInterface: "eth0" } }),
     /supports network\.type=tap only/
+  );
+});
+
+test("network config validates NAT forward ports", () => {
+  assert.throws(
+    () => normalizeNetworkConfig({
+      type: "tap",
+      nat: {
+        enabled: true,
+        portForwards: [{ name: "bad", protocol: "tcp", hostPort: 0, sandboxPort: 22 }]
+      }
+    }),
+    /hostPort/
   );
 });

@@ -153,10 +153,12 @@ type NetworkConfig = {
   type?: string;
   mode?: string;
   vlan?: VlanConfig | null;
+  nat?: NatConfig | null;
   exposedPorts?: number[];
   allowInternetAccess?: boolean;
   allowOut?: string[];
   denyOut?: string[];
+  rules?: EgressRule[];
   dns?: {
     servers?: string[];
     searches?: string[];
@@ -170,6 +172,26 @@ type VlanConfig = {
   hostInterface?: string | null;
   bridgeName?: string | null;
 };
+
+type NatConfig = {
+  enabled?: boolean;
+  masquerade?: boolean;
+  outboundInterface?: string | null;
+  subnet?: string | null;
+  gateway?: string | null;
+  portForwards?: PortForwardConfig[];
+};
+
+type PortForwardConfig = {
+  name?: string;
+  protocol?: "tcp" | "udp" | string;
+  listenAddress?: string | null;
+  hostPort?: number;
+  sandboxPort?: number;
+  targetAddress?: string | null;
+};
+
+type EgressRule = Record<string, unknown>;
 
 type KubernetesConfig = {
   enabled?: boolean;
@@ -244,6 +266,20 @@ type BrowseResult = {
   path: string;
   parent: string | null;
   entries: Array<{ name: string; path: string; type: "directory" }>;
+};
+
+type DevAccessSession = {
+  worldId: string;
+  worldName: string;
+  sandboxIp?: string | null;
+  workspace?: string | null;
+  vscodeUrl?: string | null;
+  vscodePort?: number | null;
+  vscodeForwardPort?: number | null;
+  sshHost?: string | null;
+  sshPort?: number | null;
+  sshUri?: string | null;
+  sshCommand?: string | null;
 };
 
 type HostMountConfig = {
@@ -331,11 +367,25 @@ function App() {
     memory: "2000Mi",
     writableLayerSize: "1G",
     networkType: "tap",
+    networkMode: "tap",
     exposedPorts: "",
     dnsServers: "",
+    dnsSearches: "",
+    dnsOptions: "",
     allowInternetAccess: true,
     allowOut: "",
     denyOut: "10.0.0.0/8,100.64.0.0/10,172.16.0.0/12,192.168.0.0/18",
+    rulesJson: "[]",
+    vlanEnabled: false,
+    vlanId: "",
+    vlanHostInterface: "",
+    vlanBridgeName: "",
+    natEnabled: true,
+    natMasquerade: true,
+    natOutboundInterface: "",
+    natSubnet: "",
+    natGateway: "",
+    natPortForwardsJson: "[]",
     kubernetesEnabled: false
   });
   const [browser, setBrowser] = React.useState<BrowseResult | null>(null);
@@ -349,6 +399,7 @@ function App() {
   const selected = inventory.find((row) => row.key === selectedId) || filteredInventory[0] || inventory[0] || null;
   const selectedTemplate = findTemplateForSandbox(cube, selected);
   const selectedNode = findNodeForSandbox(cube, selected);
+  const selectedNetwork = selected ? networkForRow(selected, selectedTemplate?.networkType || cube?.config?.networkType || "tap") : null;
 
   React.useEffect(() => {
     api<AuthConfig>("/api/auth/config", { token: null })
@@ -505,11 +556,31 @@ function App() {
           networkType: launch.networkType,
           network: {
             type: launch.networkType,
+            mode: launch.networkMode,
             exposedPorts: parsePortList(launch.exposedPorts),
-            dns: { servers: parseCsv(launch.dnsServers) },
+            dns: {
+              servers: parseCsv(launch.dnsServers),
+              searches: parseCsv(launch.dnsSearches),
+              options: parseCsv(launch.dnsOptions)
+            },
             allowInternetAccess: launch.allowInternetAccess,
             allowOut: parseCsv(launch.allowOut),
-            denyOut: parseCsv(launch.denyOut)
+            denyOut: parseCsv(launch.denyOut),
+            rules: parseJsonArray(launch.rulesJson, "egress rules"),
+            vlan: {
+              enabled: launch.vlanEnabled,
+              vlanId: launch.vlanId ? Number(launch.vlanId) : null,
+              hostInterface: launch.vlanHostInterface,
+              bridgeName: launch.vlanBridgeName
+            },
+            nat: {
+              enabled: launch.natEnabled,
+              masquerade: launch.natMasquerade,
+              outboundInterface: launch.natOutboundInterface,
+              subnet: launch.natSubnet,
+              gateway: launch.natGateway,
+              portForwards: parseJsonArray(launch.natPortForwardsJson, "NAT port forwards")
+            }
           },
           kubernetes: {
             enabled: launch.kubernetesEnabled,
@@ -826,11 +897,30 @@ function App() {
             </div>
           </div>
 
-          <label>Expose ports</label>
-          <input value={launch.exposedPorts} onChange={(event) => setLaunch({ ...launch, exposedPorts: event.target.value })} placeholder="6443,30000,30001" />
+          <div className="splitFields">
+            <div>
+              <label>Network mode</label>
+              <input value={launch.networkMode} onChange={(event) => setLaunch({ ...launch, networkMode: event.target.value })} placeholder="tap" />
+            </div>
+            <div>
+              <label>Expose ports</label>
+              <input value={launch.exposedPorts} onChange={(event) => setLaunch({ ...launch, exposedPorts: event.target.value })} placeholder="6443,30000,30001" />
+            </div>
+          </div>
 
-          <label>DNS servers</label>
-          <input value={launch.dnsServers} onChange={(event) => setLaunch({ ...launch, dnsServers: event.target.value })} placeholder="8.8.8.8,1.1.1.1" />
+          <div className="splitFields">
+            <div>
+              <label>DNS servers</label>
+              <input value={launch.dnsServers} onChange={(event) => setLaunch({ ...launch, dnsServers: event.target.value })} placeholder="8.8.8.8,1.1.1.1" />
+            </div>
+            <div>
+              <label>DNS searches</label>
+              <input value={launch.dnsSearches} onChange={(event) => setLaunch({ ...launch, dnsSearches: event.target.value })} placeholder="svc.cluster.local,cluster.local" />
+            </div>
+          </div>
+
+          <label>DNS options</label>
+          <input value={launch.dnsOptions} onChange={(event) => setLaunch({ ...launch, dnsOptions: event.target.value })} placeholder="ndots:5" />
 
           <div className="togglePair">
             <label className="checkRow compactCheck">
@@ -847,6 +937,54 @@ function App() {
             <label className="checkRow compactCheck">
               <input
                 type="checkbox"
+                checked={launch.natEnabled}
+                onChange={(event) => setLaunch({ ...launch, natEnabled: event.target.checked })}
+              />
+              <span>
+                <strong>NAT</strong>
+                <small>Outbound and forwards</small>
+              </span>
+            </label>
+          </div>
+
+          {launch.natEnabled ? (
+            <>
+              <div className="splitFields">
+                <div>
+                  <label>NAT subnet</label>
+                  <input value={launch.natSubnet} onChange={(event) => setLaunch({ ...launch, natSubnet: event.target.value })} placeholder="10.244.0.0/16" />
+                </div>
+                <div>
+                  <label>NAT gateway</label>
+                  <input value={launch.natGateway} onChange={(event) => setLaunch({ ...launch, natGateway: event.target.value })} placeholder="10.244.0.1" />
+                </div>
+              </div>
+              <div className="splitFields">
+                <div>
+                  <label>Outbound interface</label>
+                  <input value={launch.natOutboundInterface} onChange={(event) => setLaunch({ ...launch, natOutboundInterface: event.target.value })} placeholder="tailscale0" />
+                </div>
+                <label className="checkRow compactCheck inlineCheck">
+                  <input
+                    type="checkbox"
+                    checked={launch.natMasquerade}
+                    onChange={(event) => setLaunch({ ...launch, natMasquerade: event.target.checked })}
+                  />
+                  <span>
+                    <strong>Masquerade</strong>
+                    <small>SNAT egress</small>
+                  </span>
+                </label>
+              </div>
+              <label>NAT forwards JSON</label>
+              <textarea value={launch.natPortForwardsJson} onChange={(event) => setLaunch({ ...launch, natPortForwardsJson: event.target.value })} placeholder='[{"name":"ssh","protocol":"tcp","hostPort":2222,"sandboxPort":22}]' />
+            </>
+          ) : null}
+
+          <div className="togglePair">
+            <label className="checkRow compactCheck">
+              <input
+                type="checkbox"
                 checked={launch.kubernetesEnabled}
                 onChange={(event) => setLaunch({
                   ...launch,
@@ -859,12 +997,43 @@ function App() {
                 <small>Expose API and node ports</small>
               </span>
             </label>
+            <label className="checkRow compactCheck">
+              <input
+                type="checkbox"
+                checked={launch.vlanEnabled}
+                onChange={(event) => setLaunch({ ...launch, vlanEnabled: event.target.checked })}
+              />
+              <span>
+                <strong>VLAN</strong>
+                <small>Host bridge metadata</small>
+              </span>
+            </label>
           </div>
+
+          {launch.vlanEnabled ? (
+            <div className="splitFields">
+              <div>
+                <label>VLAN ID</label>
+                <input value={launch.vlanId} onChange={(event) => setLaunch({ ...launch, vlanId: event.target.value })} placeholder="100" />
+              </div>
+              <div>
+                <label>Host interface</label>
+                <input value={launch.vlanHostInterface} onChange={(event) => setLaunch({ ...launch, vlanHostInterface: event.target.value })} placeholder="eth0" />
+              </div>
+              <div>
+                <label>Bridge name</label>
+                <input value={launch.vlanBridgeName} onChange={(event) => setLaunch({ ...launch, vlanBridgeName: event.target.value })} placeholder="br100" />
+              </div>
+            </div>
+          ) : null}
 
           <label>Deny egress CIDRs</label>
           <input value={launch.denyOut} onChange={(event) => setLaunch({ ...launch, denyOut: event.target.value })} placeholder="10.0.0.0/8,172.16.0.0/12" />
 
-          <div className="sectionEmpty inlineNote">VLAN/macvlan is not enabled in the installed CubeSandbox OSS runtime. This Studio only sends supported tap networking.</div>
+          <label>Egress rules JSON</label>
+          <textarea value={launch.rulesJson} onChange={(event) => setLaunch({ ...launch, rulesJson: event.target.value })} placeholder='[{"name":"allow-api","match":{"host":"api.example.com"},"action":{"allow":true}}]' />
+
+          <div className="sectionEmpty inlineNote">VLAN and NAT bridge settings are stored as KakuriZai tap metadata unless the installed CubeSandbox runtime consumes the matching annotations.</div>
 
           {formMessage ? <div className="formMessage">{formMessage}</div> : null}
 
@@ -1005,6 +1174,7 @@ function App() {
               </DetailSection>
 
               <DetailSection icon={<Route size={16} />} title="Network">
+                <NetworkTopology row={selected} peers={inventory} cube={cube} />
                 <NetworkEditor
                   world={selected.world}
                   runtimeNetworkType={selectedTemplate?.networkType || cube?.config?.networkType || "tap"}
@@ -1018,11 +1188,19 @@ function App() {
                   <Metric label="Port mode" value={selected.runtime?.exposedPortMode || "-"} />
                   <Metric label="Requested port" value={selected.runtime?.requestedContainerPort ? String(selected.runtime.requestedContainerPort) : "-"} />
                   <Metric label="Domain" value={cube?.config?.sandboxDomain || "-"} />
-                  <Metric label="Configured ports" value={formatList(effectiveNetworkForWorld(selected.world).exposedPorts)} />
-                  <Metric label="DNS" value={formatList(effectiveNetworkForWorld(selected.world).dns?.servers)} />
-                  <Metric label="Internet egress" value={formatBool(effectiveNetworkForWorld(selected.world).allowInternetAccess)} />
+                  <Metric label="Network mode" value={selectedNetwork?.mode || "tap"} />
+                  <Metric label="Configured ports" value={formatList(selectedNetwork?.exposedPorts)} />
+                  <Metric label="DNS" value={formatList(selectedNetwork?.dns?.servers)} />
+                  <Metric label="DNS search" value={formatList(selectedNetwork?.dns?.searches)} />
+                  <Metric label="DNS options" value={formatList(selectedNetwork?.dns?.options)} />
+                  <Metric label="Internet egress" value={formatBool(selectedNetwork?.allowInternetAccess)} />
+                  <Metric label="NAT" value={formatNatSummary(selectedNetwork?.nat)} />
+                  <Metric label="NAT forwards" value={formatPortForwardSummary(selectedNetwork?.nat?.portForwards)} />
+                  <Metric label="VLAN" value={formatVlanSummary(selectedNetwork?.vlan)} />
+                  <Metric label="Egress rules" value={String(selectedNetwork?.rules?.length || 0)} />
                   <Metric label="Kubernetes" value={selected.world?.backendConfig?.kubernetes?.enabled ? selected.world.backendConfig.kubernetes.profile || "enabled" : "disabled"} />
                 </div>
+                <ConnectivityMatrix rows={inventory} cube={cube} />
                 <PortTable ports={selected.runtime?.portMappings || []} />
               </DetailSection>
 
@@ -1081,8 +1259,34 @@ function DetailSection({ icon, title, children }: { icon: React.ReactNode; title
 }
 
 function SandboxAccessLauncher({ world, token }: { world?: World; token: string }) {
+  const [access, setAccess] = React.useState<DevAccessSession | null>(null);
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState("");
+
+  React.useEffect(() => {
+    setAccess(null);
+    setError("");
+  }, [world?.id]);
+
   if (!world) {
     return <div className="sectionEmpty">Terminal is available for KakuriZai-managed sandboxes only.</div>;
+  }
+
+  async function startSshForward() {
+    setBusy(true);
+    setError("");
+    try {
+      const session = await api<DevAccessSession>(`/api/worlds/${encodeURIComponent(world.id)}/dev-access`, {
+        method: "POST",
+        token,
+        body: { vscode: false, ssh: true }
+      });
+      setAccess(session);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -1102,7 +1306,21 @@ function SandboxAccessLauncher({ world, token }: { world?: World; token: string 
           VS Code Web
           <ExternalLink size={14} />
         </button>
+        <button onClick={() => void startSshForward()} type="button" disabled={busy}>
+          <KeyRound size={15} />
+          SSH Forward
+        </button>
       </div>
+      {access ? (
+        <div className="accessDetails">
+          <Metric label="Sandbox IP" value={access.sandboxIp || "-"} />
+          <Metric label="Workspace" value={access.workspace || "-"} />
+          <Metric label="SSH host" value={access.sshHost || "-"} />
+          <Metric label="SSH port" value={access.sshPort ? String(access.sshPort) : "-"} />
+          <Metric label="SSH command" value={access.sshCommand || access.sshUri || "-"} wide />
+        </div>
+      ) : null}
+      {error ? <div className="fieldError">{error}</div> : null}
     </div>
   );
 }
@@ -1365,13 +1583,28 @@ function NetworkEditor({
 }) {
   const configuredNetwork = effectiveNetworkForWorld(world, runtimeNetworkType);
   const configuredKubernetes = world?.backendConfig?.kubernetes || { enabled: false, profile: "k3s", apiServerPort: 6443, nodePorts: [] };
+  const [error, setError] = React.useState("");
   const [form, setForm] = React.useState({
     type: configuredNetwork.type || runtimeNetworkType || "tap",
+    mode: configuredNetwork.mode || "tap",
     exposedPorts: formatList(configuredNetwork.exposedPorts),
     dnsServers: formatList(configuredNetwork.dns?.servers),
+    dnsSearches: formatList(configuredNetwork.dns?.searches),
+    dnsOptions: formatList(configuredNetwork.dns?.options),
     allowInternetAccess: configuredNetwork.allowInternetAccess ?? true,
     allowOut: formatList(configuredNetwork.allowOut),
     denyOut: formatList(configuredNetwork.denyOut),
+    rulesJson: formatJsonArray(configuredNetwork.rules),
+    vlanEnabled: Boolean(configuredNetwork.vlan?.enabled),
+    vlanId: configuredNetwork.vlan?.vlanId ? String(configuredNetwork.vlan.vlanId) : "",
+    vlanHostInterface: configuredNetwork.vlan?.hostInterface || "",
+    vlanBridgeName: configuredNetwork.vlan?.bridgeName || "",
+    natEnabled: configuredNetwork.nat?.enabled ?? false,
+    natMasquerade: configuredNetwork.nat?.masquerade ?? true,
+    natOutboundInterface: configuredNetwork.nat?.outboundInterface || "",
+    natSubnet: configuredNetwork.nat?.subnet || "",
+    natGateway: configuredNetwork.nat?.gateway || "",
+    natPortForwardsJson: formatJsonArray(configuredNetwork.nat?.portForwards),
     kubernetesEnabled: Boolean(configuredKubernetes.enabled),
     kubernetesProfile: configuredKubernetes.profile || "k3s",
     apiServerPort: String(configuredKubernetes.apiServerPort || 6443),
@@ -1381,16 +1614,31 @@ function NetworkEditor({
   React.useEffect(() => {
     setForm({
       type: configuredNetwork.type || runtimeNetworkType || "tap",
+      mode: configuredNetwork.mode || "tap",
       exposedPorts: formatList(configuredNetwork.exposedPorts),
       dnsServers: formatList(configuredNetwork.dns?.servers),
+      dnsSearches: formatList(configuredNetwork.dns?.searches),
+      dnsOptions: formatList(configuredNetwork.dns?.options),
       allowInternetAccess: configuredNetwork.allowInternetAccess ?? true,
       allowOut: formatList(configuredNetwork.allowOut),
       denyOut: formatList(configuredNetwork.denyOut),
+      rulesJson: formatJsonArray(configuredNetwork.rules),
+      vlanEnabled: Boolean(configuredNetwork.vlan?.enabled),
+      vlanId: configuredNetwork.vlan?.vlanId ? String(configuredNetwork.vlan.vlanId) : "",
+      vlanHostInterface: configuredNetwork.vlan?.hostInterface || "",
+      vlanBridgeName: configuredNetwork.vlan?.bridgeName || "",
+      natEnabled: configuredNetwork.nat?.enabled ?? false,
+      natMasquerade: configuredNetwork.nat?.masquerade ?? true,
+      natOutboundInterface: configuredNetwork.nat?.outboundInterface || "",
+      natSubnet: configuredNetwork.nat?.subnet || "",
+      natGateway: configuredNetwork.nat?.gateway || "",
+      natPortForwardsJson: formatJsonArray(configuredNetwork.nat?.portForwards),
       kubernetesEnabled: Boolean(configuredKubernetes.enabled),
       kubernetesProfile: configuredKubernetes.profile || "k3s",
       apiServerPort: String(configuredKubernetes.apiServerPort || 6443),
       nodePorts: formatList(configuredKubernetes.nodePorts)
     });
+    setError("");
   }, [world?.id, runtimeNetworkType]);
 
   if (!world) {
@@ -1402,23 +1650,48 @@ function NetworkEditor({
       className="networkEditor"
       onSubmit={(event) => {
         event.preventDefault();
-        void onSave(
-          world,
-          {
-            type: form.type,
-            exposedPorts: form.exposedPorts as unknown as number[],
-            dns: { servers: parseCsv(form.dnsServers) },
-            allowInternetAccess: form.allowInternetAccess,
-            allowOut: parseCsv(form.allowOut),
-            denyOut: parseCsv(form.denyOut)
-          },
-          {
-            enabled: form.kubernetesEnabled,
-            profile: form.kubernetesProfile,
-            apiServerPort: Number(form.apiServerPort || 6443),
-            nodePorts: form.nodePorts as unknown as number[]
-          }
-        );
+        try {
+          setError("");
+          void onSave(
+            world,
+            {
+              type: form.type,
+              mode: form.mode,
+              exposedPorts: parsePortList(form.exposedPorts),
+              dns: {
+                servers: parseCsv(form.dnsServers),
+                searches: parseCsv(form.dnsSearches),
+                options: parseCsv(form.dnsOptions)
+              },
+              allowInternetAccess: form.allowInternetAccess,
+              allowOut: parseCsv(form.allowOut),
+              denyOut: parseCsv(form.denyOut),
+              rules: parseJsonArray(form.rulesJson, "egress rules"),
+              vlan: {
+                enabled: form.vlanEnabled,
+                vlanId: form.vlanId ? Number(form.vlanId) : null,
+                hostInterface: form.vlanHostInterface,
+                bridgeName: form.vlanBridgeName
+              },
+              nat: {
+                enabled: form.natEnabled,
+                masquerade: form.natMasquerade,
+                outboundInterface: form.natOutboundInterface,
+                subnet: form.natSubnet,
+                gateway: form.natGateway,
+                portForwards: parseJsonArray(form.natPortForwardsJson, "NAT port forwards")
+              }
+            },
+            {
+              enabled: form.kubernetesEnabled,
+              profile: form.kubernetesProfile,
+              apiServerPort: Number(form.apiServerPort || 6443),
+              nodePorts: parsePortList(form.nodePorts)
+            }
+          );
+        } catch (nextError) {
+          setError(nextError instanceof Error ? nextError.message : String(nextError));
+        }
       }}
     >
       <div className="splitFields">
@@ -1429,22 +1702,40 @@ function NetworkEditor({
           </select>
         </div>
         <div>
-          <label>Expose ports</label>
-          <input value={form.exposedPorts} onChange={(event) => setForm({ ...form, exposedPorts: event.target.value })} placeholder="6443,30000,30001" />
+          <label>Network mode</label>
+          <input value={form.mode} onChange={(event) => setForm({ ...form, mode: event.target.value })} placeholder="tap" />
         </div>
       </div>
       <div className="splitFields">
         <div>
+          <label>Expose ports</label>
+          <input value={form.exposedPorts} onChange={(event) => setForm({ ...form, exposedPorts: event.target.value })} placeholder="6443,30000,30001" />
+        </div>
+        <div>
           <label>DNS servers</label>
           <input value={form.dnsServers} onChange={(event) => setForm({ ...form, dnsServers: event.target.value })} placeholder="8.8.8.8,1.1.1.1" />
         </div>
+      </div>
+      <div className="splitFields">
+        <div>
+          <label>DNS searches</label>
+          <input value={form.dnsSearches} onChange={(event) => setForm({ ...form, dnsSearches: event.target.value })} placeholder="svc.cluster.local,cluster.local" />
+        </div>
+        <div>
+          <label>DNS options</label>
+          <input value={form.dnsOptions} onChange={(event) => setForm({ ...form, dnsOptions: event.target.value })} placeholder="ndots:5" />
+        </div>
+      </div>
+      <div className="splitFields">
         <div>
           <label>Allow egress CIDRs</label>
           <input value={form.allowOut} onChange={(event) => setForm({ ...form, allowOut: event.target.value })} placeholder="0.0.0.0/0" />
         </div>
+        <div>
+          <label>Deny egress CIDRs</label>
+          <input value={form.denyOut} onChange={(event) => setForm({ ...form, denyOut: event.target.value })} placeholder="10.0.0.0/8,172.16.0.0/12" />
+        </div>
       </div>
-      <label>Deny egress CIDRs</label>
-      <input value={form.denyOut} onChange={(event) => setForm({ ...form, denyOut: event.target.value })} placeholder="10.0.0.0/8,172.16.0.0/12" />
       <div className="togglePair">
         <label className="checkRow compactCheck">
           <input
@@ -1457,6 +1748,52 @@ function NetworkEditor({
             <small>Set CubeNetworkConfig</small>
           </span>
         </label>
+        <label className="checkRow compactCheck">
+          <input
+            type="checkbox"
+            checked={form.natEnabled}
+            onChange={(event) => setForm({ ...form, natEnabled: event.target.checked })}
+          />
+          <span>
+            <strong>NAT</strong>
+            <small>Outbound and forwards</small>
+          </span>
+        </label>
+      </div>
+      {form.natEnabled ? (
+        <>
+          <div className="splitFields">
+            <div>
+              <label>NAT subnet</label>
+              <input value={form.natSubnet} onChange={(event) => setForm({ ...form, natSubnet: event.target.value })} placeholder="10.244.0.0/16" />
+            </div>
+            <div>
+              <label>NAT gateway</label>
+              <input value={form.natGateway} onChange={(event) => setForm({ ...form, natGateway: event.target.value })} placeholder="10.244.0.1" />
+            </div>
+          </div>
+          <div className="splitFields">
+            <div>
+              <label>Outbound interface</label>
+              <input value={form.natOutboundInterface} onChange={(event) => setForm({ ...form, natOutboundInterface: event.target.value })} placeholder="tailscale0" />
+            </div>
+            <label className="checkRow compactCheck inlineCheck">
+              <input
+                type="checkbox"
+                checked={form.natMasquerade}
+                onChange={(event) => setForm({ ...form, natMasquerade: event.target.checked })}
+              />
+              <span>
+                <strong>Masquerade</strong>
+                <small>SNAT egress</small>
+              </span>
+            </label>
+          </div>
+          <label>NAT forwards JSON</label>
+          <textarea value={form.natPortForwardsJson} onChange={(event) => setForm({ ...form, natPortForwardsJson: event.target.value })} placeholder='[{"name":"ssh","protocol":"tcp","hostPort":2222,"sandboxPort":22}]' />
+        </>
+      ) : null}
+      <div className="togglePair">
         <label className="checkRow compactCheck">
           <input
             type="checkbox"
@@ -1473,7 +1810,34 @@ function NetworkEditor({
             <small>Privileged sysctls and ports</small>
           </span>
         </label>
+        <label className="checkRow compactCheck">
+          <input
+            type="checkbox"
+            checked={form.vlanEnabled}
+            onChange={(event) => setForm({ ...form, vlanEnabled: event.target.checked })}
+          />
+          <span>
+            <strong>VLAN</strong>
+            <small>Host bridge metadata</small>
+          </span>
+        </label>
       </div>
+      {form.vlanEnabled ? (
+        <div className="splitFields">
+          <div>
+            <label>VLAN ID</label>
+            <input value={form.vlanId} onChange={(event) => setForm({ ...form, vlanId: event.target.value })} placeholder="100" />
+          </div>
+          <div>
+            <label>Host interface</label>
+            <input value={form.vlanHostInterface} onChange={(event) => setForm({ ...form, vlanHostInterface: event.target.value })} placeholder="eth0" />
+          </div>
+          <div>
+            <label>Bridge name</label>
+            <input value={form.vlanBridgeName} onChange={(event) => setForm({ ...form, vlanBridgeName: event.target.value })} placeholder="br100" />
+          </div>
+        </div>
+      ) : null}
       {form.kubernetesEnabled ? (
         <div className="splitFields">
           <div>
@@ -1486,9 +1850,89 @@ function NetworkEditor({
           </div>
         </div>
       ) : null}
+      <label>Egress rules JSON</label>
+      <textarea value={form.rulesJson} onChange={(event) => setForm({ ...form, rulesJson: event.target.value })} placeholder='[{"name":"allow-api","match":{"host":"api.example.com"},"action":{"allow":true}}]' />
+      {error ? <div className="fieldError">{error}</div> : null}
       <button className="primary" disabled={busy} type="submit">Save network</button>
-      <div className="sectionEmpty inlineNote">VLAN/macvlan requires a CubeSandbox network plugin or host-side bridge integration. The OSS runtime here accepts tap only.</div>
+      <div className="sectionEmpty inlineNote">VLAN and NAT bridge settings are stored as KakuriZai tap metadata unless the installed CubeSandbox runtime consumes the matching annotations.</div>
     </form>
+  );
+}
+
+function NetworkTopology({ row, peers, cube }: { row: InventoryRow; peers: InventoryRow[]; cube: CubeInspect | null }) {
+  const network = networkForRow(row, cube?.config?.networkType || "tap");
+  const peerRows = peers
+    .filter((peer) => peer.key !== row.key)
+    .filter((peer) => peer.host && row.host ? peer.host === row.host : Boolean(peer.runtime?.sandboxIp && row.runtime?.sandboxIp))
+    .slice(0, 4);
+  const runtimeForwards = row.runtime?.portMappings || [];
+  const configuredForwards = network.nat?.portForwards || [];
+  return (
+    <div className="networkTopology">
+      <div className="networkNode">
+        <Server size={16} />
+        <span>Host</span>
+        <strong>{row.host || row.runtime?.hostIp || "-"}</strong>
+      </div>
+      <div className="networkEdge">
+        <span>{network.type || "tap"}</span>
+        <small>{network.mode || "tap"}</small>
+      </div>
+      <div className="networkNode active">
+        <Box size={16} />
+        <span>Sandbox</span>
+        <strong>{row.runtime?.sandboxIp || row.sandboxId || row.name}</strong>
+      </div>
+      <div className="networkEdge">
+        <span>{formatNatSummary(network.nat)}</span>
+        <small>{formatPortForwardSummary(configuredForwards) || formatRuntimePortSummary(runtimeForwards)}</small>
+      </div>
+      <div className="networkNode">
+        <Globe2 size={16} />
+        <span>Egress</span>
+        <strong>{formatBool(network.allowInternetAccess)}</strong>
+      </div>
+      <div className="networkPeerBand">
+        {peerRows.map((peer) => (
+          <span key={peer.key}>
+            <Network size={13} />
+            {peer.name}
+          </span>
+        ))}
+        {peerRows.length === 0 ? <span><Network size={13} />No peer metadata</span> : null}
+      </div>
+    </div>
+  );
+}
+
+function ConnectivityMatrix({ rows, cube }: { rows: InventoryRow[]; cube: CubeInspect | null }) {
+  if (!rows.length) return <div className="sectionEmpty">No sandbox connectivity metadata.</div>;
+  return (
+    <div className="dataTable networkMatrix">
+      <div className="dataRow head">
+        <span>Sandbox</span>
+        <span>Sandbox IP</span>
+        <span>Path</span>
+        <span>Egress</span>
+        <span>NAT</span>
+        <span>Forwards</span>
+        <span>K8s</span>
+      </div>
+      {rows.map((row) => {
+        const network = networkForRow(row, cube?.config?.networkType || "tap");
+        return (
+          <div className="dataRow" key={row.key}>
+            <span>{row.name}</span>
+            <span>{row.runtime?.sandboxIp || "-"}</span>
+            <span>{connectivityPathForRow(row, network)}</span>
+            <span>{formatBool(network.allowInternetAccess)}</span>
+            <span>{formatNatSummary(network.nat)}</span>
+            <span>{formatPortForwardSummary(network.nat?.portForwards) || formatRuntimePortSummary(row.runtime?.portMappings || []) || "-"}</span>
+            <span>{row.world?.backendConfig?.kubernetes?.enabled ? row.world.backendConfig.kubernetes.profile || "enabled" : "-"}</span>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -1770,6 +2214,35 @@ function formatBool(value?: boolean | null) {
   return value ? "allowed" : "blocked";
 }
 
+function formatNatSummary(value?: NatConfig | null) {
+  if (!value?.enabled) return "disabled";
+  const parts = [value.masquerade === false ? "routed" : "masquerade"];
+  if (value.subnet) parts.push(value.subnet);
+  if (value.outboundInterface) parts.push(`via ${value.outboundInterface}`);
+  return parts.join(" ");
+}
+
+function formatVlanSummary(value?: VlanConfig | null) {
+  if (!value?.enabled) return "disabled";
+  return [
+    value.vlanId ? `vlan ${value.vlanId}` : "vlan",
+    value.hostInterface ? `if ${value.hostInterface}` : "",
+    value.bridgeName ? `br ${value.bridgeName}` : ""
+  ].filter(Boolean).join(" ");
+}
+
+function formatPortForwardSummary(value?: PortForwardConfig[] | null) {
+  if (!value?.length) return "";
+  return value
+    .map((forward) => `${forward.name || forward.protocol || "forward"}:${forward.hostPort || "-"}->${forward.sandboxPort || "-"}/${forward.protocol || "tcp"}`)
+    .join(",");
+}
+
+function formatRuntimePortSummary(value?: CubePortMapping[] | null) {
+  if (!value?.length) return "";
+  return value.map((port) => `${port.host_port ?? "-"}->${port.container_port ?? "-"}`).join(",");
+}
+
 function formatBootstrapStatus(value?: { pending?: boolean; applied?: boolean; skipped?: boolean; reason?: string | null } | null) {
   if (!value) return "-";
   if (value.pending) return "installing";
@@ -1782,6 +2255,10 @@ function formatList(value?: Array<string | number> | string | null) {
   if (!value) return "";
   if (Array.isArray(value)) return value.join(",");
   return String(value);
+}
+
+function formatJsonArray(value?: unknown[] | null) {
+  return JSON.stringify(value || [], null, 2);
 }
 
 function maxSizeLabel(values: Array<string | null | undefined>) {
@@ -1836,6 +2313,22 @@ function parsePortList(value: string) {
   });
 }
 
+function parseJsonArray(value: string, name: string) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return [];
+  const parsed = JSON.parse(trimmed);
+  if (!Array.isArray(parsed)) throw new Error(`${name} must be a JSON array`);
+  return parsed;
+}
+
+function parsePortAnnotation(value?: string | null) {
+  if (!value) return [];
+  return String(value)
+    .split(/[: ,]+/)
+    .map((item) => Number(item))
+    .filter((port) => Number.isInteger(port) && port > 0 && port <= 65535);
+}
+
 function ensureLaunchMounts(mounts?: LaunchMount[]) {
   return mounts?.length ? mounts : [{ name: "project", sourcePath: "", mode: "agctl-overlay" }];
 }
@@ -1854,13 +2347,52 @@ function slugMountName(value: string) {
     .slice(0, 48) || "mount";
 }
 
+function networkForRow(row: InventoryRow, fallbackType = "tap"): NetworkConfig {
+  const annotations = row.runtime?.annotations || {};
+  if (row.world) return effectiveNetworkForWorld(row.world, annotations["kakurizai.network.type"] || fallbackType);
+  return {
+    type: annotations["kakurizai.network.type"] || fallbackType,
+    mode: annotations["kakurizai.network.mode"] || annotations["kakurizai.network.type"] || fallbackType,
+    exposedPorts: parsePortAnnotation(annotations["com.exposed_ports"]),
+    allowOut: [],
+    denyOut: [],
+    rules: [],
+    vlan: parseAnnotationJson<VlanConfig>(annotations["kakurizai.network.vlan"]) || { enabled: false },
+    nat: parseAnnotationJson<NatConfig>(annotations["kakurizai.network.nat"]) || { enabled: annotations["kakurizai.network.nat.enabled"] === "true", portForwards: [] },
+    dns: { servers: [], searches: [], options: [] }
+  };
+}
+
+function connectivityPathForRow(row: InventoryRow, network: NetworkConfig) {
+  const parts = [];
+  if (row.host) parts.push(`host ${row.host}`);
+  parts.push(network.type || "tap");
+  if (network.mode && network.mode !== network.type) parts.push(network.mode);
+  if (network.nat?.enabled) parts.push("nat");
+  if (row.runtime?.exposedEndpoint) parts.push("endpoint");
+  return parts.join(" -> ");
+}
+
+function parseAnnotationJson<T>(value?: string | null): T | null {
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+}
+
 function effectiveNetworkForWorld(world?: World, fallbackType = "tap"): NetworkConfig {
   return {
     type: world?.backendConfig?.network?.type || world?.backendConfig?.networkType || fallbackType,
+    mode: world?.backendConfig?.network?.mode || world?.backendConfig?.network?.type || world?.backendConfig?.networkType || fallbackType,
     exposedPorts: world?.backendConfig?.network?.exposedPorts || [],
     allowInternetAccess: world?.backendConfig?.network?.allowInternetAccess,
     allowOut: world?.backendConfig?.network?.allowOut || [],
     denyOut: world?.backendConfig?.network?.denyOut || [],
+    rules: world?.backendConfig?.network?.rules || [],
+    vlan: world?.backendConfig?.network?.vlan || { enabled: false },
+    nat: world?.backendConfig?.network?.nat || { enabled: false, portForwards: [] },
     dns: world?.backendConfig?.network?.dns || { servers: [], searches: [], options: [] }
   };
 }
