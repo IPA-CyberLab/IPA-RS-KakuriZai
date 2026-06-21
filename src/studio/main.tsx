@@ -495,7 +495,6 @@ function App() {
   const selected = inventory.find((row) => row.key === selectedId) || filteredInventory[0] || inventory[0] || null;
   const selectedTemplate = findTemplateForSandbox(cube, selected);
   const selectedNode = findNodeForSandbox(cube, selected);
-  const selectedNetwork = selected ? networkForRow(selected, selectedTemplate?.networkType || cube?.config?.networkType || "tap") : null;
 
   React.useEffect(() => {
     api<AuthConfig>("/api/auth/config", { token: null })
@@ -1053,9 +1052,6 @@ function App() {
             </div>
           </div>
 
-          <label>Expose ports</label>
-          <input value={launch.exposedPorts} onChange={(event) => setLaunch({ ...launch, exposedPorts: event.target.value })} placeholder="6443,30000,30001" />
-
           <div className="splitFields">
             <div>
               <label>DNS servers</label>
@@ -1078,8 +1074,8 @@ function App() {
                 onChange={(event) => setLaunch({ ...launch, allowInternetAccess: event.target.checked })}
               />
               <span>
-                <strong>Internet access</strong>
-                <small>Allow outbound traffic</small>
+                <strong>Outbound internet</strong>
+                <small>Allow sandbox traffic to internet</small>
               </span>
             </label>
             <label className="checkRow compactCheck">
@@ -1273,7 +1269,6 @@ function App() {
               probeBusy={probeBusy}
               busy={busy}
               selectedTemplate={selectedTemplate}
-              selectedNetwork={selectedNetwork}
               onProbe={runNetworkProbe}
               onSaveNetwork={saveNetworkSettings}
               onSelectSandbox={setSelectedId}
@@ -1353,7 +1348,7 @@ function App() {
                   <Metric label="Auth" value={cube?.config?.authEnabled ? "enabled" : "disabled"} />
                   <Metric label="Instance type" value={cube?.config?.instanceType || "-"} />
                   <Metric label="Default network" value={cube?.config?.networkType || "-"} />
-                  <Metric label="Internet access" value={formatBool(selectedTemplate?.allowInternetAccess)} />
+                  <Metric label="Outbound internet" value={formatBool(selectedTemplate?.allowInternetAccess)} />
                 </div>
               </DetailSection>
             </div>
@@ -1389,7 +1384,6 @@ function NetworkWorkspace({
   probeBusy,
   busy,
   selectedTemplate,
-  selectedNetwork,
   onProbe,
   onSaveNetwork,
   onSelectSandbox
@@ -1401,7 +1395,6 @@ function NetworkWorkspace({
   probeBusy: boolean;
   busy: boolean;
   selectedTemplate?: CubeTemplate | null;
-  selectedNetwork?: NetworkConfig | null;
   onProbe: (live?: boolean) => Promise<void>;
   onSaveNetwork: (world: World, network: NetworkConfig, kubernetes: KubernetesConfig) => Promise<void>;
   onSelectSandbox: (key: string) => void;
@@ -1452,28 +1445,10 @@ function NetworkWorkspace({
           busy={busy}
           onSave={onSaveNetwork}
         />
-        <div className="metricStrip compact">
-          <Metric label="Sandbox IP" value={selected.runtime?.sandboxIp || "-"} />
-          <Metric label="Host IP" value={selected.runtime?.hostIp || selected.host || "-"} />
-          <Metric label="Endpoint" value={selected.runtime?.exposedEndpoint || "-"} />
-          <Metric label="Port mode" value={selected.runtime?.exposedPortMode || "-"} />
-          <Metric label="Requested port" value={selected.runtime?.requestedContainerPort ? String(selected.runtime.requestedContainerPort) : "-"} />
-          <Metric label="Domain" value={cube?.config?.sandboxDomain || "-"} />
-          <Metric label="Configured ports" value={formatList(selectedNetwork?.exposedPorts)} />
-          <Metric label="DNS" value={formatList(selectedNetwork?.dns?.servers)} />
-          <Metric label="DNS search" value={formatList(selectedNetwork?.dns?.searches)} />
-          <Metric label="DNS options" value={formatList(selectedNetwork?.dns?.options)} />
-          <Metric label="Internet access" value={formatBool(selectedNetwork?.allowInternetAccess)} />
-          <Metric label="Outbound NAT" value={formatNatSummary(selectedNetwork?.nat)} />
-          <Metric label="Port forwards" value={formatPortForwardSummary(selectedNetwork?.nat?.portForwards)} />
-          <Metric label="VLAN" value={formatVlanSummary(selectedNetwork?.vlan)} />
-          <Metric label="Egress rules" value={String(selectedNetwork?.rules?.length || 0)} />
-        </div>
       </DetailSection>
 
       <DetailSection icon={<Layers size={16} />} title="Reachability">
-        <ConnectivityMatrix rows={rows} cube={cube} probe={networkProbe} />
-        <PortTable ports={selected.runtime?.portMappings || []} />
+        <ConnectivityMatrix rows={rows} probe={networkProbe} />
       </DetailSection>
     </div>
   );
@@ -1952,16 +1927,9 @@ function NetworkEditor({
       <select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })}>
         <option value="tap">tap</option>
       </select>
-      <div className="splitFields">
-        <div>
-          <label>Expose ports</label>
-          <input value={form.exposedPorts} onChange={(event) => setForm({ ...form, exposedPorts: event.target.value })} placeholder="6443,30000,30001" />
-        </div>
-        <div>
-          <label>DNS servers</label>
-          <input value={form.dnsServers} onChange={(event) => setForm({ ...form, dnsServers: event.target.value })} placeholder="8.8.8.8,1.1.1.1" />
-        </div>
-      </div>
+
+      <label>DNS servers</label>
+      <input value={form.dnsServers} onChange={(event) => setForm({ ...form, dnsServers: event.target.value })} placeholder="8.8.8.8,1.1.1.1" />
       <div className="splitFields">
         <div>
           <label>DNS searches</label>
@@ -1990,8 +1958,8 @@ function NetworkEditor({
             onChange={(event) => setForm({ ...form, allowInternetAccess: event.target.checked })}
           />
           <span>
-            <strong>Internet access</strong>
-            <small>Allow outbound traffic</small>
+            <strong>Outbound internet</strong>
+            <small>Allow sandbox traffic to internet</small>
           </span>
         </label>
         <label className="checkRow compactCheck">
@@ -2359,7 +2327,7 @@ function SwitchNetworkPanel({
   );
 }
 
-function ConnectivityMatrix({ rows, cube, probe }: { rows: InventoryRow[]; cube: CubeInspect | null; probe?: NetworkProbePlan | null }) {
+function ConnectivityMatrix({ rows, probe }: { rows: InventoryRow[]; probe?: NetworkProbePlan | null }) {
   if (!rows.length) return <div className="sectionEmpty">No sandbox connectivity metadata.</div>;
   if (probe?.edges?.length) {
     return (
@@ -2387,31 +2355,7 @@ function ConnectivityMatrix({ rows, cube, probe }: { rows: InventoryRow[]; cube:
       </div>
     );
   }
-  return (
-    <div className="dataTable networkMatrix">
-      <div className="dataRow head">
-        <span>Sandbox</span>
-        <span>Sandbox IP</span>
-        <span>Path</span>
-        <span>Egress</span>
-        <span>Outbound NAT</span>
-        <span>Port forwards</span>
-      </div>
-      {rows.map((row) => {
-        const network = networkForRow(row, cube?.config?.networkType || "tap");
-        return (
-          <div className="dataRow" key={row.key}>
-            <span>{row.name}</span>
-            <span>{row.runtime?.sandboxIp || "-"}</span>
-            <span>{connectivityPathForRow(row, network)}</span>
-            <span>{formatBool(network.allowInternetAccess)}</span>
-            <span>{formatNatSummary(network.nat)}</span>
-            <span>{formatPortForwardSummary(network.nat?.portForwards) || formatRuntimePortSummary(row.runtime?.portMappings || []) || "-"}</span>
-          </div>
-        );
-      })}
-    </div>
-  );
+  return <div className="sectionEmpty">Run Probe to show reachability results.</div>;
 }
 
 function Kpi({ icon, label, value, tone = "muted" }: { icon: React.ReactNode; label: string; value: string; tone?: "ok" | "warn" | "muted" }) {
