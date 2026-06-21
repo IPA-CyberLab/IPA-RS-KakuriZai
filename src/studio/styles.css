@@ -186,6 +186,10 @@ label {
   overflow: hidden;
 }
 
+.workbench.networkWorkbench {
+  grid-template-columns: 48px minmax(0, 1fr);
+}
+
 .activityBar {
   display: flex;
   flex-direction: column;
@@ -732,6 +736,66 @@ label {
   padding-bottom: 72px;
 }
 
+.networkWorkspace {
+  min-height: 100%;
+  display: grid;
+  align-content: start;
+  grid-template-rows: max-content;
+  padding-bottom: 72px;
+}
+
+.networkWorkspaceTop {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px 18px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.networkWorkspaceHeader {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.networkWorkspaceHeader > span:first-child {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: #151922;
+  color: var(--accent);
+}
+
+.networkWorkspaceHeader > div {
+  min-width: 0;
+}
+
+.networkWorkspaceHeader > div:nth-child(2) {
+  display: grid;
+  gap: 2px;
+}
+
+.networkWorkspaceHeader strong,
+.networkWorkspaceHeader small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.networkWorkspaceHeader strong {
+  color: #eeeeef;
+  font-size: 14px;
+}
+
+.networkWorkspaceHeader small {
+  color: var(--muted);
+  font: 11px/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
 .overviewGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
@@ -1272,6 +1336,231 @@ label {
   grid-template-columns: 160px 130px minmax(230px, 1fr) 90px 160px 180px 90px;
 }
 
+.switchPanel {
+  display: grid;
+  gap: 14px;
+  border: 1px solid #dfe4ea;
+  border-radius: 8px;
+  background: #f7f9fb;
+  color: #1f2933;
+  padding: 18px;
+}
+
+.switchToolbar {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto auto;
+  gap: 16px;
+  align-items: center;
+}
+
+.switchToolbar > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.switchToolbar strong {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.switchToolbar span,
+.switchDeviceHeader span,
+.switchLegend span {
+  color: #64748b;
+}
+
+.switchTabs {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid #e5eaf0;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.switchTabs span {
+  min-width: 82px;
+  padding: 8px 14px;
+  color: #64748b;
+  text-align: center;
+}
+
+.switchTabs span.active {
+  background: #eff6ff;
+  color: #1473cc;
+}
+
+.switchStats {
+  display: inline-flex;
+  gap: 8px;
+  justify-content: end;
+}
+
+.switchStats span {
+  border: 1px solid #e5eaf0;
+  border-radius: 999px;
+  background: #ffffff;
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+
+.switchDevice {
+  display: grid;
+  gap: 14px;
+  border: 1px solid #edf1f5;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 18px;
+}
+
+.switchDeviceHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: start;
+}
+
+.switchDeviceHeader > div {
+  display: grid;
+  gap: 3px;
+}
+
+.switchPortGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(54px, 1fr));
+  gap: 10px;
+}
+
+.switchPort {
+  min-width: 0;
+  min-height: 54px;
+  display: grid;
+  gap: 1px;
+  justify-items: start;
+  border: 0;
+  border-radius: 7px;
+  color: #ffffff;
+  padding: 8px;
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.13);
+}
+
+.switchPort:hover {
+  filter: brightness(0.98);
+}
+
+.switchPort.selected {
+  outline: 2px solid #1d7fe5;
+  outline-offset: 2px;
+}
+
+.switchPort.ok {
+  background: #31d06b;
+}
+
+.switchPort.warn {
+  background: #b7df22;
+}
+
+.switchPort.k8s {
+  background: #2d9bb8;
+}
+
+.switchPort.muted {
+  background: #c4cad2;
+}
+
+.switchPort span {
+  font-size: 12px;
+}
+
+.switchPort strong {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.switchPort small {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 10px;
+  opacity: 0.9;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.switchLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  align-items: center;
+  justify-content: center;
+}
+
+.switchLegend span,
+.switchPortRow span:first-child {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.legendDot {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  border-radius: 2px;
+  background: #c4cad2;
+}
+
+.legendDot.ok {
+  background: #31d06b;
+}
+
+.legendDot.warn {
+  background: #b7df22;
+}
+
+.legendDot.k8s {
+  background: #2d9bb8;
+}
+
+.legendDot.muted {
+  background: #c4cad2;
+}
+
+.switchPortTable {
+  overflow-x: auto;
+  border: 1px solid #e5eaf0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.switchPortRow {
+  min-width: 960px;
+  display: grid;
+  grid-template-columns: 78px 180px 120px 180px minmax(180px, 1fr) 180px 110px;
+  gap: 14px;
+  align-items: center;
+  border-top: 1px solid #edf1f5;
+  padding: 10px 12px;
+  color: #334155;
+}
+
+.switchPortRow:first-child {
+  border-top: 0;
+}
+
+.switchPortRow.head {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.switchPortRow span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .k8sLabMatrix .dataRow {
   min-width: 1080px;
   grid-template-columns: 160px 180px 180px minmax(210px, 1fr) 180px 120px 210px;
@@ -1375,6 +1664,10 @@ label {
     min-height: 100vh;
   }
 
+  .workbench.networkWorkbench {
+    grid-template-rows: minmax(0, 1fr);
+  }
+
   .activityBar {
     grid-row: 1 / -1;
   }
@@ -1389,6 +1682,14 @@ label {
     min-height: 0;
     grid-column: 2;
     grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .networkWorkspaceHeader {
+    grid-template-columns: 32px minmax(0, 1fr);
+  }
+
+  .networkWorkspaceHeader .probeToolbar {
+    grid-column: 1 / -1;
   }
 
   .titleBar {

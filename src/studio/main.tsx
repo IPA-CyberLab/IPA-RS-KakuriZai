@@ -16,6 +16,7 @@ import {
   HardDrive,
   KeyRound,
   Layers,
+  Monitor,
   MoreHorizontal,
   Network,
   Pause,
@@ -392,6 +393,7 @@ type InventoryRow = {
 };
 
 type StateFilter = "all" | "running" | "paused" | "other";
+type AppView = "sandboxes" | "network";
 
 const mountModes = [
   {
@@ -428,6 +430,7 @@ function App() {
   const [busy, setBusy] = React.useState(false);
   const [probeBusy, setProbeBusy] = React.useState(false);
   const [networkProbe, setNetworkProbe] = React.useState<NetworkProbePlan | null>(null);
+  const [activeView, setActiveView] = React.useState<AppView>("sandboxes");
   const [actionMenuOpen, setActionMenuOpen] = React.useState(false);
   const [launchMenuOpen, setLaunchMenuOpen] = React.useState(false);
   const [labMenuOpen, setLabMenuOpen] = React.useState(false);
@@ -774,7 +777,7 @@ function App() {
       });
       setLabMenuOpen(false);
       setSelectedId(result.worlds[0] ? `world:${result.worlds[0].id}` : null);
-      setStatus(`Created Kubernetes lab ${result.lab.name} with ${result.worlds.length} sandboxes`);
+      setStatus(`Created K8s lab ${result.lab.name} with ${result.worlds.length} sandboxes`);
       await refresh();
     } catch (error) {
       setFormMessage(error instanceof Error ? error.message : String(error));
@@ -955,8 +958,14 @@ function App() {
     );
   }
 
+  const isNetworkView = activeView === "network";
+  const titleLabel = isNetworkView ? "Network" : selected ? selected.name : "No sandbox selected";
+  const subtitleLabel = isNetworkView
+    ? selected ? `${selected.name} / ${selected.runtime?.sandboxIp || selected.sandboxId || subtitleForSandbox(selected)}` : status
+    : selected ? subtitleForSandbox(selected) : status;
+
   return (
-    <main className="workbench">
+    <main className={`workbench ${isNetworkView ? "networkWorkbench" : ""}`}>
       <aside className="activityBar">
         <button
           ref={activityMenuRef}
@@ -970,6 +979,32 @@ function App() {
           type="button"
         >
           <MoreHorizontal size={22} />
+        </button>
+        <button
+          className={`activityButton ${activeView === "sandboxes" ? "active" : ""}`}
+          onClick={() => {
+            setActiveView("sandboxes");
+            setActionMenuOpen(false);
+            setLaunchMenuOpen(false);
+            setLabMenuOpen(false);
+          }}
+          title="Sandboxes"
+          type="button"
+        >
+          <Monitor size={21} />
+        </button>
+        <button
+          className={`activityButton ${activeView === "network" ? "active" : ""}`}
+          onClick={() => {
+            setActiveView("network");
+            setActionMenuOpen(false);
+            setLaunchMenuOpen(false);
+            setLabMenuOpen(false);
+          }}
+          title="Network"
+          type="button"
+        >
+          <Network size={21} />
         </button>
       </aside>
 
@@ -1203,8 +1238,7 @@ function App() {
                 })}
               />
               <span>
-                <strong>Kubernetes lab</strong>
-                <small>Expose API and node ports</small>
+                <strong>K8s</strong>
               </span>
             </label>
             <label className="checkRow compactCheck">
@@ -1439,54 +1473,56 @@ function App() {
         </form>
       ) : null}
 
-      <section className="sandboxPanel">
-        <header className="panelHeader">
-          <span>Sandboxes</span>
-          <button className="iconButton ghost" onClick={() => void refresh()} title="Refresh" type="button" disabled={busy}>
-            <RefreshCcw size={15} />
-          </button>
-        </header>
-        <div className="panelSearch">
-          <Search size={14} />
-          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search sandbox, template, host" />
-        </div>
-        <div className="stateFilters">
-          {(["all", "running", "paused", "other"] as StateFilter[]).map((filter) => (
-            <button key={filter} className={stateFilter === filter ? "active" : ""} onClick={() => setStateFilter(filter)} type="button">
-              {filter}
+      {!isNetworkView ? (
+        <section className="sandboxPanel">
+          <header className="panelHeader">
+            <span>Sandboxes</span>
+            <button className="iconButton ghost" onClick={() => void refresh()} title="Refresh" type="button" disabled={busy}>
+              <RefreshCcw size={15} />
             </button>
-          ))}
-        </div>
-        <div className="sandboxList">
-          {filteredInventory.map((row) => (
-            <button key={row.key} className={`sandboxItem ${row.key === selected?.key ? "selected" : ""}`} onClick={() => setSelectedId(row.key)} type="button">
-              <span className="sandboxTopLine">
-                <span className="sandboxName">{row.name}</span>
-                <span className={`sandboxState ${statusTone(row.status)}`}>{row.status}</span>
-              </span>
-              <span className="sandboxPath">{row.templateId || subtitleForSandbox(row)}</span>
-              <span className="sandboxMetaLine">
-                <span>{row.cpu || "-"}</span>
-                <span>{row.memory || "-"}</span>
-                <span>{row.host || "-"}</span>
-              </span>
-            </button>
-          ))}
-          {filteredInventory.length === 0 ? <div className="emptyList">No sandboxes</div> : null}
-        </div>
-      </section>
+          </header>
+          <div className="panelSearch">
+            <Search size={14} />
+            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search sandbox, template, host" />
+          </div>
+          <div className="stateFilters">
+            {(["all", "running", "paused", "other"] as StateFilter[]).map((filter) => (
+              <button key={filter} className={stateFilter === filter ? "active" : ""} onClick={() => setStateFilter(filter)} type="button">
+                {filter}
+              </button>
+            ))}
+          </div>
+          <div className="sandboxList">
+            {filteredInventory.map((row) => (
+              <button key={row.key} className={`sandboxItem ${row.key === selected?.key ? "selected" : ""}`} onClick={() => setSelectedId(row.key)} type="button">
+                <span className="sandboxTopLine">
+                  <span className="sandboxName">{row.name}</span>
+                  <span className={`sandboxState ${statusTone(row.status)}`}>{row.status}</span>
+                </span>
+                <span className="sandboxPath">{row.templateId || subtitleForSandbox(row)}</span>
+                <span className="sandboxMetaLine">
+                  <span>{row.cpu || "-"}</span>
+                  <span>{row.memory || "-"}</span>
+                  <span>{row.host || "-"}</span>
+                </span>
+              </button>
+            ))}
+            {filteredInventory.length === 0 ? <div className="emptyList">No sandboxes</div> : null}
+          </div>
+        </section>
+      ) : null}
 
       <section className="mainArea">
         <header className="titleBar">
           <div>
-            <strong>{selected ? selected.name : "No sandbox selected"}</strong>
-            <span>{selected ? subtitleForSandbox(selected) : status}</span>
+            <strong>{titleLabel}</strong>
+            <span>{subtitleLabel}</span>
           </div>
           <div className="toolbarActions">
             <button className="ghost" onClick={() => void refresh()} title="Refresh" type="button" disabled={busy}>
               <RefreshCcw size={16} />
             </button>
-            {selected && isPausedStatus(selected.status) ? (
+            {!isNetworkView && selected && isPausedStatus(selected.status) ? (
               <button
                 className="ghost"
                 onClick={() => void resumeSelected()}
@@ -1497,7 +1533,7 @@ function App() {
                 <Play size={16} />
                 Resume
               </button>
-            ) : selected ? (
+            ) : !isNetworkView && selected ? (
               <button
                 className="ghost"
                 onClick={() => void pauseSelected()}
@@ -1509,7 +1545,7 @@ function App() {
                 Pause
               </button>
             ) : null}
-            {selected ? (
+            {!isNetworkView && selected ? (
               <button className="danger" onClick={() => void destroySelected()} type="button" disabled={busy || !selected.sandboxId && !selected.world}>
                 <Trash2 size={16} />
                 Delete
@@ -1519,7 +1555,22 @@ function App() {
         </header>
 
         <section className="editorPane">
-          {selected ? (
+          {isNetworkView ? (
+            <NetworkWorkspace
+              selected={selected}
+              rows={inventory}
+              cube={cube}
+              networkProbe={networkProbe}
+              probeBusy={probeBusy}
+              busy={busy}
+              selectedTemplate={selectedTemplate}
+              selectedNetwork={selectedNetwork}
+              selectedKubernetes={selectedKubernetes}
+              onProbe={runNetworkProbe}
+              onSaveNetwork={saveNetworkSettings}
+              onSelectSandbox={setSelectedId}
+            />
+          ) : selected ? (
             <div className="sandboxDashboard">
               <div className="overviewGrid">
                 <Kpi icon={<Activity size={16} />} label="Status" value={selected.status} tone={statusTone(selected.status)} />
@@ -1566,55 +1617,6 @@ function App() {
                   onSave={saveDiskSize}
                 />
                 <MountTable row={selected} mounts={mountRowsForSelection(selected)} />
-              </DetailSection>
-
-              <DetailSection icon={<Route size={16} />} title="Network">
-                <div className="probeToolbar">
-                  <button className="primary" onClick={() => void runNetworkProbe(true)} type="button" disabled={probeBusy || busy}>
-                    <Activity size={15} />
-                    {probeBusy ? "Probing" : "Probe"}
-                  </button>
-                  <button onClick={() => void runNetworkProbe(false)} type="button" disabled={probeBusy || busy}>
-                    <Network size={15} />
-                    Plan
-                  </button>
-                  <span>{networkProbe ? `Updated ${formatDate(networkProbe.generatedAt)}` : "No live probe yet"}</span>
-                </div>
-                <NetworkTopology row={selected} peers={inventory} cube={cube} probe={networkProbe} />
-                <NetworkEditor
-                  world={selected.world}
-                  runtimeNetworkType={selectedTemplate?.networkType || cube?.config?.networkType || "tap"}
-                  busy={busy}
-                  onSave={saveNetworkSettings}
-                />
-                <div className="metricStrip compact">
-                  <Metric label="Sandbox IP" value={selected.runtime?.sandboxIp || "-"} />
-                  <Metric label="Host IP" value={selected.runtime?.hostIp || selected.host || "-"} />
-                  <Metric label="Endpoint" value={selected.runtime?.exposedEndpoint || "-"} />
-                  <Metric label="Port mode" value={selected.runtime?.exposedPortMode || "-"} />
-                  <Metric label="Requested port" value={selected.runtime?.requestedContainerPort ? String(selected.runtime.requestedContainerPort) : "-"} />
-                  <Metric label="Domain" value={cube?.config?.sandboxDomain || "-"} />
-                  <Metric label="Network mode" value={selectedNetwork?.mode || "tap"} />
-                  <Metric label="Configured ports" value={formatList(selectedNetwork?.exposedPorts)} />
-                  <Metric label="DNS" value={formatList(selectedNetwork?.dns?.servers)} />
-                  <Metric label="DNS search" value={formatList(selectedNetwork?.dns?.searches)} />
-                  <Metric label="DNS options" value={formatList(selectedNetwork?.dns?.options)} />
-                  <Metric label="Internet egress" value={formatBool(selectedNetwork?.allowInternetAccess)} />
-                  <Metric label="NAT" value={formatNatSummary(selectedNetwork?.nat)} />
-                  <Metric label="NAT forwards" value={formatPortForwardSummary(selectedNetwork?.nat?.portForwards)} />
-                  <Metric label="VLAN" value={formatVlanSummary(selectedNetwork?.vlan)} />
-                  <Metric label="Egress rules" value={String(selectedNetwork?.rules?.length || 0)} />
-                  <Metric label="Kubernetes" value={selectedKubernetes?.enabled ? selectedKubernetes.profile || "enabled" : "disabled"} />
-                  <Metric label="K8s cluster" value={selectedKubernetes?.enabled ? selectedKubernetes.clusterName || "kakurizai" : "-"} />
-                  <Metric label="K8s role" value={selectedKubernetes?.enabled ? selectedKubernetes.nodeRole || "control-plane" : "-"} />
-                  <Metric label="K8s node" value={selectedKubernetes?.enabled ? selectedKubernetes.nodeName || selected.name : "-"} />
-                  <Metric label="K8s CIDRs" value={selectedKubernetes?.enabled ? `${selectedKubernetes.podCidr || "-"} / ${selectedKubernetes.serviceCidr || "-"}` : "-"} />
-                  <Metric label="K8s join" value={selectedKubernetes?.enabled ? selectedKubernetes.joinEndpoint || "-" : "-"} />
-                  <Metric label="K8s sysctls" value={selectedKubernetes?.enabled ? formatSysctls(selectedKubernetes.sysctls) : "-"} />
-                </div>
-                <KubernetesLabSummary rows={inventory} cube={cube} probe={networkProbe} />
-                <ConnectivityMatrix rows={inventory} cube={cube} probe={networkProbe} />
-                <PortTable ports={selected.runtime?.portMappings || []} />
               </DetailSection>
 
               <DetailSection icon={<Layers size={16} />} title="Template">
@@ -1668,6 +1670,115 @@ function DetailSection({ icon, title, children }: { icon: React.ReactNode; title
       </header>
       {children}
     </section>
+  );
+}
+
+function NetworkWorkspace({
+  selected,
+  rows,
+  cube,
+  networkProbe,
+  probeBusy,
+  busy,
+  selectedTemplate,
+  selectedNetwork,
+  selectedKubernetes,
+  onProbe,
+  onSaveNetwork,
+  onSelectSandbox
+}: {
+  selected: InventoryRow | null;
+  rows: InventoryRow[];
+  cube: CubeInspect | null;
+  networkProbe: NetworkProbePlan | null;
+  probeBusy: boolean;
+  busy: boolean;
+  selectedTemplate?: CubeTemplate | null;
+  selectedNetwork?: NetworkConfig | null;
+  selectedKubernetes?: KubernetesConfig | null;
+  onProbe: (live?: boolean) => Promise<void>;
+  onSaveNetwork: (world: World, network: NetworkConfig, kubernetes: KubernetesConfig) => Promise<void>;
+  onSelectSandbox: (key: string) => void;
+}) {
+  if (!selected) {
+    return (
+      <div className="emptyState">
+        <Network size={24} />
+        <span>No sandbox network metadata.</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="networkWorkspace">
+      <section className="networkWorkspaceTop">
+        <header className="networkWorkspaceHeader">
+          <span><Route size={18} /></span>
+          <div>
+            <strong>Network</strong>
+            <small>{selected.name} / {selected.runtime?.sandboxIp || selected.sandboxId || "planned"}</small>
+          </div>
+          <div className="probeToolbar">
+            <button className="primary" onClick={() => void onProbe(true)} type="button" disabled={probeBusy || busy}>
+              <Activity size={15} />
+              {probeBusy ? "Probing" : "Probe"}
+            </button>
+            <button onClick={() => void onProbe(false)} type="button" disabled={probeBusy || busy}>
+              <Network size={15} />
+              Plan
+            </button>
+            <span>{networkProbe ? `Updated ${formatDate(networkProbe.generatedAt)}` : "No live probe yet"}</span>
+          </div>
+        </header>
+        <SwitchNetworkPanel
+          selected={selected}
+          rows={rows}
+          cube={cube}
+          probe={networkProbe}
+          onSelect={onSelectSandbox}
+        />
+      </section>
+
+      <DetailSection icon={<Network size={16} />} title="Settings">
+        <NetworkEditor
+          world={selected.world}
+          runtimeNetworkType={selectedTemplate?.networkType || cube?.config?.networkType || "tap"}
+          busy={busy}
+          onSave={onSaveNetwork}
+        />
+        <div className="metricStrip compact">
+          <Metric label="Sandbox IP" value={selected.runtime?.sandboxIp || "-"} />
+          <Metric label="Host IP" value={selected.runtime?.hostIp || selected.host || "-"} />
+          <Metric label="Endpoint" value={selected.runtime?.exposedEndpoint || "-"} />
+          <Metric label="Port mode" value={selected.runtime?.exposedPortMode || "-"} />
+          <Metric label="Requested port" value={selected.runtime?.requestedContainerPort ? String(selected.runtime.requestedContainerPort) : "-"} />
+          <Metric label="Domain" value={cube?.config?.sandboxDomain || "-"} />
+          <Metric label="Network mode" value={selectedNetwork?.mode || "tap"} />
+          <Metric label="Configured ports" value={formatList(selectedNetwork?.exposedPorts)} />
+          <Metric label="DNS" value={formatList(selectedNetwork?.dns?.servers)} />
+          <Metric label="DNS search" value={formatList(selectedNetwork?.dns?.searches)} />
+          <Metric label="DNS options" value={formatList(selectedNetwork?.dns?.options)} />
+          <Metric label="Internet egress" value={formatBool(selectedNetwork?.allowInternetAccess)} />
+          <Metric label="NAT" value={formatNatSummary(selectedNetwork?.nat)} />
+          <Metric label="NAT forwards" value={formatPortForwardSummary(selectedNetwork?.nat?.portForwards)} />
+          <Metric label="VLAN" value={formatVlanSummary(selectedNetwork?.vlan)} />
+          <Metric label="Egress rules" value={String(selectedNetwork?.rules?.length || 0)} />
+          <Metric label="Kubernetes" value={selectedKubernetes?.enabled ? selectedKubernetes.profile || "enabled" : "disabled"} />
+          <Metric label="K8s cluster" value={selectedKubernetes?.enabled ? selectedKubernetes.clusterName || "kakurizai" : "-"} />
+          <Metric label="K8s role" value={selectedKubernetes?.enabled ? selectedKubernetes.nodeRole || "control-plane" : "-"} />
+          <Metric label="K8s node" value={selectedKubernetes?.enabled ? selectedKubernetes.nodeName || selected.name : "-"} />
+          <Metric label="K8s CIDRs" value={selectedKubernetes?.enabled ? `${selectedKubernetes.podCidr || "-"} / ${selectedKubernetes.serviceCidr || "-"}` : "-"} />
+          <Metric label="K8s join" value={selectedKubernetes?.enabled ? selectedKubernetes.joinEndpoint || "-" : "-"} />
+          <Metric label="K8s sysctls" value={selectedKubernetes?.enabled ? formatSysctls(selectedKubernetes.sysctls) : "-"} />
+        </div>
+      </DetailSection>
+
+      <DetailSection icon={<Layers size={16} />} title="Lab and Reachability">
+        <KubernetesLabSummary rows={rows} cube={cube} probe={networkProbe} />
+        <ConnectivityMatrix rows={rows} cube={cube} probe={networkProbe} />
+        <PortTable ports={selected.runtime?.portMappings || []} />
+      </DetailSection>
+    </div>
   );
 }
 
@@ -2255,8 +2366,7 @@ function NetworkEditor({
             })}
           />
           <span>
-            <strong>Kubernetes lab</strong>
-            <small>Privileged sysctls and ports</small>
+            <strong>K8s</strong>
           </span>
         </label>
         <label className="checkRow compactCheck">
@@ -2564,54 +2674,93 @@ function EgressRuleEditor({ rules, onChange }: { rules: EgressRuleDraft[]; onCha
   );
 }
 
-function NetworkTopology({ row, peers, cube, probe }: { row: InventoryRow; peers: InventoryRow[]; cube: CubeInspect | null; probe?: NetworkProbePlan | null }) {
-  const network = networkForRow(row, cube?.config?.networkType || "tap");
-  const sourceWorldId = row.world?.id || "";
-  const probedEdges = sourceWorldId ? (probe?.edges || []).filter((edge) => edge.fromWorldId === sourceWorldId) : [];
-  const peerRows = peers
-    .filter((peer) => peer.key !== row.key)
-    .filter((peer) => peer.host && row.host ? peer.host === row.host : Boolean(peer.runtime?.sandboxIp && row.runtime?.sandboxIp))
-    .slice(0, 4);
-  const runtimeForwards = row.runtime?.portMappings || [];
-  const configuredForwards = network.nat?.portForwards || [];
+function SwitchNetworkPanel({
+  selected,
+  rows,
+  cube,
+  probe,
+  onSelect
+}: {
+  selected: InventoryRow;
+  rows: InventoryRow[];
+  cube: CubeInspect | null;
+  probe?: NetworkProbePlan | null;
+  onSelect?: (key: string) => void;
+}) {
+  const ports = buildSwitchPorts(rows, selected, cube?.config?.networkType || "tap", probe);
+  const selectedPort = ports.find((port) => port.row.key === selected.key) || ports[0];
+  const inUse = ports.filter((port) => port.state !== "disabled").length;
+  const k8sCount = ports.filter((port) => port.kubernetes.enabled).length;
   return (
-    <div className="networkTopology">
-      <div className="networkNode">
-        <Server size={16} />
-        <span>Host</span>
-        <strong>{row.host || row.runtime?.hostIp || "-"}</strong>
+    <div className="switchPanel">
+      <div className="switchToolbar">
+        <div>
+          <strong>KakuriZai Switch</strong>
+          <span>{selected.host || selected.runtime?.hostIp || "local"} / {ports.length} ports</span>
+        </div>
+        <div className="switchTabs" aria-label="Network views">
+          <span className="active">Ports</span>
+          <span>Insights</span>
+          <span>VLANs</span>
+        </div>
+        <div className="switchStats">
+          <span>{inUse} in use</span>
+          <span>{k8sCount} K8s</span>
+        </div>
       </div>
-      <div className="networkEdge">
-        <span>{network.type || "tap"}</span>
-        <small>{network.mode || "tap"}</small>
+
+      <div className="switchDevice">
+        <div className="switchDeviceHeader">
+          <div>
+            <strong>{selectedPort?.row.name || "Sandbox"}</strong>
+            <span>{selectedPort?.row.runtime?.sandboxIp || selectedPort?.row.sandboxId || "planned"}</span>
+          </div>
+          <span>{selectedPort?.profile || "TAP"}</span>
+        </div>
+        <div className="switchPortGrid">
+          {ports.map((port) => (
+            <button
+              className={`switchPort ${port.tone} ${port.row.key === selected.key ? "selected" : ""}`}
+              key={port.row.key}
+              onClick={() => onSelect?.(port.row.key)}
+              type="button"
+              title={`${port.row.name} ${port.connection}`}
+            >
+              <span>{port.index}</span>
+              <strong>{port.label}</strong>
+              <small>{port.badge}</small>
+            </button>
+          ))}
+        </div>
+        <div className="switchLegend">
+          <span><i className="legendDot ok" /> Reachable</span>
+          <span><i className="legendDot warn" /> Blocked</span>
+          <span><i className="legendDot k8s" /> K8s</span>
+          <span><i className="legendDot muted" /> Planned</span>
+        </div>
       </div>
-      <div className="networkNode active">
-        <Box size={16} />
-        <span>Sandbox</span>
-        <strong>{row.runtime?.sandboxIp || row.sandboxId || row.name}</strong>
-      </div>
-      <div className="networkEdge">
-        <span>{formatNatSummary(network.nat)}</span>
-        <small>{formatPortForwardSummary(configuredForwards) || formatRuntimePortSummary(runtimeForwards)}</small>
-      </div>
-      <div className="networkNode">
-        <Globe2 size={16} />
-        <span>Egress</span>
-        <strong>{formatBool(network.allowInternetAccess)}</strong>
-      </div>
-      <div className="networkPeerBand">
-        {probedEdges.length ? probedEdges.map((edge) => (
-          <span className={probeTone(edge)} key={`${edge.fromWorldId}-${edge.toWorldId}`}>
-            <Network size={13} />
-            {edge.toName}: {probeLabel(edge)}
-          </span>
-        )) : peerRows.map((peer) => (
-          <span key={peer.key}>
-            <Network size={13} />
-            {peer.name}
-          </span>
+
+      <div className="switchPortTable">
+        <div className="switchPortRow head">
+          <span>Port</span>
+          <span>Name</span>
+          <span>Operation</span>
+          <span>Profile</span>
+          <span>Connection</span>
+          <span>NAT / Forward</span>
+          <span>Probe</span>
+        </div>
+        {ports.map((port) => (
+          <div className="switchPortRow" key={`${port.row.key}-table`}>
+            <span><i className={`legendDot ${port.tone}`} /> {port.index}</span>
+            <span>{port.row.name}</span>
+            <span>{port.operation}</span>
+            <span>{port.profile}</span>
+            <span>{port.connection}</span>
+            <span>{port.forward}</span>
+            <span>{port.probe}</span>
+          </div>
         ))}
-        {!probedEdges.length && peerRows.length === 0 ? <span><Network size={13} />No peer metadata</span> : null}
       </div>
     </div>
   );
@@ -3008,6 +3157,50 @@ function formatPortForwardSummary(value?: PortForwardConfig[] | null) {
 function formatRuntimePortSummary(value?: CubePortMapping[] | null) {
   if (!value?.length) return "";
   return value.map((port) => `${port.host_port ?? "-"}->${port.container_port ?? "-"}`).join(",");
+}
+
+function buildSwitchPorts(rows: InventoryRow[], selected: InventoryRow, fallbackType = "tap", probe?: NetworkProbePlan | null) {
+  const selectedWorldId = selected.world?.id || "";
+  const edgeByTarget = new Map(
+    (probe?.edges || [])
+      .filter((edge) => edge.fromWorldId === selectedWorldId)
+      .map((edge) => [edge.toWorldId, edge])
+  );
+  return rows.map((row, index) => {
+    const network = networkForRow(row, fallbackType);
+    const kubernetes = kubernetesForRow(row);
+    const edge = row.world ? edgeByTarget.get(row.world.id) : null;
+    const forward = formatPortForwardSummary(network.nat?.portForwards) || formatRuntimePortSummary(row.runtime?.portMappings || []);
+    const hasRuntime = Boolean(row.runtime?.sandboxIp || row.sandboxId);
+    const tone = switchPortTone(row, kubernetes, edge, hasRuntime);
+    const profile = [
+      network.mode || network.type || "tap",
+      network.vlan?.enabled ? `vlan ${network.vlan.vlanId || ""}`.trim() : "",
+      kubernetes.enabled ? kubernetes.nodeRole || "k8s" : ""
+    ].filter(Boolean).join(" / ");
+    return {
+      index: index + 1,
+      row,
+      tone,
+      state: hasRuntime ? "in-use" : "disabled",
+      label: kubernetes.enabled ? "K8s" : network.type || "TAP",
+      badge: network.nat?.enabled ? "NAT" : kubernetes.enabled ? kubernetes.nodeRole || "K8s" : "TAP",
+      operation: row.status || "-",
+      profile,
+      connection: row.runtime?.sandboxIp || shortId(row.sandboxId) || "-",
+      forward: forward || "-",
+      probe: row.key === selected.key ? "selected" : edge ? probeLabel(edge) : "not probed",
+      kubernetes
+    };
+  });
+}
+
+function switchPortTone(row: InventoryRow, kubernetes: KubernetesConfig, edge?: ProbeEdge | null, hasRuntime = false) {
+  if (edge?.reachable === true) return "ok";
+  if (edge?.reachable === false) return "warn";
+  if (kubernetes.enabled) return "k8s";
+  if (hasRuntime && /running|ready/i.test(row.status || "")) return "ok";
+  return "muted";
 }
 
 function formatKubernetesNode(value?: KubernetesConfig | null) {
