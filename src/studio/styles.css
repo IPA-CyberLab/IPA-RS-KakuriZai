@@ -370,6 +370,31 @@ label {
   background: #101114;
 }
 
+.networkOptionCard {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #101114;
+  padding: 0 10px 10px;
+}
+
+.networkOptionCard .compactCheck {
+  border: 0;
+  background: transparent;
+  padding-inline: 0;
+}
+
+.networkOptionFields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.networkOptionFields label {
+  margin-top: 0;
+}
+
 .inlineCheck {
   min-height: 32px;
   align-self: end;
@@ -1684,6 +1709,10 @@ label {
   }
 
   .togglePair {
+    grid-template-columns: 1fr;
+  }
+
+  .networkOptionFields {
     grid-template-columns: 1fr;
   }
 

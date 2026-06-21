@@ -1067,17 +1067,31 @@ function App() {
           <input value={launch.dnsOptions} onChange={(event) => setLaunch({ ...launch, dnsOptions: event.target.value })} placeholder="ndots:5" />
 
           <div className="togglePair">
-            <label className="checkRow compactCheck">
-              <input
-                type="checkbox"
-                checked={launch.allowInternetAccess}
-                onChange={(event) => setLaunch({ ...launch, allowInternetAccess: event.target.checked })}
-              />
-              <span>
-                <strong>Outbound internet</strong>
-                <small>Allow sandbox traffic to internet</small>
-              </span>
-            </label>
+            <div className="networkOptionCard">
+              <label className="checkRow compactCheck">
+                <input
+                  type="checkbox"
+                  checked={launch.allowInternetAccess}
+                  onChange={(event) => setLaunch({ ...launch, allowInternetAccess: event.target.checked })}
+                />
+                <span>
+                  <strong>Outbound internet</strong>
+                  <small>Allow sandbox traffic to internet</small>
+                </span>
+              </label>
+              {launch.allowInternetAccess ? (
+                <div className="networkOptionFields">
+                  <div>
+                    <label>Allow CIDRs</label>
+                    <input value={launch.allowOut} onChange={(event) => setLaunch({ ...launch, allowOut: event.target.value })} placeholder="0.0.0.0/0" />
+                  </div>
+                  <div>
+                    <label>Deny CIDRs</label>
+                    <input value={launch.denyOut} onChange={(event) => setLaunch({ ...launch, denyOut: event.target.value })} placeholder="10.0.0.0/8,172.16.0.0/12" />
+                  </div>
+                </div>
+              ) : null}
+            </div>
             <label className="checkRow compactCheck">
               <input
                 type="checkbox"
@@ -1158,9 +1172,6 @@ function App() {
               </div>
             </div>
           ) : null}
-
-          <label>Deny egress CIDRs</label>
-          <input value={launch.denyOut} onChange={(event) => setLaunch({ ...launch, denyOut: event.target.value })} placeholder="10.0.0.0/8,172.16.0.0/12" />
 
           <EgressRuleEditor
             rules={launch.egressRules}
@@ -1940,28 +1951,32 @@ function NetworkEditor({
           <input value={form.dnsOptions} onChange={(event) => setForm({ ...form, dnsOptions: event.target.value })} placeholder="ndots:5" />
         </div>
       </div>
-      <div className="splitFields">
-        <div>
-          <label>Allow egress CIDRs</label>
-          <input value={form.allowOut} onChange={(event) => setForm({ ...form, allowOut: event.target.value })} placeholder="0.0.0.0/0" />
-        </div>
-        <div>
-          <label>Deny egress CIDRs</label>
-          <input value={form.denyOut} onChange={(event) => setForm({ ...form, denyOut: event.target.value })} placeholder="10.0.0.0/8,172.16.0.0/12" />
-        </div>
-      </div>
       <div className="togglePair">
-        <label className="checkRow compactCheck">
-          <input
-            type="checkbox"
-            checked={form.allowInternetAccess}
-            onChange={(event) => setForm({ ...form, allowInternetAccess: event.target.checked })}
-          />
-          <span>
-            <strong>Outbound internet</strong>
-            <small>Allow sandbox traffic to internet</small>
-          </span>
-        </label>
+        <div className="networkOptionCard">
+          <label className="checkRow compactCheck">
+            <input
+              type="checkbox"
+              checked={form.allowInternetAccess}
+              onChange={(event) => setForm({ ...form, allowInternetAccess: event.target.checked })}
+            />
+            <span>
+              <strong>Outbound internet</strong>
+              <small>Allow sandbox traffic to internet</small>
+            </span>
+          </label>
+          {form.allowInternetAccess ? (
+            <div className="networkOptionFields">
+              <div>
+                <label>Allow CIDRs</label>
+                <input value={form.allowOut} onChange={(event) => setForm({ ...form, allowOut: event.target.value })} placeholder="0.0.0.0/0" />
+              </div>
+              <div>
+                <label>Deny CIDRs</label>
+                <input value={form.denyOut} onChange={(event) => setForm({ ...form, denyOut: event.target.value })} placeholder="10.0.0.0/8,172.16.0.0/12" />
+              </div>
+            </div>
+          ) : null}
+        </div>
         <label className="checkRow compactCheck">
           <input
             type="checkbox"
