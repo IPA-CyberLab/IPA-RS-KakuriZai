@@ -239,6 +239,74 @@ export class CubeSandboxClient {
     return this.resumeSandboxById(sandboxId);
   }
 
+  async applyRuntimeNetworkPolicy(world) {
+    const network = world.backendConfig?.network || {};
+    const sandboxId = world.sandbox?.containerId || world.sandbox?.id;
+    if (!sandboxId) return { skipped: true, reason: "world has no sandbox id" };
+    let detail = null;
+    try {
+      detail = await this.inspectWorldSandbox(world);
+    } catch (error) {
+      detail = { inspectError: error.message || String(error) };
+    }
+    const runtimeIp = detail?.sandboxIp || world.sandbox?.sandboxIp || null;
+    const requestedIp = network.sandboxIp || null;
+    const sandboxIps = [...new Set([runtimeIp, requestedIp].filter(Boolean))];
+    if (!sandboxIps.length) {
+      return { skipped: true, reason: "sandbox IP is not available", requestedIp, runtimeIp };
+    }
+    const firewall = await this.syncHostEgressRules(world, sandboxIps, network);
+    return {
+      skipped: false,
+      requestedIp,
+      runtimeIp,
+      sandboxIp: requestedIp || runtimeIp,
+      sandboxIps,
+      firewall
+    };
+  }
+
+  async syncHostEgressRules(world, sandboxIps, network = {}) {
+    const iptables = commandExists(this.config.iptables || "iptables");
+    if (!iptables) return { skipped: true, reason: "iptables not found" };
+    const chain = "KAKURIZAI-EGRESS";
+    const tag = `kakurizai:${world.id}`;
+    const commands = [
+      `${shellQuote(iptables)} -N ${chain} 2>/dev/null || true`,
+      `${shellQuote(iptables)} -C FORWARD -j ${chain} 2>/dev/null || ${shellQuote(iptables)} -I FORWARD 1 -j ${chain}`,
+      `while line=$(${shellQuote(iptables)} -L ${chain} --line-numbers -n | awk -v tag=${shellQuote(tag)} '$0 ~ tag { print $1 }' | sort -rn | head -n 1); [ -n "$line" ]; do ${shellQuote(iptables)} -D ${chain} "$line"; done`
+    ];
+    const cidrRules = [];
+    for (const ip of sandboxIps) {
+      if (network.allowInternetAccess === false) {
+        cidrRules.push(`${shellQuote(iptables)} -A ${chain} -s ${shellQuote(`${ip}/32`)} -d 192.168.0.0/18 -m comment --comment ${shellQuote(tag)} -j RETURN`);
+        cidrRules.push(`${shellQuote(iptables)} -A ${chain} -s ${shellQuote(`${ip}/32`)} -d 169.254.0.0/16 -m comment --comment ${shellQuote(tag)} -j RETURN`);
+        cidrRules.push(`${shellQuote(iptables)} -A ${chain} -s ${shellQuote(`${ip}/32`)} -m comment --comment ${shellQuote(tag)} -j REJECT --reject-with icmp-net-unreachable`);
+      } else {
+        for (const cidr of network.denyOut || []) {
+          cidrRules.push(`${shellQuote(iptables)} -A ${chain} -s ${shellQuote(`${ip}/32`)} -d ${shellQuote(cidr)} -m comment --comment ${shellQuote(tag)} -j REJECT --reject-with icmp-net-unreachable`);
+        }
+      }
+      if (network.allowInternetAccess !== false && network.allowOut?.length) {
+        for (const cidr of network.allowOut) {
+          cidrRules.push(`${shellQuote(iptables)} -A ${chain} -s ${shellQuote(`${ip}/32`)} -d ${shellQuote(cidr)} -m comment --comment ${shellQuote(tag)} -j RETURN`);
+        }
+        cidrRules.push(`${shellQuote(iptables)} -A ${chain} -s ${shellQuote(`${ip}/32`)} -m comment --comment ${shellQuote(tag)} -j REJECT --reject-with icmp-net-unreachable`);
+      }
+    }
+    commands.push(...cidrRules);
+    const script = commands.join("\n");
+    const result = await runHostNetworkCommand(script);
+    return {
+      skipped: false,
+      applied: result.code === 0,
+      code: result.code,
+      sudo: result.sudo || false,
+      ruleCount: cidrRules.length,
+      reason: result.code === 0 ? null : result.stderr || result.stdout || `iptables exited with ${result.code}`
+    };
+  }
+
   async masterUpdateAction(sandboxId, action) {
     const response = await postJson(`${masterApiBaseUrl(this.config)}/cube/sandbox/update`, {
       requestID: `kakurizai-${action}-${Date.now()}`,
@@ -694,6 +762,20 @@ async function runCubeCliCommand(command, args, options = {}) {
   if (!sudo) return result;
   const sudoResult = await runCommand(sudo, ["-n", command, ...args], { allowFailure: true, input: options.input });
   return { ...sudoResult, sudo: true };
+}
+
+async function runHostNetworkCommand(script) {
+  const sudo = commandExists("sudo");
+  if (sudo) {
+    const sudoResult = await runCommand(sudo, ["-n", "sh", "-lc", script], { allowFailure: true });
+    if (sudoResult.code === 0 || !shouldRetryWithoutSudo(sudoResult)) return { ...sudoResult, sudo: true };
+  }
+  return runCommand("sh", ["-lc", script], { allowFailure: true });
+}
+
+function shouldRetryWithoutSudo(result) {
+  const output = `${result.stdout || ""}\n${result.stderr || ""}`;
+  return /a password is required|may not run sudo|sudo: .*not found/i.test(output);
 }
 
 function shouldRetryWithSudo(result) {

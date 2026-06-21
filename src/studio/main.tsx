@@ -56,6 +56,8 @@ type World = {
     baseId?: string;
     status?: string;
     reason?: string;
+    sandboxIp?: string | null;
+    runtimeSandboxIp?: string | null;
     mountMode?: string;
     pausedAt?: string | null;
     bootstrap?: {
@@ -155,6 +157,7 @@ type CubePortMapping = {
 type NetworkConfig = {
   type?: string;
   mode?: string;
+  sandboxIp?: string | null;
   vlan?: VlanConfig | null;
   nat?: NatConfig | null;
   exposedPorts?: number[];
@@ -454,6 +457,7 @@ function App() {
     writableLayerSize: "1G",
     networkType: "tap",
     networkMode: "tap",
+    sandboxIp: "",
     exposedPorts: "",
     dnsServers: "",
     dnsSearches: "",
@@ -661,6 +665,7 @@ function App() {
           network: {
             type: launch.networkType,
             mode: launch.networkMode,
+            sandboxIp: launch.sandboxIp,
             exposedPorts: parsePortList(launch.exposedPorts),
             dns: {
               servers: parseCsv(launch.dnsServers),
@@ -1060,6 +1065,9 @@ function App() {
               </select>
             </div>
           </div>
+
+          <label>Sandbox IP</label>
+          <input value={launch.sandboxIp} onChange={(event) => setLaunch({ ...launch, sandboxIp: event.target.value })} placeholder="auto, e.g. 192.168.1.50" />
 
           <div className="splitFields">
             <div>
@@ -1471,6 +1479,7 @@ function NetworkWorkspace({
         <NetworkEditor
           world={selected.world}
           runtimeNetworkType={selectedTemplate?.networkType || cube?.config?.networkType || "tap"}
+          runtimeSandboxIp={selected.runtime?.sandboxIp || selected.world?.sandbox?.sandboxIp || ""}
           busy={busy}
           onSave={onSaveNetwork}
         />
@@ -1798,11 +1807,13 @@ function DiskEditor({
 function NetworkEditor({
   world,
   runtimeNetworkType,
+  runtimeSandboxIp,
   busy,
   onSave
 }: {
   world?: World;
   runtimeNetworkType: string;
+  runtimeSandboxIp: string;
   busy: boolean;
   onSave: (world: World, network: NetworkConfig, kubernetes: KubernetesConfig) => Promise<void>;
 }) {
@@ -1812,6 +1823,7 @@ function NetworkEditor({
   const [form, setForm] = React.useState({
     type: configuredNetwork.type || runtimeNetworkType || "tap",
     mode: configuredNetwork.mode || "tap",
+    sandboxIp: configuredNetwork.sandboxIp || "",
     exposedPorts: formatList(configuredNetwork.exposedPorts),
     dnsServers: formatList(configuredNetwork.dns?.servers),
     dnsSearches: formatList(configuredNetwork.dns?.searches),
@@ -1851,6 +1863,7 @@ function NetworkEditor({
     setForm({
       type: configuredNetwork.type || runtimeNetworkType || "tap",
       mode: configuredNetwork.mode || "tap",
+      sandboxIp: configuredNetwork.sandboxIp || "",
       exposedPorts: formatList(configuredNetwork.exposedPorts),
       dnsServers: formatList(configuredNetwork.dns?.servers),
       dnsSearches: formatList(configuredNetwork.dns?.searches),
@@ -1904,6 +1917,7 @@ function NetworkEditor({
             {
               type: form.type,
               mode: form.mode,
+              sandboxIp: form.sandboxIp,
               exposedPorts: parsePortList(form.exposedPorts),
               dns: {
                 servers: parseCsv(form.dnsServers),
@@ -1956,6 +1970,9 @@ function NetworkEditor({
       <select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })}>
         <option value="tap">tap</option>
       </select>
+
+      <label>Sandbox IP</label>
+      <input value={form.sandboxIp} onChange={(event) => setForm({ ...form, sandboxIp: event.target.value })} placeholder={runtimeSandboxIp || "auto, e.g. 192.168.1.50"} />
 
       <label>DNS servers</label>
       <input value={form.dnsServers} onChange={(event) => setForm({ ...form, dnsServers: event.target.value })} placeholder="8.8.8.8,1.1.1.1" />
@@ -2481,22 +2498,23 @@ function buildInventory(worlds: World[], cube: CubeInspect | null): InventoryRow
   const rows = worlds.map((world) => {
     const runtime = runtimes.find((candidate) => sameSandboxId(candidate.id, world.sandbox?.id));
     if (runtime) matchedRuntimeIds.add(runtime.id);
+    const displayRuntime = runtime && world.sandbox?.sandboxIp ? { ...runtime, sandboxIp: world.sandbox.sandboxIp } : runtime;
     const worldStatus = world.sandbox?.status || world.status;
     return {
       key: `world:${world.id}`,
       name: world.name,
-      status: isPausedStatus(worldStatus) ? worldStatus : runtime?.status || world.status,
-      origin: runtime ? "KakuriZai + CubeSandbox" : "KakuriZai",
+      status: isPausedStatus(worldStatus) ? worldStatus : displayRuntime?.status || world.status,
+      origin: displayRuntime ? "KakuriZai + CubeSandbox" : "KakuriZai",
       sourcePath: world.sourcePath,
       mountMode: world.backendConfig?.mountMode || world.sandbox?.mountMode || "-",
-      sandboxId: world.sandbox?.id || runtime?.id || "",
-      templateId: runtime?.templateId || world.backendConfig?.template || world.sandbox?.baseId || null,
-      cpu: runtime?.cpu || world.backendConfig?.cpu || null,
-      memory: runtime?.memory || world.backendConfig?.memory || null,
-      host: runtime?.hostIp || runtime?.hostId || null,
-      createdAt: runtime?.createdAt || world.createdAt,
+      sandboxId: world.sandbox?.id || displayRuntime?.id || "",
+      templateId: displayRuntime?.templateId || world.backendConfig?.template || world.sandbox?.baseId || null,
+      cpu: displayRuntime?.cpu || world.backendConfig?.cpu || null,
+      memory: displayRuntime?.memory || world.backendConfig?.memory || null,
+      host: displayRuntime?.hostIp || displayRuntime?.hostId || null,
+      createdAt: displayRuntime?.createdAt || world.createdAt,
       world,
-      runtime
+      runtime: displayRuntime
     };
   });
   for (const runtime of runtimes) {
@@ -3035,6 +3053,7 @@ function networkForRow(row: InventoryRow, fallbackType = "tap"): NetworkConfig {
   return {
     type: annotations["kakurizai.network.type"] || fallbackType,
     mode: annotations["kakurizai.network.mode"] || annotations["kakurizai.network.type"] || fallbackType,
+    sandboxIp: annotations["kakurizai.network.sandboxIp"] || null,
     exposedPorts: parsePortAnnotation(annotations["com.exposed_ports"]),
     allowOut: [],
     denyOut: [],
@@ -3093,6 +3112,7 @@ function effectiveNetworkForWorld(world?: World, fallbackType = "tap"): NetworkC
   return {
     type: world?.backendConfig?.network?.type || world?.backendConfig?.networkType || fallbackType,
     mode: world?.backendConfig?.network?.mode || world?.backendConfig?.network?.type || world?.backendConfig?.networkType || fallbackType,
+    sandboxIp: world?.backendConfig?.network?.sandboxIp || null,
     exposedPorts: world?.backendConfig?.network?.exposedPorts || [],
     allowInternetAccess: world?.backendConfig?.network?.allowInternetAccess,
     allowOut: world?.backendConfig?.network?.allowOut || [],

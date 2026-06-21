@@ -8,9 +8,11 @@ export function normalizeNetworkConfig(input = {}) {
   const exposedPorts = normalizePortList(source.exposedPorts || source.ports || []);
   const dns = normalizeDnsConfig(source.dns || source.dnsConfig || {});
   const allowInternetAccess = source.allowInternetAccess;
+  const sandboxIp = cleanString(source.sandboxIp || source.sandboxIP || source.sandbox_ip || source.ip || "");
   const network = {
     type,
     mode: cleanString(source.mode || type),
+    sandboxIp: sandboxIp ? normalizeIpv4(sandboxIp, "network.sandboxIp") : null,
     vlan: normalizeVlanConfig(source.vlan || {}),
     nat: normalizeNatConfig(source.nat || source.natConfig || {}),
     exposedPorts,
@@ -151,6 +153,21 @@ function normalizeVlanId(value) {
     throw new Error("vlan.id must be between 1 and 4094");
   }
   return number;
+}
+
+function normalizeIpv4(value, name) {
+  const ip = cleanString(value);
+  const parts = ip.split(".");
+  if (parts.length !== 4) throw new Error(`${name} must be an IPv4 address`);
+  for (const part of parts) {
+    if (!/^\d+$/.test(part)) throw new Error(`${name} must be an IPv4 address`);
+    const number = Number(part);
+    if (!Number.isInteger(number) || number < 0 || number > 255 || String(number) !== part) {
+      throw new Error(`${name} must be an IPv4 address`);
+    }
+  }
+  if (ip === "0.0.0.0" || ip === "255.255.255.255") throw new Error(`${name} must be a usable IPv4 address`);
+  return ip;
 }
 
 function normalizeKubernetesRole(value) {

@@ -110,6 +110,8 @@ export function applyNetworkToCubeRequest(request, networkInput = {}, kubernetes
   const kubernetes = normalizeKubernetesConfig(kubernetesInput);
   const network = effectiveNetworkConfig(networkInput, kubernetes);
   request.network_type = network.type || "tap";
+  if (network.sandboxIp) request.sandbox_ip = network.sandboxIp;
+  else delete request.sandbox_ip;
   request.exposed_ports = network.exposedPorts;
   request.annotations = {
     ...(request.annotations || {}),
@@ -139,6 +141,7 @@ export function applyNetworkToCubeRequest(request, networkInput = {}, kubernetes
       ...(container.annotations || {}),
       "kakurizai.network.type": request.network_type,
       "kakurizai.network.mode": network.mode || request.network_type,
+      ...(network.sandboxIp ? { "kakurizai.network.sandboxIp": network.sandboxIp } : {}),
       ...kubernetesAnnotations(kubernetes)
     };
     if (network.dns.servers.length || network.dns.searches.length || network.dns.options.length) {
@@ -150,6 +153,7 @@ export function applyNetworkToCubeRequest(request, networkInput = {}, kubernetes
     } else {
       delete container.dns_config;
     }
+    if (!network.sandboxIp) delete container.annotations["kakurizai.network.sandboxIp"];
     if (kubernetes.enabled) {
       container.security_context = {
         ...(container.security_context || {}),
@@ -170,6 +174,8 @@ function applyNetworkAnnotations(annotations, network) {
   annotations["kakurizai.network.vlan.enabled"] = String(Boolean(vlan.enabled));
   annotations["kakurizai.network.nat.enabled"] = String(Boolean(nat.enabled));
   annotations["kakurizai.network.nat.masquerade"] = String(Boolean(nat.masquerade));
+  if (network.sandboxIp) annotations["kakurizai.network.sandboxIp"] = network.sandboxIp;
+  else delete annotations["kakurizai.network.sandboxIp"];
   setJsonAnnotation(annotations, "kakurizai.network.vlan", vlan.enabled ? vlan : null);
   setJsonAnnotation(annotations, "kakurizai.network.nat", nat.enabled ? nat : null);
   setJsonAnnotation(annotations, "kakurizai.network.portForwards", nat.enabled && nat.portForwards?.length ? nat.portForwards : null);

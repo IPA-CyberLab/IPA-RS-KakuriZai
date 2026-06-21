@@ -261,6 +261,7 @@ test("cube request carries network, DNS, and Kubernetes lab settings", async () 
       mountMode: "none",
       network: {
         type: "tap",
+        sandboxIp: "192.168.1.50",
         exposedPorts: [8080],
         dns: { servers: ["8.8.8.8"] },
         allowInternetAccess: false,
@@ -292,6 +293,8 @@ test("cube request carries network, DNS, and Kubernetes lab settings", async () 
   const request = buildCubeSandboxRequest(world, { template: "base" });
 
   assert.equal(request.network_type, "tap");
+  assert.equal(request.sandbox_ip, "192.168.1.50");
+  assert.equal(request.annotations["kakurizai.network.sandboxIp"], "192.168.1.50");
   assert.deepEqual(request.exposed_ports, [6443, 8080, 30000]);
   assert.equal(request.annotations["com.exposed_ports"], "6443:8080:30000");
   assert.equal(request.annotations["kakurizai.kubernetes.cluster"], "lab-a");
@@ -464,6 +467,10 @@ test("network config rejects unsupported CubeSandbox network types", () => {
   assert.throws(
     () => normalizeNetworkConfig({ type: "vlan", vlan: { enabled: true, vlanId: 100, hostInterface: "eth0" } }),
     /supports network\.type=tap only/
+  );
+  assert.throws(
+    () => normalizeNetworkConfig({ type: "tap", sandboxIp: "192.168.1.999" }),
+    /network\.sandboxIp must be an IPv4 address/
   );
 });
 

@@ -51,6 +51,12 @@ export class CubeSandboxOverlayBackend {
         ? { pending: true, skipped: false, applied: false, reason: "installing terminal tools in background" }
         : null
     };
+    if (provision.provisioned) {
+      const runtimeNetwork = await this.client.applyRuntimeNetworkPolicy(world);
+      world.sandbox.sandboxIp = runtimeNetwork.sandboxIp || runtimeNetwork.runtimeIp || null;
+      world.sandbox.runtimeSandboxIp = runtimeNetwork.runtimeIp || null;
+      world.sandbox.network = runtimeNetwork;
+    }
     world.status = overlayPending ? "pending-overlay" : provision.provisioned ? "ready" : "pending-cube";
     const saved = await store.save(world);
     if (provision.provisioned) {
