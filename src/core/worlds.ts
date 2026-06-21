@@ -71,6 +71,79 @@ export async function createWorld(config, input) {
   }
 }
 
+export async function createKubernetesLab(config, input = {}) {
+  const labName = cleanLabName(input.name || input.clusterName || "kakurizai-lab");
+  const controlPlanes = clampCount(input.controlPlanes ?? input.controlPlaneCount ?? 1, "controlPlanes", { min: 1 });
+  const workers = clampCount(input.workers ?? input.workerCount ?? 2, "workers");
+  const profile = input.profile || input.kubernetes?.profile || "k3s";
+  const apiServerPort = Number(input.apiServerPort || input.kubernetes?.apiServerPort || 6443);
+  const nodePorts = input.nodePorts || input.kubernetes?.nodePorts || [30000, 30001];
+  const joinEndpoint = input.joinEndpoint || `https://${labName}-cp-1:${apiServerPort}`;
+  const sharedNetwork = {
+    type: "tap",
+    mode: "tap",
+    exposedPorts: [apiServerPort, ...nodePorts],
+    ...(input.network || {})
+  };
+  const baseInput = {
+    backend: input.backend || "cube-sandbox-overlay",
+    hostMount: input.hostMount === true,
+    mounts: input.hostMount === true ? input.mounts : undefined,
+    sourcePath: input.hostMount === true ? input.sourcePath : undefined,
+    mountMode: input.hostMount === true ? input.mountMode : "none",
+    cpu: input.cpu,
+    memory: input.memory,
+    writableLayerSize: input.writableLayerSize,
+    networkType: "tap",
+    network: sharedNetwork
+  };
+  const created = [];
+  for (let index = 1; index <= controlPlanes; index += 1) {
+    created.push(await createWorld(config, {
+      ...baseInput,
+      name: `${labName}-cp-${index}`,
+      kubernetes: kubernetesNodeConfig(input, {
+        enabled: true,
+        profile,
+        clusterName: labName,
+        nodeRole: "control-plane",
+        nodeName: `${labName}-cp-${index}`,
+        apiServerPort,
+        nodePorts,
+        joinEndpoint: index === 1 ? input.joinEndpoint || "" : joinEndpoint
+      }),
+      labels: labLabels(input.labels, labName, "control-plane", index)
+    }));
+  }
+  for (let index = 1; index <= workers; index += 1) {
+    created.push(await createWorld(config, {
+      ...baseInput,
+      name: `${labName}-worker-${index}`,
+      kubernetes: kubernetesNodeConfig(input, {
+        enabled: true,
+        profile,
+        clusterName: labName,
+        nodeRole: "worker",
+        nodeName: `${labName}-worker-${index}`,
+        apiServerPort,
+        nodePorts,
+        joinEndpoint
+      }),
+      labels: labLabels(input.labels, labName, "worker", index)
+    }));
+  }
+  return {
+    lab: {
+      name: labName,
+      clusterName: labName,
+      controlPlanes,
+      workers,
+      joinEndpoint
+    },
+    worlds: created
+  };
+}
+
 export async function updateWorldConfig(config, ref, input = {}) {
   const store = new WorldStore(config);
   const world = await store.get(ref);
@@ -175,6 +248,51 @@ export async function updateWorldConfig(config, ref, input = {}) {
     appliedToRunningSandbox: false,
     reason: "CubeSandbox open-source CLI does not support live network or disk mutation; saved for next sandbox create or recreate."
   };
+}
+
+function kubernetesNodeConfig(input, defaults) {
+  return normalizeKubernetesConfig({
+    ...(input.kubernetes || {}),
+    enabled: true,
+    profile: defaults.profile,
+    clusterName: defaults.clusterName,
+    nodeRole: defaults.nodeRole,
+    nodeName: defaults.nodeName,
+    cni: input.cni || input.kubernetes?.cni,
+    podCidr: input.podCidr || input.kubernetes?.podCidr,
+    serviceCidr: input.serviceCidr || input.kubernetes?.serviceCidr,
+    joinEndpoint: defaults.joinEndpoint,
+    joinToken: input.joinToken || input.kubernetes?.joinToken,
+    advertiseAddress: input.advertiseAddress || input.kubernetes?.advertiseAddress,
+    extraArgs: input.extraArgs || input.kubernetes?.extraArgs,
+    apiServerPort: defaults.apiServerPort,
+    nodePorts: defaults.nodePorts
+  });
+}
+
+function labLabels(labels = {}, labName, role, index) {
+  return {
+    ...(labels || {}),
+    "kakurizai.lab": labName,
+    "kakurizai.kubernetes.cluster": labName,
+    "kakurizai.kubernetes.nodeRole": role,
+    "kakurizai.kubernetes.nodeIndex": String(index)
+  };
+}
+
+function cleanLabName(value) {
+  const name = String(value || "").trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  if (!name) throw new Error("lab name is required");
+  return name;
+}
+
+function clampCount(value, name, options = {}) {
+  const number = Number(value);
+  const min = options.min ?? 0;
+  if (!Number.isInteger(number) || number < min || number > 20) {
+    throw new Error(`${name} must be an integer between ${min} and 20`);
+  }
+  return number;
 }
 
 async function recreateSavedWorld(config, store, world) {

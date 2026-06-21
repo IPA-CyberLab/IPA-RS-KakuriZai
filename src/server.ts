@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import pty from "node-pty";
 import { WebSocket, WebSocketServer } from "ws";
 import { createAuthProvider } from "./auth/providers.js";
-import { applyWorld, changedPaths, createWorld, execWorld, getWorld, listWorlds, openWorld, pauseWorld, removeWorld, resumeWorld, updateWorldConfig } from "./core/worlds.js";
+import { applyWorld, changedPaths, createKubernetesLab, createWorld, execWorld, getWorld, listWorlds, openWorld, pauseWorld, removeWorld, resumeWorld, updateWorldConfig } from "./core/worlds.js";
 import { applyProbeChecks, buildNetworkProbePlan, buildProbeScript, parseProbeOutput } from "./core/probe.js";
 import { CubeSandboxClient } from "./cube/client.js";
 
@@ -390,6 +390,9 @@ async function api(config, devAccess, request, response, url) {
   }
   if (request.method === "POST" && url.pathname === "/api/network/probe") {
     return sendJson(response, await probeNetwork(config, await readBody(request)));
+  }
+  if (request.method === "POST" && url.pathname === "/api/labs/kubernetes") {
+    return sendJson(response, await createKubernetesLab(config, await readBody(request)), 201);
   }
   const cubeSandboxMatch = /^\/api\/cube\/sandboxes\/([^/]+)\/([^/]+)$/.exec(url.pathname);
   if (cubeSandboxMatch) {
