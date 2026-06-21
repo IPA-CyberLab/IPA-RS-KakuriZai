@@ -267,7 +267,7 @@ export class CubeSandboxClient {
   }
 
   async syncHostEgressRules(world, sandboxIps, network = {}) {
-    const iptables = commandExists(this.config.iptables || "iptables");
+    const iptables = resolveIptables(this.config.iptables);
     if (!iptables) return { skipped: true, reason: "iptables not found" };
     const chain = "KAKURIZAI-EGRESS";
     const tag = `kakurizai:${world.id}`;
@@ -765,12 +765,19 @@ async function runCubeCliCommand(command, args, options = {}) {
 }
 
 async function runHostNetworkCommand(script) {
+  const hostNetworkScript = `export PATH="/usr/sbin:/sbin:$PATH"\n${script}`;
   const sudo = commandExists("sudo");
   if (sudo) {
-    const sudoResult = await runCommand(sudo, ["-n", "sh", "-lc", script], { allowFailure: true });
+    const sudoResult = await runCommand(sudo, ["-n", "sh", "-lc", hostNetworkScript], { allowFailure: true });
     if (sudoResult.code === 0 || !shouldRetryWithoutSudo(sudoResult)) return { ...sudoResult, sudo: true };
   }
-  return runCommand("sh", ["-lc", script], { allowFailure: true });
+  return runCommand("sh", ["-lc", hostNetworkScript], { allowFailure: true });
+}
+
+function resolveIptables(configuredPath) {
+  const configured = commandExists(configuredPath || "iptables");
+  if (configured) return configured;
+  return commandExists("/usr/sbin/iptables") || commandExists("/sbin/iptables");
 }
 
 function shouldRetryWithoutSudo(result) {
