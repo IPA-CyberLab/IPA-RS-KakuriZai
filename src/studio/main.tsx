@@ -1092,50 +1092,51 @@ function App() {
                 </div>
               ) : null}
             </div>
-            <label className="checkRow compactCheck">
-              <input
-                type="checkbox"
-                checked={launch.natEnabled}
-                onChange={(event) => setLaunch({ ...launch, natEnabled: event.target.checked })}
-              />
-              <span>
-                <strong>Outbound NAT</strong>
-                <small>SNAT for outbound traffic</small>
-              </span>
-            </label>
+            <div className="networkOptionCard">
+              <label className="checkRow compactCheck">
+                <input
+                  type="checkbox"
+                  checked={launch.natEnabled}
+                  onChange={(event) => setLaunch({ ...launch, natEnabled: event.target.checked })}
+                />
+                <span>
+                  <strong>Outbound NAT</strong>
+                  <small>SNAT for outbound traffic</small>
+                </span>
+              </label>
+              {launch.natEnabled ? (
+                <>
+                  <div className="networkOptionFields">
+                    <div>
+                      <label>NAT subnet</label>
+                      <input value={launch.natSubnet} onChange={(event) => setLaunch({ ...launch, natSubnet: event.target.value })} placeholder="10.244.0.0/16" />
+                    </div>
+                    <div>
+                      <label>NAT gateway</label>
+                      <input value={launch.natGateway} onChange={(event) => setLaunch({ ...launch, natGateway: event.target.value })} placeholder="10.244.0.1" />
+                    </div>
+                  </div>
+                  <div className="networkOptionFields">
+                    <div>
+                      <label>Outbound interface</label>
+                      <input value={launch.natOutboundInterface} onChange={(event) => setLaunch({ ...launch, natOutboundInterface: event.target.value })} placeholder="tailscale0" />
+                    </div>
+                    <label className="checkRow compactCheck inlineCheck">
+                      <input
+                        type="checkbox"
+                        checked={launch.natMasquerade}
+                        onChange={(event) => setLaunch({ ...launch, natMasquerade: event.target.checked })}
+                      />
+                      <span>
+                        <strong>Masquerade</strong>
+                        <small>SNAT egress</small>
+                      </span>
+                    </label>
+                  </div>
+                </>
+              ) : null}
+            </div>
           </div>
-
-          {launch.natEnabled ? (
-            <>
-              <div className="splitFields">
-                <div>
-                  <label>NAT subnet</label>
-                  <input value={launch.natSubnet} onChange={(event) => setLaunch({ ...launch, natSubnet: event.target.value })} placeholder="10.244.0.0/16" />
-                </div>
-                <div>
-                  <label>NAT gateway</label>
-                  <input value={launch.natGateway} onChange={(event) => setLaunch({ ...launch, natGateway: event.target.value })} placeholder="10.244.0.1" />
-                </div>
-              </div>
-              <div className="splitFields">
-                <div>
-                  <label>Outbound interface</label>
-                  <input value={launch.natOutboundInterface} onChange={(event) => setLaunch({ ...launch, natOutboundInterface: event.target.value })} placeholder="tailscale0" />
-                </div>
-                <label className="checkRow compactCheck inlineCheck">
-                  <input
-                    type="checkbox"
-                    checked={launch.natMasquerade}
-                    onChange={(event) => setLaunch({ ...launch, natMasquerade: event.target.checked })}
-                  />
-                  <span>
-                    <strong>Masquerade</strong>
-                    <small>SNAT egress</small>
-                  </span>
-                </label>
-              </div>
-            </>
-          ) : null}
 
           <NatForwardEditor
             forwards={launch.natPortForwards}
@@ -1977,49 +1978,51 @@ function NetworkEditor({
             </div>
           ) : null}
         </div>
-        <label className="checkRow compactCheck">
-          <input
-            type="checkbox"
-            checked={form.natEnabled}
-            onChange={(event) => setForm({ ...form, natEnabled: event.target.checked })}
-          />
-          <span>
-            <strong>Outbound NAT</strong>
-            <small>SNAT for outbound traffic</small>
-          </span>
-        </label>
+        <div className="networkOptionCard">
+          <label className="checkRow compactCheck">
+            <input
+              type="checkbox"
+              checked={form.natEnabled}
+              onChange={(event) => setForm({ ...form, natEnabled: event.target.checked })}
+            />
+            <span>
+              <strong>Outbound NAT</strong>
+              <small>SNAT for outbound traffic</small>
+            </span>
+          </label>
+          {form.natEnabled ? (
+            <>
+              <div className="networkOptionFields">
+                <div>
+                  <label>NAT subnet</label>
+                  <input value={form.natSubnet} onChange={(event) => setForm({ ...form, natSubnet: event.target.value })} placeholder="10.244.0.0/16" />
+                </div>
+                <div>
+                  <label>NAT gateway</label>
+                  <input value={form.natGateway} onChange={(event) => setForm({ ...form, natGateway: event.target.value })} placeholder="10.244.0.1" />
+                </div>
+              </div>
+              <div className="networkOptionFields">
+                <div>
+                  <label>Outbound interface</label>
+                  <input value={form.natOutboundInterface} onChange={(event) => setForm({ ...form, natOutboundInterface: event.target.value })} placeholder="tailscale0" />
+                </div>
+                <label className="checkRow compactCheck inlineCheck">
+                  <input
+                    type="checkbox"
+                    checked={form.natMasquerade}
+                    onChange={(event) => setForm({ ...form, natMasquerade: event.target.checked })}
+                  />
+                  <span>
+                    <strong>Masquerade</strong>
+                    <small>SNAT egress</small>
+                  </span>
+                </label>
+              </div>
+            </>
+          ) : null}
+        </div>
       </div>
-      {form.natEnabled ? (
-        <>
-          <div className="splitFields">
-            <div>
-              <label>NAT subnet</label>
-              <input value={form.natSubnet} onChange={(event) => setForm({ ...form, natSubnet: event.target.value })} placeholder="10.244.0.0/16" />
-            </div>
-            <div>
-              <label>NAT gateway</label>
-              <input value={form.natGateway} onChange={(event) => setForm({ ...form, natGateway: event.target.value })} placeholder="10.244.0.1" />
-            </div>
-          </div>
-          <div className="splitFields">
-            <div>
-              <label>Outbound interface</label>
-              <input value={form.natOutboundInterface} onChange={(event) => setForm({ ...form, natOutboundInterface: event.target.value })} placeholder="tailscale0" />
-            </div>
-            <label className="checkRow compactCheck inlineCheck">
-              <input
-                type="checkbox"
-                checked={form.natMasquerade}
-                onChange={(event) => setForm({ ...form, natMasquerade: event.target.checked })}
-              />
-              <span>
-                <strong>Masquerade</strong>
-                <small>SNAT egress</small>
-              </span>
-            </label>
-          </div>
-        </>
-      ) : null}
       <NatForwardEditor
         forwards={form.natPortForwards}
         onChange={(natPortForwards) => setForm({ ...form, natPortForwards })}
