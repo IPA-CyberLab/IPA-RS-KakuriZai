@@ -939,6 +939,23 @@ label {
   justify-self: start;
 }
 
+.probeToolbar {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.probeToolbar button {
+  min-height: 30px;
+}
+
+.probeToolbar span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .terminalLauncher {
   display: flex;
   align-items: center;
@@ -1197,6 +1214,21 @@ label {
   color: #d8d9de;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.networkPeerBand span.ok,
+.networkMatrix .dataRow.ok {
+  color: #93e8b6;
+}
+
+.networkPeerBand span.warn,
+.networkMatrix .dataRow.warn {
+  color: #f3d98f;
+}
+
+.networkPeerBand span.muted,
+.networkMatrix .dataRow.muted {
+  color: var(--muted);
 }
 
 .networkMatrix .dataRow {

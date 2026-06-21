@@ -80,6 +80,8 @@ Studio can create and edit the TAP network settings stored on each sandbox:
 
 CubeSandbox OSS accepts `network_type=tap`, exposed ports, DNS config, and `cube_network_config` egress policy directly. NAT and VLAN bridge settings are persisted as KakuriZai annotations so host-side integrations or future CubeSandbox plugins can consume them.
 
+Studio also includes a network probe action. It builds a sandbox-to-sandbox reachability plan from CubeSandbox runtime IPs, then can execute ICMP/TCP checks from each provisioned sandbox and render reachable, blocked, and unknown paths in the Network view.
+
 ## Backends
 
 Default backend selection preserves the IsolatedAgent defaults:

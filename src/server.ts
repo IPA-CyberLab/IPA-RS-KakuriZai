@@ -9,6 +9,7 @@ import pty from "node-pty";
 import { WebSocket, WebSocketServer } from "ws";
 import { createAuthProvider } from "./auth/providers.js";
 import { applyWorld, changedPaths, createWorld, execWorld, getWorld, listWorlds, openWorld, pauseWorld, removeWorld, resumeWorld, updateWorldConfig } from "./core/worlds.js";
+import { applyProbeChecks, buildNetworkProbePlan, buildProbeScript, parseProbeOutput } from "./core/probe.js";
 import { CubeSandboxClient } from "./cube/client.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -387,6 +388,9 @@ async function api(config, devAccess, request, response, url) {
   if (request.method === "GET" && url.pathname === "/api/cube/inspect") {
     return sendJson(response, await new CubeSandboxClient(config.cube).inspect());
   }
+  if (request.method === "POST" && url.pathname === "/api/network/probe") {
+    return sendJson(response, await probeNetwork(config, await readBody(request)));
+  }
   const cubeSandboxMatch = /^\/api\/cube\/sandboxes\/([^/]+)\/([^/]+)$/.exec(url.pathname);
   if (cubeSandboxMatch) {
     const [, sandboxId, action] = cubeSandboxMatch;
@@ -467,6 +471,37 @@ async function api(config, devAccess, request, response, url) {
     return sendJson(response, result);
   }
   return sendJson(response, { error: "not found" }, 404);
+}
+
+async function probeNetwork(config, options = {}) {
+  const worlds = await listWorlds(config);
+  const cube = await new CubeSandboxClient(config.cube).inspect();
+  let plan = buildNetworkProbePlan(worlds, cube.sandboxes || [], options);
+  if (options.live === false) return plan;
+
+  for (const source of plan.nodes) {
+    if (!source.canProbe) continue;
+    const targets = plan.nodes
+      .filter((target) => target.worldId !== source.worldId)
+      .map((target) => ({
+        worldId: target.worldId,
+        ip: target.sandboxIp,
+        ports: target.exposedPorts
+      }));
+    if (!targets.length) continue;
+    try {
+      const result = await execWorld(config, source.worldId, ["/bin/sh", "-lc", buildProbeScript(targets, options)], {
+        allowFailure: true
+      });
+      const output = `${result.stdout || ""}\n${result.stderr || ""}`;
+      const checks = parseProbeOutput(output);
+      const error = result.code && !checks.length ? result.stderr || result.stdout || `probe exited with ${result.code}` : null;
+      plan = applyProbeChecks(plan, source.worldId, checks, error);
+    } catch (error) {
+      plan = applyProbeChecks(plan, source.worldId, [], error.message || String(error));
+    }
+  }
+  return plan;
 }
 
 async function browseHost(target) {

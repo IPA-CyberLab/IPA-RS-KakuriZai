@@ -282,6 +282,33 @@ type DevAccessSession = {
   sshCommand?: string | null;
 };
 
+type NetworkProbePlan = {
+  generatedAt: string;
+  nodes: ProbeNode[];
+  edges: ProbeEdge[];
+  forwards: PortForwardConfig[];
+};
+
+type ProbeNode = {
+  worldId: string;
+  name: string;
+  sandboxIp?: string | null;
+  host?: string | null;
+  canProbe?: boolean;
+};
+
+type ProbeEdge = {
+  fromWorldId: string;
+  fromName: string;
+  toWorldId: string;
+  toName: string;
+  toSandboxIp?: string | null;
+  hostPath?: string;
+  reachable?: boolean | null;
+  reason?: string | null;
+  checks?: Array<{ kind: string; port?: number | null; status: string; ok?: boolean; detail?: string }>;
+};
+
 type HostMountConfig = {
   id?: string;
   name?: string;
@@ -349,6 +376,8 @@ function App() {
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [status, setStatus] = React.useState("Starting");
   const [busy, setBusy] = React.useState(false);
+  const [probeBusy, setProbeBusy] = React.useState(false);
+  const [networkProbe, setNetworkProbe] = React.useState<NetworkProbePlan | null>(null);
   const [actionMenuOpen, setActionMenuOpen] = React.useState(false);
   const [launchMenuOpen, setLaunchMenuOpen] = React.useState(false);
   const activityMenuRef = React.useRef<HTMLButtonElement | null>(null);
@@ -677,6 +706,25 @@ function App() {
       setStatus(error instanceof Error ? error.message : String(error));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function runNetworkProbe(live = true) {
+    setProbeBusy(true);
+    try {
+      const result = await api<NetworkProbePlan>("/api/network/probe", {
+        method: "POST",
+        token,
+        body: { live, timeoutSeconds: 2, maxPortsPerTarget: 8 }
+      });
+      setNetworkProbe(result);
+      const reachable = result.edges.filter((edge) => edge.reachable === true).length;
+      const failed = result.edges.filter((edge) => edge.reachable === false).length;
+      setStatus(`Network probe: ${reachable} reachable / ${failed} blocked`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setProbeBusy(false);
     }
   }
 
@@ -1174,7 +1222,18 @@ function App() {
               </DetailSection>
 
               <DetailSection icon={<Route size={16} />} title="Network">
-                <NetworkTopology row={selected} peers={inventory} cube={cube} />
+                <div className="probeToolbar">
+                  <button className="primary" onClick={() => void runNetworkProbe(true)} type="button" disabled={probeBusy || busy}>
+                    <Activity size={15} />
+                    {probeBusy ? "Probing" : "Probe"}
+                  </button>
+                  <button onClick={() => void runNetworkProbe(false)} type="button" disabled={probeBusy || busy}>
+                    <Network size={15} />
+                    Plan
+                  </button>
+                  <span>{networkProbe ? `Updated ${formatDate(networkProbe.generatedAt)}` : "No live probe yet"}</span>
+                </div>
+                <NetworkTopology row={selected} peers={inventory} cube={cube} probe={networkProbe} />
                 <NetworkEditor
                   world={selected.world}
                   runtimeNetworkType={selectedTemplate?.networkType || cube?.config?.networkType || "tap"}
@@ -1200,7 +1259,7 @@ function App() {
                   <Metric label="Egress rules" value={String(selectedNetwork?.rules?.length || 0)} />
                   <Metric label="Kubernetes" value={selected.world?.backendConfig?.kubernetes?.enabled ? selected.world.backendConfig.kubernetes.profile || "enabled" : "disabled"} />
                 </div>
-                <ConnectivityMatrix rows={inventory} cube={cube} />
+                <ConnectivityMatrix rows={inventory} cube={cube} probe={networkProbe} />
                 <PortTable ports={selected.runtime?.portMappings || []} />
               </DetailSection>
 
@@ -1859,8 +1918,10 @@ function NetworkEditor({
   );
 }
 
-function NetworkTopology({ row, peers, cube }: { row: InventoryRow; peers: InventoryRow[]; cube: CubeInspect | null }) {
+function NetworkTopology({ row, peers, cube, probe }: { row: InventoryRow; peers: InventoryRow[]; cube: CubeInspect | null; probe?: NetworkProbePlan | null }) {
   const network = networkForRow(row, cube?.config?.networkType || "tap");
+  const sourceWorldId = row.world?.id || "";
+  const probedEdges = sourceWorldId ? (probe?.edges || []).filter((edge) => edge.fromWorldId === sourceWorldId) : [];
   const peerRows = peers
     .filter((peer) => peer.key !== row.key)
     .filter((peer) => peer.host && row.host ? peer.host === row.host : Boolean(peer.runtime?.sandboxIp && row.runtime?.sandboxIp))
@@ -1893,20 +1954,51 @@ function NetworkTopology({ row, peers, cube }: { row: InventoryRow; peers: Inven
         <strong>{formatBool(network.allowInternetAccess)}</strong>
       </div>
       <div className="networkPeerBand">
-        {peerRows.map((peer) => (
+        {probedEdges.length ? probedEdges.map((edge) => (
+          <span className={probeTone(edge)} key={`${edge.fromWorldId}-${edge.toWorldId}`}>
+            <Network size={13} />
+            {edge.toName}: {probeLabel(edge)}
+          </span>
+        )) : peerRows.map((peer) => (
           <span key={peer.key}>
             <Network size={13} />
             {peer.name}
           </span>
         ))}
-        {peerRows.length === 0 ? <span><Network size={13} />No peer metadata</span> : null}
+        {!probedEdges.length && peerRows.length === 0 ? <span><Network size={13} />No peer metadata</span> : null}
       </div>
     </div>
   );
 }
 
-function ConnectivityMatrix({ rows, cube }: { rows: InventoryRow[]; cube: CubeInspect | null }) {
+function ConnectivityMatrix({ rows, cube, probe }: { rows: InventoryRow[]; cube: CubeInspect | null; probe?: NetworkProbePlan | null }) {
   if (!rows.length) return <div className="sectionEmpty">No sandbox connectivity metadata.</div>;
+  if (probe?.edges?.length) {
+    return (
+      <div className="dataTable networkMatrix">
+        <div className="dataRow head">
+          <span>Source</span>
+          <span>Target</span>
+          <span>Target IP</span>
+          <span>Path</span>
+          <span>Probe</span>
+          <span>Checks</span>
+          <span>Reason</span>
+        </div>
+        {probe.edges.map((edge) => (
+          <div className={`dataRow ${probeTone(edge)}`} key={`${edge.fromWorldId}-${edge.toWorldId}`}>
+            <span>{edge.fromName}</span>
+            <span>{edge.toName}</span>
+            <span>{edge.toSandboxIp || "-"}</span>
+            <span>{edge.hostPath || "-"}</span>
+            <span>{probeLabel(edge)}</span>
+            <span>{formatProbeChecks(edge.checks)}</span>
+            <span>{edge.reason || "-"}</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
   return (
     <div className="dataTable networkMatrix">
       <div className="dataRow head">
@@ -2241,6 +2333,25 @@ function formatPortForwardSummary(value?: PortForwardConfig[] | null) {
 function formatRuntimePortSummary(value?: CubePortMapping[] | null) {
   if (!value?.length) return "";
   return value.map((port) => `${port.host_port ?? "-"}->${port.container_port ?? "-"}`).join(",");
+}
+
+function probeLabel(edge: ProbeEdge) {
+  if (edge.reachable === true) return "reachable";
+  if (edge.reachable === false) return "blocked";
+  return "unknown";
+}
+
+function probeTone(edge: ProbeEdge) {
+  if (edge.reachable === true) return "ok";
+  if (edge.reachable === false) return "warn";
+  return "muted";
+}
+
+function formatProbeChecks(checks?: ProbeEdge["checks"]) {
+  if (!checks?.length) return "-";
+  return checks
+    .map((check) => `${check.kind}${check.port ? `:${check.port}` : ""}=${check.ok || check.status === "ok" ? "ok" : check.status}`)
+    .join(",");
 }
 
 function formatBootstrapStatus(value?: { pending?: boolean; applied?: boolean; skipped?: boolean; reason?: string | null } | null) {
