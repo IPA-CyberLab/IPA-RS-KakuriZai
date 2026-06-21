@@ -5,15 +5,89 @@
   --surface: #090a0c;
   --surface-2: #0d0e11;
   --surface-3: #14151a;
+  --panel: #15161b;
+  --panel-2: #18191e;
+  --raised: #0d0e12;
+  --raised-2: #111217;
+  --field: #101114;
+  --control: #16171b;
+  --control-hover: #1d1f25;
+  --hover: #1c1d22;
+  --selected: #202229;
   --line: #27282e;
   --line-soft: #1e1f25;
   --ink: #e6e6e8;
+  --ink-strong: #f1f1f3;
+  --ink-soft: #d7d7dc;
   --muted: #8c8d95;
+  --muted-strong: #9a9ba4;
+  --muted-dim: #777984;
   --accent: #1493ff;
+  --accent-soft: #102033;
   --green: #19b65a;
   --danger: #d15b49;
+  --danger-bg: #231615;
+  --danger-border: #6c332d;
+  --danger-text: #f0b4ab;
   --warning: #e6c56f;
+  --warning-bg: #211a0f;
+  --warning-border: #5c4823;
+  --success-bg: #112116;
+  --success-border: #294b35;
+  --success-text: #63d58c;
+  --active-line: #ffffff;
+  --shadow-strong: rgba(0, 0, 0, 0.48);
+  --shadow-soft: rgba(0, 0, 0, 0.42);
+  --terminal-bg: #091018;
+  --switch-port-ok: #31d06b;
+  --switch-port-warn: #b7df22;
+  --switch-port-muted: #5e6570;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --activity: #eef2f6;
+  --sidebar: #ffffff;
+  --surface: #f4f6f8;
+  --surface-2: #ffffff;
+  --surface-3: #e9eef5;
+  --panel: #ffffff;
+  --panel-2: #ffffff;
+  --raised: #ffffff;
+  --raised-2: #f8fafc;
+  --field: #ffffff;
+  --control: #ffffff;
+  --control-hover: #edf2f7;
+  --hover: #eef2f6;
+  --selected: #e8f2ff;
+  --line: #cfd8e3;
+  --line-soft: #e3e8ef;
+  --ink: #1f2933;
+  --ink-strong: #111827;
+  --ink-soft: #334155;
+  --muted: #64748b;
+  --muted-strong: #64748b;
+  --muted-dim: #7c8796;
+  --accent: #1d7fe5;
+  --accent-soft: #e8f2ff;
+  --green: #15803d;
+  --danger: #c2410c;
+  --danger-bg: #fff3f0;
+  --danger-border: #f2b8aa;
+  --danger-text: #a53b2f;
+  --warning: #a16207;
+  --warning-bg: #fff7df;
+  --warning-border: #ecd087;
+  --success-bg: #eaf8ef;
+  --success-border: #b9e4c5;
+  --success-text: #166534;
+  --active-line: var(--accent);
+  --shadow-strong: rgba(15, 23, 42, 0.18);
+  --shadow-soft: rgba(15, 23, 42, 0.14);
+  --switch-port-ok: #23b45d;
+  --switch-port-warn: #b7df22;
+  --switch-port-muted: #c4cad2;
 }
 
 * {
@@ -49,15 +123,15 @@ button {
   gap: 8px;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: #16171b;
+  background: var(--control);
   color: var(--ink);
   padding: 6px 10px;
   cursor: pointer;
 }
 
 button:hover {
-  background: #1d1f25;
-  border-color: #3a3b44;
+  background: var(--control-hover);
+  border-color: var(--line);
 }
 
 button.primary {
@@ -67,9 +141,9 @@ button.primary {
 }
 
 button.danger {
-  border-color: #6c332d;
-  background: #231615;
-  color: #f0b4ab;
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger-text);
 }
 
 button:disabled {
@@ -84,7 +158,7 @@ textarea {
   min-height: 32px;
   border: 1px solid var(--line);
   border-radius: 5px;
-  background: #101114;
+  background: var(--field);
   color: var(--ink);
   outline: none;
   padding: 7px 9px;
@@ -131,9 +205,9 @@ label {
   width: min(460px, 100%);
   display: grid;
   gap: 14px;
-  border: 1px solid #343640;
+  border: 1px solid var(--line);
   border-radius: 8px;
-  background: #15161b;
+  background: var(--panel);
   padding: 22px;
 }
 
@@ -163,7 +237,7 @@ label {
   padding: 10px;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: #101114;
+  background: var(--field);
 }
 
 .authMeta span {
@@ -207,18 +281,18 @@ label {
   border-left: 2px solid transparent;
   border-radius: 0;
   background: transparent;
-  color: #b7b8bf;
+  color: var(--muted);
   padding: 0;
 }
 
 .activityButton:hover,
 .activityButton.active {
-  background: #1c1d22;
-  color: #ffffff;
+  background: var(--hover);
+  color: var(--ink-strong);
 }
 
 .activityButton.active {
-  border-left-color: #ffffff;
+  border-left-color: var(--active-line);
 }
 
 .iconButton {
@@ -228,7 +302,7 @@ label {
 }
 
 .dangerIcon {
-  color: #f0b4ab;
+  color: var(--danger-text);
 }
 
 .ghost {
@@ -238,7 +312,7 @@ label {
 
 .ghost:hover {
   border-color: transparent;
-  background: #1d1f25;
+  background: var(--control-hover);
 }
 
 .wide {
@@ -258,10 +332,10 @@ label {
   z-index: 12;
   width: 220px;
   padding: 5px;
-  border: 1px solid #343640;
+  border: 1px solid var(--line);
   border-radius: 8px;
-  background: #18191e;
-  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.42);
+  background: var(--panel-2);
+  box-shadow: 0 16px 34px var(--shadow-soft);
 }
 
 .actionMenuItem {
@@ -272,11 +346,11 @@ label {
   border-radius: 5px;
   background: transparent;
   padding: 5px 8px;
-  color: #ededf0;
+  color: var(--ink-strong);
 }
 
 .actionMenuItem:hover {
-  background: #2a2c33;
+  background: var(--selected);
 }
 
 .newSandboxMenu {
@@ -288,10 +362,10 @@ label {
   max-height: calc(100vh - 16px);
   overflow: auto;
   padding: 12px;
-  border: 1px solid #343640;
+  border: 1px solid var(--line);
   border-radius: 8px;
-  background: #15161b;
-  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.48);
+  background: var(--panel);
+  box-shadow: 0 18px 42px var(--shadow-strong);
 }
 
 .newSandboxMenu header,
@@ -325,7 +399,7 @@ label {
   margin-top: 12px;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: #101114;
+  background: var(--field);
 }
 
 .togglePair {
@@ -354,7 +428,7 @@ label {
 }
 
 .checkRow strong {
-  color: #f1f1f3;
+  color: var(--ink-strong);
   font-size: 13px;
 }
 
@@ -367,7 +441,7 @@ label {
 .compactCheck {
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: #101114;
+  background: var(--field);
 }
 
 .networkOptionCard {
@@ -375,7 +449,7 @@ label {
   gap: 8px;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: #101114;
+  background: var(--field);
   padding: 0 10px 10px;
 }
 
@@ -404,7 +478,7 @@ label {
   margin-top: 10px;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: #101114;
+  background: var(--field);
 }
 
 .folderHeader {
@@ -420,7 +494,7 @@ label {
 .folderHeader strong {
   min-width: 0;
   overflow: hidden;
-  color: #d7d7dc;
+  color: var(--ink-soft);
   font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -476,7 +550,7 @@ label {
   padding: 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #15161a;
+  background: var(--panel);
 }
 
 .compactFields {
@@ -501,11 +575,11 @@ label {
 
 .mountChoice.active {
   border-color: var(--accent);
-  background: #102033;
+  background: var(--accent-soft);
 }
 
 .mountChoice strong {
-  color: #f1f1f3;
+  color: var(--ink-strong);
 }
 
 .mountChoice span {
@@ -521,7 +595,7 @@ label {
 
 .formMessage {
   margin: 10px 0 8px;
-  color: #f0b4ab;
+  color: var(--danger-text);
   font-size: 12px;
   line-height: 1.35;
   overflow-wrap: anywhere;
@@ -529,7 +603,7 @@ label {
 
 .fieldError {
   margin-top: 6px;
-  color: #f0b4ab;
+  color: var(--danger-text);
   font-size: 12px;
 }
 
@@ -546,7 +620,7 @@ label {
   height: 42px;
   padding: 0 10px 0 14px;
   border-bottom: 1px solid var(--line-soft);
-  color: #d7d7dc;
+  color: var(--ink-soft);
 }
 
 .panelSearch {
@@ -563,7 +637,7 @@ label {
 .panelSearch input {
   min-height: 28px;
   border-color: transparent;
-  background: #101114;
+  background: var(--field);
 }
 
 .stateFilters {
@@ -589,9 +663,9 @@ label {
 }
 
 .stateFilters button.active {
-  border-color: #343640;
-  background: #202229;
-  color: #ffffff;
+  border-color: var(--line);
+  background: var(--selected);
+  color: var(--ink-strong);
 }
 
 .sandboxList {
@@ -616,12 +690,12 @@ label {
 }
 
 .sandboxItem:hover {
-  background: #1c1d22;
+  background: var(--hover);
 }
 
 .sandboxItem.selected {
   border-left-color: var(--accent);
-  background: #202229;
+  background: var(--selected);
 }
 
 .sandboxTopLine {
@@ -635,7 +709,7 @@ label {
 .sandboxName {
   min-width: 0;
   overflow: hidden;
-  color: #f1f1f3;
+  color: var(--ink-strong);
   font-weight: 720;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -647,28 +721,28 @@ label {
   align-items: center;
   min-height: 18px;
   padding: 0 7px;
-  border: 1px solid #3b3d48;
+  border: 1px solid var(--line);
   border-radius: 999px;
-  background: #15161b;
-  color: #bfc0c8;
+  background: var(--panel);
+  color: var(--muted);
   font-size: 11px;
 }
 
 .sandboxState.ok {
-  border-color: #294b35;
-  background: #112116;
-  color: #63d58c;
+  border-color: var(--success-border);
+  background: var(--success-bg);
+  color: var(--success-text);
 }
 
 .sandboxState.warn {
-  border-color: #5c4823;
-  background: #211a0f;
-  color: #e6c56f;
+  border-color: var(--warning-border);
+  background: var(--warning-bg);
+  color: var(--warning);
 }
 
 .sandboxPath {
   overflow: hidden;
-  color: #8d8e97;
+  color: var(--muted);
   font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -678,7 +752,7 @@ label {
   min-width: 0;
   display: flex;
   gap: 8px;
-  color: #777984;
+  color: var(--muted-dim);
   font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
@@ -707,7 +781,7 @@ label {
   min-width: 0;
   padding: 0 14px 0 18px;
   border-bottom: 1px solid var(--line-soft);
-  background: #0c0d10;
+  background: var(--surface-2);
 }
 
 .titleBar > div:first-child {
@@ -718,7 +792,7 @@ label {
 
 .titleBar strong {
   overflow: hidden;
-  color: #eeeeef;
+  color: var(--ink-strong);
   font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -790,7 +864,7 @@ label {
   display: grid;
   place-items: center;
   border-radius: 6px;
-  background: #151922;
+  background: var(--surface-3);
   color: var(--accent);
 }
 
@@ -812,7 +886,7 @@ label {
 }
 
 .networkWorkspaceHeader strong {
-  color: #eeeeef;
+  color: var(--ink-strong);
   font-size: 14px;
 }
 
@@ -837,7 +911,7 @@ label {
   gap: 10px;
   border: 1px solid var(--line-soft);
   border-radius: 6px;
-  background: #0d0e12;
+  background: var(--raised);
   padding: 10px;
 }
 
@@ -847,7 +921,7 @@ label {
   display: grid;
   place-items: center;
   border-radius: 5px;
-  background: #17191f;
+  background: var(--surface-3);
   color: var(--accent);
 }
 
@@ -879,7 +953,7 @@ label {
 .kpi strong {
   min-width: 0;
   overflow: hidden;
-  color: #f2f2f4;
+  color: var(--ink-strong);
   font-size: 16px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -896,7 +970,7 @@ label {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #dfe0e5;
+  color: var(--ink-soft);
 }
 
 .detailSection > header span {
@@ -933,12 +1007,12 @@ label {
   padding: 10px;
   border: 1px solid var(--line-soft);
   border-radius: 6px;
-  background: #0d0e12;
+  background: var(--raised);
 }
 
 .metric span {
   overflow: hidden;
-  color: #9a9ba4;
+  color: var(--muted-strong);
   font-size: 11px;
   font-weight: 680;
   letter-spacing: 0.04em;
@@ -949,7 +1023,7 @@ label {
 
 .metric strong {
   min-width: 0;
-  color: #ededf0;
+  color: var(--ink-strong);
   font-size: 13px;
   font-weight: 680;
   overflow-wrap: anywhere;
@@ -981,13 +1055,13 @@ label {
   padding: 10px;
   border: 1px solid var(--line-soft);
   border-radius: 6px;
-  background: #0d0e12;
+  background: var(--raised);
 }
 
 .diskInputCard > span,
 .diskActionCard > span {
   overflow: hidden;
-  color: #9a9ba4;
+  color: var(--muted-strong);
   font-size: 11px;
   font-weight: 680;
   letter-spacing: 0.04em;
@@ -1016,7 +1090,7 @@ label {
   gap: 10px;
   border: 1px solid var(--line-soft);
   border-radius: 6px;
-  background: #0d0e12;
+  background: var(--raised);
   padding: 10px;
 }
 
@@ -1038,7 +1112,7 @@ label {
   gap: 8px;
   border: 1px solid var(--line);
   border-radius: 6px;
-  background: #111217;
+  background: var(--raised-2);
   padding: 10px;
 }
 
@@ -1049,7 +1123,7 @@ label {
 .structuredRow .fieldHeader strong {
   min-width: 0;
   overflow: hidden;
-  color: #ededf0;
+  color: var(--ink-strong);
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1124,7 +1198,7 @@ label {
   min-height: 0;
   display: grid;
   grid-template-rows: 48px minmax(0, 1fr);
-  background: #091018;
+  background: var(--terminal-bg);
   color: var(--ink);
   overflow: hidden;
 }
@@ -1136,8 +1210,8 @@ label {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  border-bottom: 1px solid #202127;
-  background: #111216;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--surface-2);
   padding: 8px 12px;
 }
 
@@ -1173,13 +1247,13 @@ label {
 }
 
 .terminalStatus.ok {
-  border-color: rgba(25, 182, 90, 0.45);
-  color: #93e8b6;
+  border-color: var(--success-border);
+  color: var(--success-text);
 }
 
 .terminalStatus.warn {
-  border-color: rgba(230, 197, 111, 0.45);
-  color: #f3d98f;
+  border-color: var(--warning-border);
+  color: var(--warning);
 }
 
 .terminalFrame {
@@ -1187,7 +1261,7 @@ label {
   max-width: 100vw;
   min-width: 0;
   min-height: 0;
-  background: #091018;
+  background: var(--terminal-bg);
   overflow: auto;
   overscroll-behavior: contain;
   padding: 10px;
@@ -1213,7 +1287,7 @@ label {
   overflow-x: auto;
   border: 1px solid var(--line-soft);
   border-radius: 6px;
-  background: #0d0e12;
+  background: var(--raised);
 }
 
 .dataTable.narrow {
@@ -1228,7 +1302,7 @@ label {
   align-items: center;
   border-top: 1px solid var(--line-soft);
   padding: 8px 10px;
-  color: #d8d9de;
+  color: var(--ink-soft);
   font-size: 12px;
 }
 
@@ -1237,7 +1311,7 @@ label {
 }
 
 .dataRow.head {
-  color: #9a9ba4;
+  color: var(--muted-strong);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.05em;
@@ -1252,7 +1326,7 @@ label {
 }
 
 .dataRow.internalMount {
-  color: #8e9098;
+  color: var(--muted);
 }
 
 .dataTable.narrow .dataRow {
@@ -1267,7 +1341,7 @@ label {
   align-items: stretch;
   border: 1px solid var(--line-soft);
   border-radius: 6px;
-  background: #0d0e12;
+  background: var(--raised);
   padding: 10px;
 }
 
@@ -1278,9 +1352,9 @@ label {
   display: grid;
   align-content: center;
   gap: 4px;
-  border: 1px solid #24262d;
+  border: 1px solid var(--line);
   border-radius: 6px;
-  background: #111217;
+  background: var(--raised-2);
   padding: 10px;
 }
 
@@ -1314,7 +1388,7 @@ label {
 .networkEdge span {
   min-width: 0;
   overflow: hidden;
-  color: #ededf0;
+  color: var(--ink-strong);
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1336,19 +1410,19 @@ label {
   align-items: center;
   gap: 6px;
   overflow: hidden;
-  color: #d8d9de;
+  color: var(--ink-soft);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .networkPeerBand span.ok,
 .networkMatrix .dataRow.ok {
-  color: #93e8b6;
+  color: var(--success-text);
 }
 
 .networkPeerBand span.warn,
 .networkMatrix .dataRow.warn {
-  color: #f3d98f;
+  color: var(--warning);
 }
 
 .networkPeerBand span.muted,
@@ -1369,10 +1443,10 @@ label {
 .switchPanel {
   display: grid;
   gap: 14px;
-  border: 1px solid #dfe4ea;
+  border: 1px solid var(--line-soft);
   border-radius: 8px;
-  background: #f7f9fb;
-  color: #1f2933;
+  background: var(--raised);
+  color: var(--ink);
   padding: 18px;
 }
 
@@ -1396,7 +1470,7 @@ label {
 .switchToolbar span,
 .switchDeviceHeader span,
 .switchLegend span {
-  color: #64748b;
+  color: var(--muted);
 }
 
 .switchStats {
@@ -1406,9 +1480,9 @@ label {
 }
 
 .switchStats span {
-  border: 1px solid #e5eaf0;
+  border: 1px solid var(--line-soft);
   border-radius: 999px;
-  background: #ffffff;
+  background: var(--surface-2);
   padding: 6px 10px;
   white-space: nowrap;
 }
@@ -1416,9 +1490,9 @@ label {
 .switchDevice {
   display: grid;
   gap: 14px;
-  border: 1px solid #edf1f5;
+  border: 1px solid var(--line-soft);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--surface-2);
   padding: 18px;
 }
 
@@ -1458,20 +1532,20 @@ label {
 }
 
 .switchPort.selected {
-  outline: 2px solid #1d7fe5;
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
 .switchPort.ok {
-  background: #31d06b;
+  background: var(--switch-port-ok);
 }
 
 .switchPort.warn {
-  background: #b7df22;
+  background: var(--switch-port-warn);
 }
 
 .switchPort.muted {
-  background: #c4cad2;
+  background: var(--switch-port-muted);
 }
 
 .switchPort span {
@@ -1512,26 +1586,26 @@ label {
   height: 10px;
   flex: 0 0 auto;
   border-radius: 2px;
-  background: #c4cad2;
+  background: var(--switch-port-muted);
 }
 
 .legendDot.ok {
-  background: #31d06b;
+  background: var(--switch-port-ok);
 }
 
 .legendDot.warn {
-  background: #b7df22;
+  background: var(--switch-port-warn);
 }
 
 .legendDot.muted {
-  background: #c4cad2;
+  background: var(--switch-port-muted);
 }
 
 .switchPortTable {
   overflow-x: auto;
-  border: 1px solid #e5eaf0;
+  border: 1px solid var(--line-soft);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--surface-2);
 }
 
 .switchPortRow {
@@ -1540,9 +1614,9 @@ label {
   grid-template-columns: 78px 180px 120px 180px minmax(180px, 1fr) 180px 110px;
   gap: 14px;
   align-items: center;
-  border-top: 1px solid #edf1f5;
+  border-top: 1px solid var(--line-soft);
   padding: 10px 12px;
-  color: #334155;
+  color: var(--ink-soft);
 }
 
 .switchPortRow:first-child {
@@ -1550,7 +1624,7 @@ label {
 }
 
 .switchPortRow.head {
-  color: #64748b;
+  color: var(--muted);
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
@@ -1580,7 +1654,7 @@ label {
   gap: 8px;
   border: 1px solid var(--line-soft);
   border-radius: 6px;
-  background: #0d0e12;
+  background: var(--raised);
   padding: 10px;
 }
 
@@ -1596,14 +1670,14 @@ label {
 }
 
 .meter strong {
-  color: #ededf0;
+  color: var(--ink-strong);
 }
 
 .meterTrack {
   height: 6px;
   overflow: hidden;
   border-radius: 999px;
-  background: #1c1e24;
+  background: var(--surface-3);
 }
 
 .meterTrack span {
@@ -1631,7 +1705,7 @@ label {
 .sectionEmpty {
   border: 1px solid var(--line-soft);
   border-radius: 6px;
-  background: #0d0e12;
+  background: var(--raised);
   color: var(--muted);
   padding: 12px;
 }

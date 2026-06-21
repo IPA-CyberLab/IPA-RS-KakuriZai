@@ -186,6 +186,46 @@ test("world disk size update is saved for later CubeSandbox requests", async () 
   assert.equal(rootMount.container_path, "/");
 });
 
+test("world network update recreates the CubeSandbox request when requested", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-"));
+  const config = await loadConfig({ home: path.join(tmp, "home"), createSecrets: false });
+  const store = new WorldStore(config);
+  const world = await store.create({
+    name: "cube-network-recreate",
+    backend: "cube-sandbox-overlay",
+    backendConfig: {
+      hostMount: false,
+      mountMode: "none",
+      network: {
+        type: "tap",
+        allowInternetAccess: true
+      }
+    }
+  });
+
+  const result = await updateWorldConfig(config, world.id, {
+    networkType: "tap",
+    network: {
+      type: "tap",
+      exposedPorts: [8080],
+      allowInternetAccess: false,
+      denyOut: ["10.0.0.0/8"]
+    },
+    recreate: true
+  });
+
+  assert.equal(result.appliedToRunningSandbox, true);
+  assert.equal(result.recreated, true);
+  assert.match(result.reason, /network settings/);
+  assert.deepEqual(result.world.backendConfig.network.exposedPorts, [8080]);
+  assert.deepEqual(result.world.backendConfig.cubeRequest.exposed_ports, [8080]);
+  assert.equal(result.world.backendConfig.cubeRequest.annotations["com.exposed_ports"], "8080");
+  assert.deepEqual(result.world.backendConfig.cubeRequest.cube_network_config, {
+    allowInternetAccess: false,
+    denyOut: ["10.0.0.0/8"]
+  });
+});
+
 test("world disk size cannot shrink below current or original size", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-"));
   const source = path.join(tmp, "source");

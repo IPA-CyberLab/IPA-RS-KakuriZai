@@ -236,11 +236,14 @@ export async function updateWorldConfig(config, ref, input = {}) {
   await store.save(world);
   if (input.recreate === true) {
     const recreated = await recreateSavedWorld(config, store, world);
+    const networkChanged = input.network !== undefined || input.networkType !== undefined || input.kubernetes !== undefined || input.k8s !== undefined;
     return {
       world: recreated,
       appliedToRunningSandbox: true,
       recreated: true,
-      reason: "CubeSandbox does not expose a safe live writable-layer resize; the sandbox was recreated with the requested disk size."
+      reason: networkChanged
+        ? "CubeSandbox does not expose safe live network mutation; the sandbox was recreated with the requested network settings."
+        : "CubeSandbox does not expose a safe live writable-layer resize; the sandbox was recreated with the requested disk size."
     };
   }
   return {

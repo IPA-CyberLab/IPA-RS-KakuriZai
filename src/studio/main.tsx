@@ -17,6 +17,7 @@ import {
   KeyRound,
   Layers,
   Monitor,
+  Moon,
   MoreHorizontal,
   Network,
   Pause,
@@ -27,6 +28,7 @@ import {
   Search,
   Server,
   Shield,
+  Sun,
   Terminal,
   Trash2,
   X
@@ -394,6 +396,7 @@ type InventoryRow = {
 
 type StateFilter = "all" | "running" | "paused" | "other";
 type AppView = "sandboxes" | "network";
+type ThemeMode = "dark" | "light";
 
 const mountModes = [
   {
@@ -423,6 +426,7 @@ function App() {
   const [authConfig, setAuthConfig] = React.useState<AuthConfig | null>(null);
   const [token, setToken] = React.useState(() => localStorage.getItem("kakurizai.token") || "");
   const [session, setSession] = React.useState<string | null>(null);
+  const [theme, setTheme] = React.useState<ThemeMode>(() => localStorage.getItem("kakurizai.theme") === "light" ? "light" : "dark");
   const [worlds, setWorlds] = React.useState<World[]>([]);
   const [cube, setCube] = React.useState<CubeInspect | null>(null);
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
@@ -495,6 +499,11 @@ function App() {
   const selected = inventory.find((row) => row.key === selectedId) || filteredInventory[0] || inventory[0] || null;
   const selectedTemplate = findTemplateForSandbox(cube, selected);
   const selectedNode = findNodeForSandbox(cube, selected);
+
+  React.useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("kakurizai.theme", theme);
+  }, [theme]);
 
   React.useEffect(() => {
     api<AuthConfig>("/api/auth/config", { token: null })
@@ -774,10 +783,10 @@ function App() {
     try {
       const result = await api<{ world: World; appliedToRunningSandbox: boolean; reason: string }>(
         `/api/worlds/${encodeURIComponent(world.id)}/config`,
-        { method: "PATCH", token, body: { network, networkType: network.type, kubernetes } }
+        { method: "PATCH", token, body: { network, networkType: network.type, kubernetes, recreate: true } }
       );
       setWorlds((current) => current.map((candidate) => candidate.id === result.world.id ? result.world : candidate));
-      setStatus(result.appliedToRunningSandbox ? `Network updated for ${result.world.name}` : `Network saved for next create/recreate: ${result.world.name}`);
+      setStatus(result.appliedToRunningSandbox ? `Network applied by recreating ${result.world.name}` : `Network saved for next create/recreate: ${result.world.name}`);
       await refresh();
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
@@ -1236,6 +1245,14 @@ function App() {
             <span>{subtitleLabel}</span>
           </div>
           <div className="toolbarActions">
+            <button
+              className="ghost iconButton"
+              onClick={() => setTheme((value) => value === "dark" ? "light" : "dark")}
+              title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              type="button"
+            >
+              {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+            </button>
             <button className="ghost" onClick={() => void refresh()} title="Refresh" type="button" disabled={busy}>
               <RefreshCcw size={16} />
             </button>
@@ -2061,8 +2078,7 @@ function NetworkEditor({
         onChange={(egressRules) => setForm({ ...form, egressRules })}
       />
       {error ? <div className="fieldError">{error}</div> : null}
-      <button className="primary" disabled={busy} type="submit">Save network</button>
-      <div className="sectionEmpty inlineNote">VLAN and NAT bridge settings are stored as KakuriZai tap metadata unless the installed CubeSandbox runtime consumes the matching annotations.</div>
+      <button className="primary" disabled={busy} type="submit">Apply network</button>
     </form>
   );
 }
