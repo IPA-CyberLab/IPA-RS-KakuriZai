@@ -37,6 +37,7 @@ export class CubeSandboxOverlayBackend {
     world.backendConfig.mountMap = mountMapForMode(world, mountSpecs);
     const provision = await this.client.createSandbox(world, request);
     const overlayPending = provision.provisioned && provision.overlay?.mounted === false;
+    const provisionFailed = !provision.provisioned && provision.mode !== "planned";
     world.sandbox = {
       id: provision.sandboxId || null,
       containerId: provision.containerId || null,
@@ -44,7 +45,7 @@ export class CubeSandboxOverlayBackend {
       runtime: "CubeSandbox",
       mode: provision.mode,
       mountMode,
-      status: overlayPending ? "running-overlay-pending" : provision.provisioned ? "running" : "planned",
+      status: provisionFailed ? "failed" : overlayPending ? "running-overlay-pending" : provision.provisioned ? "running" : "planned",
       reason: provision.reason || provision.overlay?.reason || null,
       overlay: provision.overlay || null,
       bootstrap: provision.provisioned
@@ -57,7 +58,7 @@ export class CubeSandboxOverlayBackend {
       world.sandbox.runtimeSandboxIp = runtimeNetwork.runtimeIp || null;
       world.sandbox.network = runtimeNetwork;
     }
-    world.status = overlayPending ? "pending-overlay" : provision.provisioned ? "ready" : "pending-cube";
+    world.status = provisionFailed ? "failed" : overlayPending ? "pending-overlay" : provision.provisioned ? "ready" : "pending-cube";
     const saved = await store.save(world);
     if (provision.provisioned) {
       this.bootstrapToolsInBackground(saved, store, provision.sandboxId || provision.containerId);

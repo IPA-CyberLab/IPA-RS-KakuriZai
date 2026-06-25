@@ -6,6 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
+import { loadConfig } from "../dist/src/core/config.js";
+import { createWorld } from "../dist/src/core/worlds.js";
 import { CubeSandboxClient } from "../dist/src/cube/client.js";
 
 const execFileAsync = promisify(execFile);
@@ -47,6 +49,39 @@ test("cube client accepts absolute cubemastercli paths", async () => {
   await fakeBinary(mastercli);
   const client = new CubeSandboxClient({ mode: "master", mastercli });
   assert.equal(client.available().binary, mastercli);
+});
+
+test("CubeSandbox create failure is saved as failed, not pending", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-create-failed-"));
+  const mastercli = path.join(tmp, "cubemastercli");
+  await fs.writeFile(mastercli, `#!/bin/sh
+cat <<'LOG'
+2026/06/25 04:41:18 doCreateSandbox RequestId:test,sandBoxId:,Ip:,HostID:,HostIP:,code:130545, message:derive v2 default-medium from template fail: cubecow error code=invalid_argument raw_rc=-4 action=bug: invalid argument: 'rootfs-gen0' is a snapshot; cannot resize,cost:39
+2026/06/25 04:41:23 totalRunSuccCnt:0
+2026/06/25 04:41:23 totalRunErr:2
+LOG
+`, "utf8");
+  await fs.chmod(mastercli, 0o755);
+
+  const config = await loadConfig({ home: path.join(tmp, "home"), createSecrets: false });
+  config.defaultBackend = "cube-sandbox-overlay";
+  config.cube = {
+    ...config.cube,
+    mode: "master",
+    mastercli,
+    template: "tpl-test"
+  };
+
+  const world = await createWorld(config, {
+    name: "resize-fails",
+    backend: "cube-sandbox-overlay",
+    hostMount: false,
+    writableLayerSize: "10G"
+  });
+
+  assert.equal(world.status, "failed");
+  assert.equal(world.sandbox.status, "failed");
+  assert.match(world.sandbox.reason, /cannot resize/);
 });
 
 test("cube client passes namespace to cubecli exec", async () => {
