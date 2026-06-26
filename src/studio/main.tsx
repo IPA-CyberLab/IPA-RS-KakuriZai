@@ -474,6 +474,10 @@ function App() {
     allowOut: "",
     denyOut: "10.0.0.0/8,100.64.0.0/10,172.16.0.0/12,192.168.0.0/18",
     egressRules: [] as EgressRuleDraft[],
+    vlanEnabled: false,
+    vlanId: "",
+    vlanHostInterface: "eth0",
+    vlanBridgeName: "",
     natEnabled: true,
     natPortForwards: [] as NatForwardDraft[],
     kubernetesEnabled: false,
@@ -676,10 +680,15 @@ function App() {
             allowOut: parseCsv(launch.allowOut),
             denyOut: parseCsv(launch.denyOut),
             rules: egressRuleDraftsToRules(launch.egressRules),
-            vlan: { enabled: false },
+            vlan: {
+              enabled: launch.vlanEnabled,
+              vlanId: launch.vlanId ? Number(launch.vlanId) : null,
+              hostInterface: launch.vlanHostInterface,
+              bridgeName: launch.vlanBridgeName
+            },
             nat: {
-              enabled: launch.natEnabled,
-              masquerade: launch.natEnabled,
+              enabled: !launch.vlanEnabled && launch.natEnabled,
+              masquerade: !launch.vlanEnabled && launch.natEnabled,
               portForwards: natForwardDraftsToForwards(launch.natPortForwards)
             }
           },
@@ -1094,7 +1103,7 @@ function App() {
                 </div>
               ) : null}
             </div>
-            <div className="networkOptionCard">
+            {!launch.vlanEnabled ? <div className="networkOptionCard">
               <label className="checkRow compactCheck">
                 <input
                   type="checkbox"
@@ -1106,13 +1115,44 @@ function App() {
                   <small>Allow public outbound SNAT</small>
                 </span>
               </label>
-            </div>
+            </div> : null}
           </div>
 
           <NatForwardEditor
             forwards={launch.natPortForwards}
             onChange={(natPortForwards) => setLaunch({ ...launch, natPortForwards })}
           />
+
+          <div className="toggleRow">
+            <label className="checkRow compactCheck">
+              <input
+                type="checkbox"
+                checked={launch.vlanEnabled}
+                onChange={(event) => setLaunch({ ...launch, vlanEnabled: event.target.checked, natEnabled: event.target.checked ? false : launch.natEnabled })}
+              />
+              <span>
+                <strong>VLAN</strong>
+                <small>Host VLAN access bridge</small>
+              </span>
+            </label>
+          </div>
+
+          {launch.vlanEnabled ? (
+            <div className="splitFields">
+              <div>
+                <label>VLAN ID</label>
+                <input value={launch.vlanId} onChange={(event) => setLaunch({ ...launch, vlanId: event.target.value })} placeholder="100" />
+              </div>
+              <div>
+                <label>Host interface</label>
+                <input value={launch.vlanHostInterface} onChange={(event) => setLaunch({ ...launch, vlanHostInterface: event.target.value })} placeholder="eth0" />
+              </div>
+              <div>
+                <label>Bridge name</label>
+                <input value={launch.vlanBridgeName} onChange={(event) => setLaunch({ ...launch, vlanBridgeName: event.target.value })} placeholder="kzbr100" />
+              </div>
+            </div>
+          ) : null}
 
           <EgressRuleEditor
             rules={launch.egressRules}
@@ -1820,6 +1860,10 @@ function NetworkEditor({
     allowOut: formatList(configuredNetwork.allowOut),
     denyOut: formatList(configuredNetwork.denyOut),
     egressRules: rulesToEgressRuleDrafts(configuredNetwork.rules),
+    vlanEnabled: Boolean(configuredNetwork.vlan?.enabled),
+    vlanId: configuredNetwork.vlan?.vlanId ? String(configuredNetwork.vlan.vlanId) : "",
+    vlanHostInterface: configuredNetwork.vlan?.hostInterface || "eth0",
+    vlanBridgeName: configuredNetwork.vlan?.bridgeName || "",
     natEnabled: configuredNetwork.nat?.enabled ?? false,
     natPortForwards: forwardsToNatForwardDrafts(configuredNetwork.nat?.portForwards),
     kubernetesEnabled: Boolean(configuredKubernetes.enabled),
@@ -1852,6 +1896,10 @@ function NetworkEditor({
       allowOut: formatList(configuredNetwork.allowOut),
       denyOut: formatList(configuredNetwork.denyOut),
       egressRules: rulesToEgressRuleDrafts(configuredNetwork.rules),
+      vlanEnabled: Boolean(configuredNetwork.vlan?.enabled),
+      vlanId: configuredNetwork.vlan?.vlanId ? String(configuredNetwork.vlan.vlanId) : "",
+      vlanHostInterface: configuredNetwork.vlan?.hostInterface || "eth0",
+      vlanBridgeName: configuredNetwork.vlan?.bridgeName || "",
       natEnabled: configuredNetwork.nat?.enabled ?? false,
       natPortForwards: forwardsToNatForwardDrafts(configuredNetwork.nat?.portForwards),
       kubernetesEnabled: Boolean(configuredKubernetes.enabled),
@@ -1900,10 +1948,15 @@ function NetworkEditor({
               allowOut: parseCsv(form.allowOut),
               denyOut: parseCsv(form.denyOut),
               rules: egressRuleDraftsToRules(form.egressRules),
-              vlan: { enabled: false },
+              vlan: {
+                enabled: form.vlanEnabled,
+                vlanId: form.vlanId ? Number(form.vlanId) : null,
+                hostInterface: form.vlanHostInterface,
+                bridgeName: form.vlanBridgeName
+              },
               nat: {
-                enabled: form.natEnabled,
-                masquerade: form.natEnabled,
+                enabled: !form.vlanEnabled && form.natEnabled,
+                masquerade: !form.vlanEnabled && form.natEnabled,
                 portForwards: natForwardDraftsToForwards(form.natPortForwards)
               }
             },
@@ -1970,7 +2023,7 @@ function NetworkEditor({
             </div>
           ) : null}
         </div>
-        <div className="networkOptionCard">
+        {!form.vlanEnabled ? <div className="networkOptionCard">
           <label className="checkRow compactCheck">
             <input
               type="checkbox"
@@ -1982,12 +2035,41 @@ function NetworkEditor({
               <small>Allow public outbound SNAT</small>
             </span>
           </label>
-        </div>
+        </div> : null}
       </div>
       <NatForwardEditor
         forwards={form.natPortForwards}
         onChange={(natPortForwards) => setForm({ ...form, natPortForwards })}
       />
+      <div className="toggleRow">
+        <label className="checkRow compactCheck">
+          <input
+            type="checkbox"
+            checked={form.vlanEnabled}
+            onChange={(event) => setForm({ ...form, vlanEnabled: event.target.checked, natEnabled: event.target.checked ? false : form.natEnabled })}
+          />
+          <span>
+            <strong>VLAN</strong>
+            <small>Host VLAN access bridge</small>
+          </span>
+        </label>
+      </div>
+      {form.vlanEnabled ? (
+        <div className="splitFields">
+          <div>
+            <label>VLAN ID</label>
+            <input value={form.vlanId} onChange={(event) => setForm({ ...form, vlanId: event.target.value })} placeholder="100" />
+          </div>
+          <div>
+            <label>Host interface</label>
+            <input value={form.vlanHostInterface} onChange={(event) => setForm({ ...form, vlanHostInterface: event.target.value })} placeholder="eth0" />
+          </div>
+          <div>
+            <label>Bridge name</label>
+            <input value={form.vlanBridgeName} onChange={(event) => setForm({ ...form, vlanBridgeName: event.target.value })} placeholder="kzbr100" />
+          </div>
+        </div>
+      ) : null}
       <EgressRuleEditor
         rules={form.egressRules}
         onChange={(egressRules) => setForm({ ...form, egressRules })}
@@ -2616,10 +2698,11 @@ function buildSwitchPorts(rows: InventoryRow[], selected: InventoryRow, fallback
     const forward = formatPortForwardSummary(network.nat?.portForwards) || formatRuntimePortSummary(row.runtime?.portMappings || []);
     const hasRuntime = Boolean(row.runtime?.sandboxIp || row.sandboxId);
     const tone = switchPortTone(row, edge, hasRuntime);
-    const outboundNat = formatNatSummary(network.nat) !== "disabled";
+    const outboundNat = !network.vlan?.enabled && formatNatSummary(network.nat) !== "disabled";
     const hasForward = Boolean(network.nat?.portForwards?.length);
     const profile = [
       network.type || "tap",
+      network.vlan?.enabled ? `vlan ${network.vlan.vlanId || ""}`.trim() : "",
       outboundNat ? "outbound nat" : "",
       hasForward ? "ingress forward" : ""
     ].filter(Boolean).join(" / ");

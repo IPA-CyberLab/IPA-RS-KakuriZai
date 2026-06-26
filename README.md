@@ -75,11 +75,11 @@ Studio can create and edit the TAP network settings stored on each sandbox:
 - exposed ports
 - DNS servers, search domains, and resolver options
 - internet egress, allow/deny CIDRs, and L7 egress rules
-- NAT metadata, masquerade mode, outbound interface, subnet/gateway, and port-forward definitions
-- VLAN metadata for host-side bridge integrations
+- outbound NAT and ingress port-forward definitions
+- host VLAN access bridges
 - Kubernetes lab profile, cluster name, node role, node name, CIDRs, CNI, join endpoint/token, API server port, node ports, extra args, and editable sysctls
 
-CubeSandbox OSS accepts `network_type=tap`, exposed ports, DNS config, and `cube_network_config` egress policy directly. NAT and VLAN bridge settings are persisted as KakuriZai annotations so host-side integrations or future CubeSandbox plugins can consume them.
+CubeSandbox OSS accepts `network_type=tap`, exposed ports, DNS config, and `cube_network_config` egress policy directly. KakuriZai applies outbound egress controls on the host and, when VLAN is enabled, creates a host VLAN subinterface plus bridge and attaches the sandbox TAP device as an access port.
 
 Studio also includes a network probe action. It builds a sandbox-to-sandbox reachability plan from CubeSandbox runtime IPs, then can execute ICMP/TCP checks from each provisioned sandbox and render reachable, blocked, and unknown paths in the Network view. The same view summarizes K8s labs by cluster, control-plane and worker nodes, API/join endpoints, CIDRs, NodePorts, NAT, and forwards.
 

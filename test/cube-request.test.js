@@ -495,6 +495,41 @@ test("network config validates NAT forward ports", () => {
   );
 });
 
+test("network config validates host VLAN bridge settings", () => {
+  assert.throws(
+    () => normalizeNetworkConfig({
+      type: "tap",
+      vlan: { enabled: true, vlanId: 100 }
+    }),
+    /hostInterface/
+  );
+  assert.throws(
+    () => normalizeNetworkConfig({
+      type: "tap",
+      vlan: { enabled: true, vlanId: 4095, hostInterface: "eth0" }
+    }),
+    /vlan\.id/
+  );
+  assert.throws(
+    () => normalizeNetworkConfig({
+      type: "tap",
+      vlan: { enabled: true, vlanId: 100, hostInterface: "interface-name-too-long" }
+    }),
+    /hostInterface/
+  );
+
+  const network = normalizeNetworkConfig({
+    type: "tap",
+    vlan: { enabled: true, vlanId: 100, hostInterface: "eth0", bridgeName: "kzbr100" }
+  });
+  assert.deepEqual(network.vlan, {
+    enabled: true,
+    vlanId: 100,
+    hostInterface: "eth0",
+    bridgeName: "kzbr100"
+  });
+});
+
 test("NAT forwards do not force outbound NAT on", async () => {
   const network = normalizeNetworkConfig({
     type: "tap",

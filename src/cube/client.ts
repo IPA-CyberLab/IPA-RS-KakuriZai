@@ -147,6 +147,11 @@ function intToIpv4(value) {
   ].join(".");
 }
 
+function vlanInterfaceName(hostInterface, vlanId) {
+  const candidate = `${hostInterface}.${vlanId}`;
+  return candidate.length <= 15 ? candidate : `kzv${vlanId}`;
+}
+
 export class CubeSandboxClient {
   constructor(config = {}) {
     this.config = config;
@@ -396,7 +401,10 @@ export class CubeSandboxClient {
       return { skipped: true, reason: "sandbox IP is not available", requestedIp, runtimeIp };
     }
     const firewall = await this.syncHostEgressRules(world, sandboxIps, network);
-    const datapath = await this.syncCubeDatapathEgressRules(world, sandboxIps, network);
+    const vlan = await this.syncHostVlanBridge(world, sandboxIps, network);
+    const datapath = network.vlan?.enabled
+      ? { skipped: true, reason: "VLAN bridge mode bypasses the CubeSandbox from_cube datapath" }
+      : await this.syncCubeDatapathEgressRules(world, sandboxIps, network);
     return {
       skipped: false,
       requestedIp,
@@ -404,6 +412,7 @@ export class CubeSandboxClient {
       sandboxIp: requestedIp || runtimeIp,
       sandboxIps,
       firewall,
+      vlan,
       datapath
     };
   }
@@ -515,6 +524,76 @@ export class CubeSandboxClient {
       sudo: result.sudo || false,
       ruleCount: cidrs.length * sandboxIps.length,
       reason: result.code === 0 ? null : result.stderr || result.stdout || `tc exited with ${result.code}`
+    };
+  }
+
+  async syncHostVlanBridge(world, sandboxIps, network = {}) {
+    const vlan = network.vlan || {};
+    if (!vlan.enabled) return { skipped: false, applied: true, enabled: false, reason: null };
+    const ip = resolveSystemCommand(this.config.ip || "ip", ["/usr/sbin/ip", "/sbin/ip"]);
+    const tc = resolveSystemCommand(this.config.tc || "tc", ["/usr/sbin/tc", "/sbin/tc"]);
+    const bpftool = resolveSystemCommand(this.config.bpftool || "bpftool", ["/usr/sbin/bpftool", "/sbin/bpftool"]);
+    if (!ip || !tc || !bpftool) return { skipped: true, enabled: true, reason: "ip, tc, or bpftool not found" };
+    if (!vlan.vlanId || !vlan.hostInterface) {
+      return { skipped: false, applied: false, enabled: true, reason: "VLAN requires vlanId and hostInterface" };
+    }
+    const bridgeName = vlan.bridgeName || `kzbr${vlan.vlanId}`;
+    const vlanDev = vlanInterfaceName(vlan.hostInterface, vlan.vlanId);
+    const cidrs = datapathDropCidrsForNetwork(network);
+    const startPref = 100;
+    const endPref = 249;
+    if (cidrs.length > endPref - startPref + 1) {
+      return { skipped: true, enabled: true, reason: `too many tc egress rules: ${cidrs.length}` };
+    }
+
+    const addDrops = (dev) => cidrs.map((cidr, index) => (
+      `${shellQuote(tc)} filter add dev ${shellQuote(dev)} ingress pref ${startPref + index} protocol ip flower dst_ip ${shellQuote(cidr)} action drop`
+    )).join("\n");
+    const blocks = [
+      `${shellQuote(ip)} link show ${shellQuote(vlan.hostInterface)} >/dev/null`,
+      `if ! ${shellQuote(ip)} link show ${shellQuote(vlanDev)} >/dev/null 2>&1; then ${shellQuote(ip)} link add link ${shellQuote(vlan.hostInterface)} name ${shellQuote(vlanDev)} type vlan id ${shellQuote(vlan.vlanId)}; fi`,
+      `if ! ${shellQuote(ip)} link show ${shellQuote(bridgeName)} >/dev/null 2>&1; then ${shellQuote(ip)} link add name ${shellQuote(bridgeName)} type bridge; fi`,
+      `${shellQuote(ip)} link set dev ${shellQuote(vlanDev)} master ${shellQuote(bridgeName)} 2>/dev/null || true`,
+      `${shellQuote(ip)} link set dev ${shellQuote(vlanDev)} up`,
+      `${shellQuote(ip)} link set dev ${shellQuote(bridgeName)} up`
+    ];
+    for (const sandboxIp of sandboxIps) {
+      const dev = `z${sandboxIp}`;
+      const pin = `/sys/fs/bpf/kakurizai-from_cube-${dev}`;
+      const cleanup = `for pref in $(seq ${startPref} ${endPref}); do ${shellQuote(tc)} filter del dev ${shellQuote(dev)} ingress pref "$pref" 2>/dev/null || true; done`;
+      blocks.push([
+        `if ${shellQuote(ip)} link show ${shellQuote(dev)} >/dev/null 2>&1; then`,
+        `  ${shellQuote(tc)} qdisc add dev ${shellQuote(dev)} clsact 2>/dev/null || true`,
+        `  from_cube_id=$(${shellQuote(tc)} filter show dev ${shellQuote(dev)} ingress 2>/dev/null | awk '/from_cube/ { for (i = 1; i <= NF; i++) if ($i == "id") { print $(i + 1); exit } }')`,
+        `  if [ -n "$from_cube_id" ]; then`,
+        `    global_pin=/sys/fs/bpf/kakurizai-from_cube-$from_cube_id`,
+        `    [ -e "$global_pin" ] || ${shellQuote(bpftool)} prog pin id "$from_cube_id" "$global_pin" 2>/dev/null || true`,
+        `    [ -e ${shellQuote(pin)} ] || ${shellQuote(bpftool)} prog pin id "$from_cube_id" ${shellQuote(pin)} 2>/dev/null || true`,
+        `  fi`,
+        `  ${shellQuote(tc)} filter del dev ${shellQuote(dev)} ingress pref 1 2>/dev/null || true`,
+        `  ${shellQuote(tc)} filter del dev ${shellQuote(dev)} ingress pref 1000 2>/dev/null || true`,
+        `  ${cleanup}`,
+        addDrops(dev),
+        `  ${shellQuote(ip)} link set dev ${shellQuote(dev)} master ${shellQuote(bridgeName)}`,
+        `  ${shellQuote(ip)} link set dev ${shellQuote(dev)} up`,
+        `fi`
+      ].filter(Boolean).join("\n"));
+    }
+
+    const result = await runHostNetworkCommand(blocks.join("\n"));
+    return {
+      skipped: false,
+      enabled: true,
+      applied: result.code === 0,
+      code: result.code,
+      sudo: result.sudo || false,
+      bridgeName,
+      vlanInterface: vlanDev,
+      hostInterface: vlan.hostInterface,
+      vlanId: vlan.vlanId,
+      sandboxInterfaces: sandboxIps.map((sandboxIp) => `z${sandboxIp}`),
+      ruleCount: cidrs.length * sandboxIps.length,
+      reason: result.code === 0 ? null : result.stderr || result.stdout || `vlan bridge setup exited with ${result.code}`
     };
   }
 

@@ -453,6 +453,10 @@ label {
   padding: 0 10px 10px;
 }
 
+.togglePair > .networkOptionCard:only-child {
+  grid-column: 1 / -1;
+}
+
 .networkOptionCard .compactCheck {
   border: 0;
   background: transparent;

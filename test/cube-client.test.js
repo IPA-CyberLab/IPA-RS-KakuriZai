@@ -348,6 +348,88 @@ test("cube client starts sandbox dev access services", async () => {
   assert.match(sshArgsText, /Port \$\{ssh_port\}/);
 });
 
+test("cube client builds host VLAN access bridge setup", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-vlan-bridge-"));
+  const ip = path.join(tmp, "ip");
+  const tc = path.join(tmp, "tc");
+  const bpftool = path.join(tmp, "bpftool");
+  const sudo = path.join(tmp, "sudo");
+  const scriptFile = path.join(tmp, "host-script.sh");
+  await fakeBinary(ip);
+  await fakeBinary(tc);
+  await fakeBinary(bpftool);
+  await fs.writeFile(sudo, `#!/bin/sh\nprintf '%s' "$4" > "${scriptFile}"\nexit 0\n`, "utf8");
+  await fs.chmod(sudo, 0o755);
+
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${tmp}${path.delimiter}${originalPath || ""}`;
+  try {
+    const client = new CubeSandboxClient({ ip, tc, bpftool });
+    const result = await client.syncHostVlanBridge(
+      { id: "world-vlan" },
+      ["192.168.0.50"],
+      {
+        allowInternetAccess: false,
+        denyOut: ["10.0.0.0/8"],
+        vlan: { enabled: true, vlanId: 123, hostInterface: "eth0", bridgeName: "kzbr123" },
+        nat: { enabled: false }
+      }
+    );
+    const script = await fs.readFile(scriptFile, "utf8");
+
+    assert.equal(result.applied, true);
+    assert.equal(result.bridgeName, "kzbr123");
+    assert.equal(result.vlanInterface, "eth0.123");
+    assert.match(script, new RegExp(`${escapeRegExp(ip)}' link add link 'eth0' name 'eth0\\.123' type vlan id '123'`));
+    assert.match(script, new RegExp(`${escapeRegExp(ip)}' link add name 'kzbr123' type bridge`));
+    assert.match(script, new RegExp(`${escapeRegExp(ip)}' link set dev 'eth0\\.123' master 'kzbr123'`));
+    assert.match(script, new RegExp(`${escapeRegExp(ip)}' link set dev 'z192\\.168\\.0\\.50' master 'kzbr123'`));
+    assert.match(script, new RegExp(`${escapeRegExp(tc)}' filter del dev 'z192\\.168\\.0\\.50' ingress pref 1`));
+    assert.match(script, new RegExp(`${escapeRegExp(tc)}' filter del dev 'z192\\.168\\.0\\.50' ingress pref 1000`));
+    assert.match(script, new RegExp(`${escapeRegExp(tc)}' filter add dev 'z192\\.168\\.0\\.50' ingress pref 100 protocol ip flower dst_ip '10\\.0\\.0\\.0/8' action drop`));
+  } finally {
+    process.env.PATH = originalPath;
+  }
+});
+
+test("cube client bypasses CubeSandbox datapath when VLAN is enabled", async () => {
+  class VlanClient extends CubeSandboxClient {
+    async inspectWorldSandbox() {
+      return { sandboxIp: "192.168.0.51" };
+    }
+
+    async syncHostEgressRules() {
+      return { applied: true };
+    }
+
+    async syncHostVlanBridge() {
+      return { applied: true, enabled: true };
+    }
+
+    async syncCubeDatapathEgressRules() {
+      throw new Error("datapath should not be used for VLAN bridge mode");
+    }
+  }
+
+  const client = new VlanClient();
+  const result = await client.applyRuntimeNetworkPolicy({
+    id: "world-vlan",
+    sandbox: { id: "sandbox-vlan" },
+    backendConfig: {
+      network: {
+        type: "tap",
+        vlan: { enabled: true, vlanId: 123, hostInterface: "eth0" },
+        nat: { enabled: false }
+      }
+    }
+  });
+
+  assert.equal(result.skipped, false);
+  assert.equal(result.vlan.enabled, true);
+  assert.equal(result.datapath.skipped, true);
+  assert.match(result.datapath.reason, /bypasses/);
+});
+
 async function createMasterApi() {
   const requests = [];
   const server = http.createServer((request, response) => {

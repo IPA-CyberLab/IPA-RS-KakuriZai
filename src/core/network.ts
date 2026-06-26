@@ -32,11 +32,18 @@ export function normalizeVlanConfig(input = {}) {
     return { enabled: false, vlanId: null, hostInterface: null, bridgeName: null };
   }
   const vlanId = input.vlanId ?? input.id;
+  const hostInterface = cleanString(input.hostInterface || input.interface || "");
+  const bridgeName = cleanString(input.bridgeName || input.bridge || "");
+  const enabled = Boolean(input.enabled || vlanId || hostInterface || bridgeName);
+  if (enabled && (vlanId == null || vlanId === "")) throw new Error("vlan.vlanId is required when VLAN is enabled");
+  if (enabled && !hostInterface) throw new Error("vlan.hostInterface is required when VLAN is enabled");
+  if (hostInterface) normalizeInterfaceName(hostInterface, "vlan.hostInterface");
+  if (bridgeName) normalizeInterfaceName(bridgeName, "vlan.bridgeName");
   return {
-    enabled: Boolean(input.enabled || vlanId || input.hostInterface || input.bridgeName),
+    enabled,
     vlanId: vlanId == null || vlanId === "" ? null : normalizeVlanId(vlanId),
-    hostInterface: cleanString(input.hostInterface || input.interface || ""),
-    bridgeName: cleanString(input.bridgeName || input.bridge || "")
+    hostInterface,
+    bridgeName
   };
 }
 
@@ -154,6 +161,13 @@ function normalizeVlanId(value) {
     throw new Error("vlan.id must be between 1 and 4094");
   }
   return number;
+}
+
+function normalizeInterfaceName(value, name) {
+  if (value.length > 15 || !/^[A-Za-z0-9_.:-]+$/.test(value)) {
+    throw new Error(`${name} must be a Linux interface name`);
+  }
+  return value;
 }
 
 function normalizeIpv4(value, name) {
