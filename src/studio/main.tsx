@@ -474,10 +474,6 @@ function App() {
     allowOut: "",
     denyOut: "10.0.0.0/8,100.64.0.0/10,172.16.0.0/12,192.168.0.0/18",
     egressRules: [] as EgressRuleDraft[],
-    vlanEnabled: false,
-    vlanId: "",
-    vlanHostInterface: "",
-    vlanBridgeName: "",
     natEnabled: true,
     natPortForwards: [] as NatForwardDraft[],
     kubernetesEnabled: false,
@@ -680,12 +676,7 @@ function App() {
             allowOut: parseCsv(launch.allowOut),
             denyOut: parseCsv(launch.denyOut),
             rules: egressRuleDraftsToRules(launch.egressRules),
-            vlan: {
-              enabled: launch.vlanEnabled,
-              vlanId: launch.vlanId ? Number(launch.vlanId) : null,
-              hostInterface: launch.vlanHostInterface,
-              bridgeName: launch.vlanBridgeName
-            },
+            vlan: { enabled: false },
             nat: {
               enabled: launch.natEnabled,
               masquerade: launch.natEnabled,
@@ -1123,43 +1114,10 @@ function App() {
             onChange={(natPortForwards) => setLaunch({ ...launch, natPortForwards })}
           />
 
-          <div className="toggleRow">
-            <label className="checkRow compactCheck">
-              <input
-                type="checkbox"
-                checked={launch.vlanEnabled}
-                onChange={(event) => setLaunch({ ...launch, vlanEnabled: event.target.checked })}
-              />
-              <span>
-                <strong>VLAN</strong>
-                <small>Host bridge metadata</small>
-              </span>
-            </label>
-          </div>
-
-          {launch.vlanEnabled ? (
-            <div className="splitFields">
-              <div>
-                <label>VLAN ID</label>
-                <input value={launch.vlanId} onChange={(event) => setLaunch({ ...launch, vlanId: event.target.value })} placeholder="100" />
-              </div>
-              <div>
-                <label>Host interface</label>
-                <input value={launch.vlanHostInterface} onChange={(event) => setLaunch({ ...launch, vlanHostInterface: event.target.value })} placeholder="eth0" />
-              </div>
-              <div>
-                <label>Bridge name</label>
-                <input value={launch.vlanBridgeName} onChange={(event) => setLaunch({ ...launch, vlanBridgeName: event.target.value })} placeholder="br100" />
-              </div>
-            </div>
-          ) : null}
-
           <EgressRuleEditor
             rules={launch.egressRules}
             onChange={(egressRules) => setLaunch({ ...launch, egressRules })}
           />
-
-          <div className="sectionEmpty inlineNote">VLAN settings are stored as KakuriZai tap metadata unless the installed CubeSandbox runtime consumes the matching annotations.</div>
 
           {formMessage ? <div className="formMessage">{formMessage}</div> : null}
 
@@ -1862,10 +1820,6 @@ function NetworkEditor({
     allowOut: formatList(configuredNetwork.allowOut),
     denyOut: formatList(configuredNetwork.denyOut),
     egressRules: rulesToEgressRuleDrafts(configuredNetwork.rules),
-    vlanEnabled: Boolean(configuredNetwork.vlan?.enabled),
-    vlanId: configuredNetwork.vlan?.vlanId ? String(configuredNetwork.vlan.vlanId) : "",
-    vlanHostInterface: configuredNetwork.vlan?.hostInterface || "",
-    vlanBridgeName: configuredNetwork.vlan?.bridgeName || "",
     natEnabled: configuredNetwork.nat?.enabled ?? false,
     natPortForwards: forwardsToNatForwardDrafts(configuredNetwork.nat?.portForwards),
     kubernetesEnabled: Boolean(configuredKubernetes.enabled),
@@ -1898,10 +1852,6 @@ function NetworkEditor({
       allowOut: formatList(configuredNetwork.allowOut),
       denyOut: formatList(configuredNetwork.denyOut),
       egressRules: rulesToEgressRuleDrafts(configuredNetwork.rules),
-      vlanEnabled: Boolean(configuredNetwork.vlan?.enabled),
-      vlanId: configuredNetwork.vlan?.vlanId ? String(configuredNetwork.vlan.vlanId) : "",
-      vlanHostInterface: configuredNetwork.vlan?.hostInterface || "",
-      vlanBridgeName: configuredNetwork.vlan?.bridgeName || "",
       natEnabled: configuredNetwork.nat?.enabled ?? false,
       natPortForwards: forwardsToNatForwardDrafts(configuredNetwork.nat?.portForwards),
       kubernetesEnabled: Boolean(configuredKubernetes.enabled),
@@ -1950,12 +1900,7 @@ function NetworkEditor({
               allowOut: parseCsv(form.allowOut),
               denyOut: parseCsv(form.denyOut),
               rules: egressRuleDraftsToRules(form.egressRules),
-              vlan: {
-                enabled: form.vlanEnabled,
-                vlanId: form.vlanId ? Number(form.vlanId) : null,
-                hostInterface: form.vlanHostInterface,
-                bridgeName: form.vlanBridgeName
-              },
+              vlan: { enabled: false },
               nat: {
                 enabled: form.natEnabled,
                 masquerade: form.natEnabled,
@@ -2043,35 +1988,6 @@ function NetworkEditor({
         forwards={form.natPortForwards}
         onChange={(natPortForwards) => setForm({ ...form, natPortForwards })}
       />
-      <div className="toggleRow">
-        <label className="checkRow compactCheck">
-          <input
-            type="checkbox"
-            checked={form.vlanEnabled}
-            onChange={(event) => setForm({ ...form, vlanEnabled: event.target.checked })}
-          />
-          <span>
-            <strong>VLAN</strong>
-            <small>Host bridge metadata</small>
-          </span>
-        </label>
-      </div>
-      {form.vlanEnabled ? (
-        <div className="splitFields">
-          <div>
-            <label>VLAN ID</label>
-            <input value={form.vlanId} onChange={(event) => setForm({ ...form, vlanId: event.target.value })} placeholder="100" />
-          </div>
-          <div>
-            <label>Host interface</label>
-            <input value={form.vlanHostInterface} onChange={(event) => setForm({ ...form, vlanHostInterface: event.target.value })} placeholder="eth0" />
-          </div>
-          <div>
-            <label>Bridge name</label>
-            <input value={form.vlanBridgeName} onChange={(event) => setForm({ ...form, vlanBridgeName: event.target.value })} placeholder="br100" />
-          </div>
-        </div>
-      ) : null}
       <EgressRuleEditor
         rules={form.egressRules}
         onChange={(egressRules) => setForm({ ...form, egressRules })}
@@ -2675,15 +2591,6 @@ function formatNatSummary(value?: NatConfig | null) {
   return "outbound snat";
 }
 
-function formatVlanSummary(value?: VlanConfig | null) {
-  if (!value?.enabled) return "disabled";
-  return [
-    value.vlanId ? `vlan ${value.vlanId}` : "vlan",
-    value.hostInterface ? `if ${value.hostInterface}` : "",
-    value.bridgeName ? `br ${value.bridgeName}` : ""
-  ].filter(Boolean).join(" ");
-}
-
 function formatPortForwardSummary(value?: PortForwardConfig[] | null) {
   if (!value?.length) return "";
   return value
@@ -2713,7 +2620,6 @@ function buildSwitchPorts(rows: InventoryRow[], selected: InventoryRow, fallback
     const hasForward = Boolean(network.nat?.portForwards?.length);
     const profile = [
       network.type || "tap",
-      network.vlan?.enabled ? `vlan ${network.vlan.vlanId || ""}`.trim() : "",
       outboundNat ? "outbound nat" : "",
       hasForward ? "ingress forward" : ""
     ].filter(Boolean).join(" / ");
