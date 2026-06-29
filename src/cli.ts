@@ -9,7 +9,7 @@ import { generateTotpSecret, totpAuthUrl } from "./auth/totp.js";
 import { commandExists } from "./core/fs.js";
 import { parseBooleanOption } from "./core/network.js";
 import { initConfigFile, loadConfig } from "./core/config.js";
-import { createJoinToken, joinNode, listClusterNodes, removeClusterNode, replicateWorld } from "./core/cluster.js";
+import { checkpointFailoverReplicas, createJoinToken, joinNode, listClusterNodes, reconcileFailover, removeClusterNode, replicateWorld } from "./core/cluster.js";
 import { collectMetrics, listTraces, prometheusText, startTrace, stopTrace } from "./core/observability.js";
 import { runCommand } from "./core/process.js";
 import {
@@ -57,6 +57,7 @@ export async function main(argv) {
   if (command === "k8s-lab") return kubernetesLab(config, argv.slice(1));
   if (command === "node" || command === "nodes" || command === "cluster") return node(config, argv.slice(1));
   if (command === "replicate" || command === "replica") return replicate(config, argv.slice(1));
+  if (command === "failover") return failover(config, argv.slice(1));
   if (command === "metrics" || command === "observability") return metrics(config, argv.slice(1));
   if (command === "trace" || command === "traces") return trace(config, argv.slice(1));
   if (command === "export" || command === "manifest") return manifest(config, argv.slice(1));
@@ -95,6 +96,8 @@ Sandbox commands:
   agctl node join --token <token> --name <node> [--endpoint https://node:38476] [--executor-lxc <container>] [--executor-ssh-host <host>]
   agctl node list [--json]
   agctl replicate <sandbox> [--node <node>] [--replicas 2] [--state-mode stateful|runtime-snapshot|template-snapshot|definition] [--include-host-mounts] [--json]
+  agctl failover reconcile [--world <sandbox>] [--force] [--json]
+  agctl failover checkpoint [--world <sandbox>] [--node <node>] [--json]
   agctl metrics [--json|--prometheus]
   agctl trace start --target <all|world|node> [--ref <id>] [--ttl 3600]
   agctl trace list [--json]
@@ -438,6 +441,45 @@ async function replicate(config, args) {
   for (const item of result.skipped) {
     console.log(`skipped\t${item.node.name}\t${item.reason}`);
   }
+}
+
+async function failover(config, args) {
+  const subcommand = args[0] || "reconcile";
+  const json = args.includes("--json");
+  if (subcommand === "checkpoint") {
+    const result = await checkpointFailoverReplicas(config, {
+      world: takeOption(args, "--world") || takeOption(args, "--ref") || undefined,
+      node: takeRepeatedOption(args, "--node"),
+      replicas: takeOption(args, "--replicas") || undefined,
+      force: takeFlag(args, "--force"),
+      replace: !takeFlag(args, "--no-replace")
+    });
+    if (json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    console.log(`checkpointed\t${result.results.length}`);
+    return;
+  }
+  if (subcommand === "status" || subcommand === "reconcile") {
+    const result = await reconcileFailover(config, {
+      world: takeOption(args, "--world") || takeOption(args, "--ref") || undefined,
+      force: takeFlag(args, "--force")
+    });
+    if (json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    console.log(`promoted\t${result.promoted.length}`);
+    for (const item of result.promoted) {
+      console.log(`active\t${item.source.name}\t${item.source.sandbox?.id || "-"}\tfrom=${item.replica.name}`);
+    }
+    for (const item of result.skipped) {
+      console.log(`skipped\t${item.source}\t${item.reason}`);
+    }
+    return;
+  }
+  throw new Error(`unknown failover command: ${subcommand}`);
 }
 
 async function metrics(config, args) {

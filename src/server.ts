@@ -10,7 +10,7 @@ import pty from "node-pty";
 import { WebSocket, WebSocketServer } from "ws";
 import { createAuthProvider } from "./auth/providers.js";
 import { verifyTotp } from "./auth/totp.js";
-import { createJoinToken, joinNode, listClusterNodes, removeClusterNode, replicateWorld } from "./core/cluster.js";
+import { checkpointFailoverReplicas, createJoinToken, joinNode, listClusterNodes, reconcileFailover, removeClusterNode, replicateWorld, startFailoverController } from "./core/cluster.js";
 import { collectMetrics, listTraces, prometheusText, recordTraceEvent, startTrace, stopTrace } from "./core/observability.js";
 import { applyWorld, changedPaths, createKubernetesLab, createWorld, execWorld, getWorld, listWorlds, openWorld, pauseWorld, removeWorld, resumeWorld, updateWorldConfig } from "./core/worlds.js";
 import { applyProbeChecks, buildNetworkProbePlan, buildProbeScript, parseProbeOutput } from "./core/probe.js";
@@ -37,6 +37,7 @@ export async function startStudio(config) {
   await audit.load();
   const devAccess = new DevAccessManager(config);
   const rateLimiter = new RequestRateLimiter(config);
+  const failoverController = startFailoverController(config);
   const listener = (request, response) => {
     request.audit = audit;
     request.config = config;
@@ -70,6 +71,7 @@ export async function startStudio(config) {
     server.once("error", reject);
     server.listen(config.studio.port, config.studio.host, resolve);
   });
+  server.on("close", () => failoverController.stop());
   const address = server.address();
   const boundPort = typeof address === "object" && address ? address.port : config.studio.port;
   const url = config.studio.publicUrl || `${protocol}://${config.studio.host}:${boundPort}/`;
@@ -1173,6 +1175,14 @@ async function api(config, devAccess, request, response, url) {
   if (request.method === "GET" && url.pathname === "/api/cluster/nodes") {
     authorize(config, request, "worlds:read");
     return sendJson(request, response, await listClusterNodes(config));
+  }
+  if (request.method === "POST" && url.pathname === "/api/cluster/failover/reconcile") {
+    authorize(config, request, "worlds:write");
+    return sendJson(request, response, await reconcileFailover(config, await readBody(request)));
+  }
+  if (request.method === "POST" && url.pathname === "/api/cluster/failover/checkpoint") {
+    authorize(config, request, "worlds:write");
+    return sendJson(request, response, await checkpointFailoverReplicas(config, await readBody(request)));
   }
   if (request.method === "GET" && url.pathname === "/api/observability/metrics") {
     authorize(config, request, "worlds:read");

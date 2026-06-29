@@ -78,6 +78,14 @@ export function defaultConfig(home = defaultHome()) {
       traceEvents: 2000,
       tracing: true
     },
+    cluster: {
+      failover: {
+        enabled: process.env.KAKURIZAI_FAILOVER_ENABLED !== "false",
+        intervalMs: Number(process.env.KAKURIZAI_FAILOVER_INTERVAL_MS || 5000),
+        checkpointIntervalMs: Number(process.env.KAKURIZAI_FAILOVER_CHECKPOINT_INTERVAL_MS || 60000),
+        probeTimeoutMs: Number(process.env.KAKURIZAI_FAILOVER_PROBE_TIMEOUT_MS || 5000)
+      }
+    },
     cube: {
       mode: process.env.KAKURIZAI_CUBE_MODE || "auto",
       cubecli: process.env.KAKURIZAI_CUBECLI || "cubecli",
@@ -136,6 +144,8 @@ export function mergeConfig(base, override) {
   result.audit = { ...base.audit, ...(override?.audit || {}) };
   result.security = { ...base.security, ...(override?.security || {}) };
   result.observability = { ...base.observability, ...(override?.observability || {}) };
+  result.cluster = { ...base.cluster, ...(override?.cluster || {}) };
+  result.cluster.failover = { ...base.cluster?.failover, ...(override?.cluster?.failover || {}) };
   result.cube = { ...base.cube, ...(override?.cube || {}) };
   result.isolatedAgent = { ...base.isolatedAgent, ...(override?.isolatedAgent || {}) };
   return result;

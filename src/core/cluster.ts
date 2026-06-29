@@ -143,6 +143,102 @@ export async function removeClusterNode(config, ref) {
   return new ClusterStore(config).removeNode(ref);
 }
 
+export async function checkpointFailoverReplicas(config, input = {}) {
+  const worlds = await listWorlds(config);
+  const sources = worlds.filter((world) => isFailoverSource(world, input));
+  const results = [];
+  for (const source of sources) {
+    if (source.labels?.["kakurizai.failover.promoted"] === "true" && input.force !== true) continue;
+    const replicas = worlds.filter((world) => world.labels?.["kakurizai.replicaOf"] === source.id && world.status !== "removed");
+    const checkpointDue = input.force === true || replicas.length > 0 || input.bootstrap === true;
+    if (!checkpointDue) continue;
+    try {
+      results.push(await replicateWorld(config, source.id, {
+        ...(input.replicate || {}),
+        node: input.node || input.nodes,
+        replicas: input.replicas,
+        stateMode: input.stateMode || "stateful",
+        replace: input.replace !== false,
+        continueOnError: input.continueOnError !== false,
+        failFast: false
+      }));
+    } catch (error) {
+      results.push({ source, error: error.message || String(error) });
+    }
+  }
+  return { checkedAt: nowIso(), results };
+}
+
+export async function reconcileFailover(config, input = {}) {
+  const store = new WorldStore(config);
+  const worlds = await store.list();
+  const health = await failoverHealth(config);
+  const promoted = [];
+  const skipped = [];
+  for (const source of worlds.filter((world) => isFailoverSource(world, input))) {
+    const sourceNode = source.backendConfig?.placement?.nodeId || source.sandbox?.hostId || null;
+    if (source.labels?.["kakurizai.failover.promoted"] === "true" && input.force !== true) {
+      skipped.push({ source: source.name, reason: "already promoted" });
+      continue;
+    }
+    const unavailableByProbe = input.force === true ? true : await sourceProbeUnavailable(config, source, input);
+    const unhealthy = input.force === true || sourceUnavailable(source, sourceNode, health) || unavailableByProbe;
+    if (!unhealthy) {
+      skipped.push({ source: source.name, reason: "source healthy" });
+      continue;
+    }
+    const candidates = worlds
+      .filter((world) => world.labels?.["kakurizai.replicaOf"] === source.id && world.status !== "removed")
+      .filter((world) => failoverReplicaReady(world, health))
+      .sort(replicaPreference);
+    const replica = candidates[0];
+    if (!replica) {
+      skipped.push({ source: source.name, reason: "no healthy memory replica" });
+      continue;
+    }
+    promoted.push(await promoteReplica(store, source, replica, {
+      reason: input.force === true ? "forced" : "source unavailable",
+      failedNode: sourceNode,
+      health
+    }));
+  }
+  return { checkedAt: nowIso(), health, promoted, skipped };
+}
+
+export function startFailoverController(config, options = {}) {
+  if (config.cluster?.failover?.enabled === false || options.enabled === false) return { stop() {} };
+  const detectMs = Math.max(1000, Number(options.intervalMs || config.cluster?.failover?.intervalMs || 5000));
+  const checkpointMs = Math.max(detectMs, Number(options.checkpointIntervalMs || config.cluster?.failover?.checkpointIntervalMs || 60000));
+  let stopped = false;
+  let running = false;
+  let lastCheckpoint = 0;
+  const tick = async () => {
+    if (stopped || running) return;
+    running = true;
+    try {
+      await reconcileFailover(config);
+      const now = Date.now();
+      if (now - lastCheckpoint >= checkpointMs) {
+        lastCheckpoint = now;
+        await checkpointFailoverReplicas(config, { continueOnError: true });
+      }
+    } catch {
+      // The controller is best-effort; explicit CLI/API calls report failures.
+    } finally {
+      running = false;
+    }
+  };
+  const timer = setInterval(tick, detectMs);
+  timer.unref?.();
+  void tick();
+  return {
+    stop() {
+      stopped = true;
+      clearInterval(timer);
+    }
+  };
+}
+
 export async function replicateWorld(config, ref, input = {}) {
   const source = await getWorld(config, ref);
   const store = new ClusterStore(config);
@@ -179,6 +275,111 @@ export async function replicateWorld(config, ref, input = {}) {
     }
   }
   return { source, group, nodes, state: statePlan.summary, created, existing, skipped };
+}
+
+async function failoverHealth(config) {
+  const nodes = await new CubeSandboxClient(config.cube).inspect().then((cube) => cube.nodes || []).catch(() => []);
+  const nodeMap = new Map();
+  for (const node of nodes) {
+    const key = node.nodeId || node.id || node.ip;
+    if (!key) continue;
+    nodeMap.set(key, node);
+  }
+  return { nodes, nodeMap };
+}
+
+function isFailoverSource(world, input = {}) {
+  if (!world || world.status === "removed") return false;
+  if (world.labels?.["kakurizai.replicaOf"]) return false;
+  if (input.world || input.ref) return [world.id, world.name].includes(input.world || input.ref);
+  return world.labels?.["kakurizai.failover.enabled"] !== "false";
+}
+
+function sourceUnavailable(source, sourceNode, health) {
+  if (!sourceNode) return false;
+  const runtimeNode = health.nodeMap.get(sourceNode);
+  if (!runtimeNode) return true;
+  if (runtimeNode.healthy === false) return true;
+  if (/failed|down|unhealthy|notready/i.test(String(runtimeNode.status || runtimeNode.HostStatus || ""))) return true;
+  return false;
+}
+
+async function sourceProbeUnavailable(config, source, input = {}) {
+  if (!source.sandbox?.id || source.sandbox?.mode === "direct-cubelet") return false;
+  try {
+    const timeoutMs = Number(input.probeTimeoutMs || config.cluster?.failover?.probeTimeoutMs || 5000);
+    const result = await new CubeSandboxClient(config.cube).exec(source, ["/bin/sh", "-lc", "true"], {
+      allowFailure: true,
+      timeoutMs
+    });
+    return result.code !== 0;
+  } catch {
+    return true;
+  }
+}
+
+function failoverReplicaReady(world, health) {
+  if (!world.sandbox?.id) return false;
+  const state = world.backendConfig?.replication?.state || {};
+  if (state.capturesMemory !== true) return false;
+  const nodeId = world.backendConfig?.placement?.nodeId || world.labels?.["kakurizai.replication.node"];
+  if (!nodeId) return true;
+  const runtimeNode = health.nodeMap.get(nodeId);
+  if (!runtimeNode) return true;
+  if (runtimeNode.healthy === false) return false;
+  if (/failed|down|unhealthy|notready/i.test(String(runtimeNode.status || runtimeNode.HostStatus || ""))) return false;
+  return true;
+}
+
+function replicaPreference(a, b) {
+  const aAt = Date.parse(a.backendConfig?.replication?.state?.capturedAt || a.updatedAt || 0) || 0;
+  const bAt = Date.parse(b.backendConfig?.replication?.state?.capturedAt || b.updatedAt || 0) || 0;
+  return bAt - aAt;
+}
+
+async function promoteReplica(store, source, replica, context = {}) {
+  const promotedAt = nowIso();
+  source.status = "ready";
+  source.sandbox = {
+    ...(replica.sandbox || {}),
+    status: "running",
+    reason: null
+  };
+  source.backend = replica.backend || source.backend;
+  source.backendConfig = {
+    ...(source.backendConfig || {}),
+    ...(replica.backendConfig || {}),
+    failover: {
+      active: true,
+      promotedAt,
+      promotedFrom: replica.id,
+      failedNode: context.failedNode || null,
+      reason: context.reason || "source unavailable"
+    }
+  };
+  source.labels = {
+    ...(source.labels || {}),
+    "kakurizai.failover.enabled": "true",
+    "kakurizai.failover.promoted": "true",
+    "kakurizai.failover.promotedAt": promotedAt,
+    "kakurizai.failover.activeReplica": replica.id,
+    ...(context.failedNode ? { "kakurizai.failover.failedNode": context.failedNode } : {})
+  };
+  const savedSource = await store.save(source);
+  replica.status = "standby-promoted";
+  replica.labels = {
+    ...(replica.labels || {}),
+    "kakurizai.failover.promotedAs": source.id,
+    "kakurizai.failover.promotedAt": promotedAt
+  };
+  await store.save(replica);
+  return {
+    source: savedSource,
+    replica,
+    promotedAt,
+    failedNode: context.failedNode || null,
+    reason: context.reason || "source unavailable"
+  };
 }
 
 async function createReplicaWorld(config, source, node, options = {}) {

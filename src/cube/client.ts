@@ -956,13 +956,13 @@ export class CubeSandboxClient {
       sandboxIdForCubeCli(sandboxId),
       ...command
     ]);
-    if (direct) return runCommand(direct.command, direct.args, { inherit: options.inherit, allowFailure: options.allowFailure });
+    if (direct) return runCommand(direct.command, direct.args, { inherit: options.inherit, allowFailure: options.allowFailure, timeoutMs: options.timeoutMs });
     const binary = commandExists(this.config.cubecli || "cubecli");
     if (!binary) throw new Error("CubeSandbox is unavailable: cubecli not found");
     const args = [...cubeCliGlobalArgs(this.config), "exec"];
     if (options.tty) args.push("-i", "-t");
     args.push("-w", this.config.workspacePath || "/workspace", sandboxIdForCubeCli(sandboxId), ...command);
-    return runCommand(binary, args, { inherit: options.inherit, allowFailure: options.allowFailure });
+    return runCommand(binary, args, { inherit: options.inherit, allowFailure: options.allowFailure, timeoutMs: options.timeoutMs });
   }
 
   shellCommand(world) {
