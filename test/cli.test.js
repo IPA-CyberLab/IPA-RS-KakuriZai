@@ -126,12 +126,27 @@ test("cli joins nodes and replicates a sandbox to a target node", async () => {
     "ins-a",
     "--ip",
     "10.0.0.10",
+    "--executor-lxc",
+    "kz-cs-worker",
+    "--executor-ssh-host",
+    "100.123.154.79",
+    "--executor-ssh-user",
+    "mizuame",
+    "--executor-ssh-key",
+    "/root/.ssh/kz-host-key",
+    "--executor-cubecli",
+    "/usr/local/services/cubetoolbox/Cubelet/bin/cubecli",
     "--label",
     "zone=lab",
     "--json"
   ])).stdout);
   assert.equal(node.nodeId, "ins-a");
   assert.equal(node.labels.zone, "lab");
+  assert.equal(node.executor.type, "ssh-lxc");
+  assert.equal(node.executor.container, "kz-cs-worker");
+  assert.equal(node.executor.host, "100.123.154.79");
+  assert.equal(node.executor.user, "mizuame");
+  assert.equal(node.executor.key, "/root/.ssh/kz-host-key");
 
   await runCli(home, ["create", "--name", "base", "--no-host-mount", "--backend", "cube-sandbox-overlay"]);
   const result = JSON.parse((await runCli(home, [

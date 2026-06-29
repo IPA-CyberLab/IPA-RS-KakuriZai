@@ -264,6 +264,57 @@ test("cube client opens web shell with colorized bash profile", () => {
   assert.match(shell.args[10], /exec bash --rcfile/);
 });
 
+test("cube client opens direct replica shells through ssh lxc executor", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-direct-"));
+  const ssh = path.join(tmp, "ssh");
+  await fs.writeFile(ssh, "#!/bin/sh\nexit 0\n", "utf8");
+  await fs.chmod(ssh, 0o755);
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${tmp}${path.delimiter}${originalPath || ""}`;
+  try {
+    const client = new CubeSandboxClient({
+      namespace: "kakurizai",
+      workspacePath: "/workspace"
+    });
+    const shell = client.shellCommand({
+      name: "worker-replica",
+      sandbox: {
+        id: "4fac1c9a074d49bf8e29ee1d90592b22",
+        mode: "direct-cubelet"
+      },
+      backendConfig: {
+        replication: {
+          executor: {
+            type: "ssh-lxc",
+            host: "100.123.154.79",
+            user: "mizuame",
+            key: "/root/.ssh/kz-host-key",
+            container: "kz-cs-worker",
+            cubecli: "/usr/local/services/cubetoolbox/Cubelet/bin/cubecli"
+          }
+        }
+      }
+    });
+
+    assert.equal(shell.command, ssh);
+    assert.deepEqual(shell.args.slice(0, 5), [
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-i",
+      "/root/.ssh/kz-host-key",
+      "mizuame@100.123.154.79"
+    ]);
+    assert.match(shell.args[5], /^lxc exec 'kz-cs-worker' -- bash -lc /);
+    assert.match(shell.args[5], /--namespace/);
+    assert.match(shell.args[5], /kakurizai/);
+    assert.match(shell.args[5], /exec/);
+    assert.match(shell.args[5], /\/workspace/);
+    assert.match(shell.args[5], /4fac1c9a074d/);
+  } finally {
+    process.env.PATH = originalPath;
+  }
+});
+
 test("cube client starts sandbox dev access services", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-dev-access-"));
   const cubecli = path.join(tmp, "cubecli");
