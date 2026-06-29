@@ -971,15 +971,66 @@ function App() {
     }
   }
 
-  async function replicateSelected() {
+  async function replicateSelected(options: { nodes?: string[]; replicas?: number; includeHostMounts?: boolean; replace?: boolean } = {}) {
     if (!selected?.world) return;
     setBusy(true);
     try {
       const result = await api<{ created: World[]; existing: World[]; skipped: Array<{ reason: string }> }>(`/api/worlds/${encodeURIComponent(selected.world.id)}/replicate`, {
         method: "POST",
-        body: { replicas: Math.max(1, clusterNodes.length || 1) }
+        body: {
+          nodes: options.nodes || [],
+          replicas: options.replicas || Math.max(1, clusterNodes.length || 1),
+          includeHostMounts: Boolean(options.includeHostMounts),
+          replace: Boolean(options.replace)
+        }
       });
       setStatus(`Replicated ${selected.name}: ${result.created.length} created / ${result.existing.length} existing`);
+      await refresh();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createClusterJoinToken(options: { ttlSeconds: number; uses: number }) {
+    setBusy(true);
+    try {
+      const result = await api<{ token: string; expiresAt: string; maxUses: number }>("/api/cluster/join-token", {
+        method: "POST",
+        body: options
+      });
+      setStatus(`Join token expires ${formatDate(result.expiresAt)}`);
+      return result;
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function registerClusterNode(input: Record<string, unknown>) {
+    setBusy(true);
+    try {
+      await api<ClusterNode>("/api/cluster/nodes", {
+        method: "POST",
+        body: input
+      });
+      setStatus(`Registered ${String(input.name || input.nodeId || "node")}`);
+      await refresh();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeClusterNode(ref: string) {
+    setBusy(true);
+    try {
+      await api<ClusterNode>(`/api/cluster/nodes/${encodeURIComponent(ref)}`, { method: "DELETE" });
+      setStatus(`Removed node ${ref}`);
       await refresh();
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
@@ -1469,6 +1520,9 @@ function App() {
               busy={busy}
               onRefresh={() => refresh()}
               onReplicate={replicateSelected}
+              onCreateJoinToken={createClusterJoinToken}
+              onRegisterNode={registerClusterNode}
+              onRemoveNode={removeClusterNode}
               onStartTrace={startTraceSession}
               onStopTrace={stopTraceSession}
             />
@@ -1596,6 +1650,9 @@ function ObservabilityWorkspace({
   busy,
   onRefresh,
   onReplicate,
+  onCreateJoinToken,
+  onRegisterNode,
+  onRemoveNode,
   onStartTrace,
   onStopTrace
 }: {
@@ -1605,11 +1662,15 @@ function ObservabilityWorkspace({
   traces: TraceSession[];
   busy: boolean;
   onRefresh: () => Promise<void>;
-  onReplicate: () => Promise<void>;
+  onReplicate: (options?: { nodes?: string[]; replicas?: number; includeHostMounts?: boolean; replace?: boolean }) => Promise<void>;
+  onCreateJoinToken: (options: { ttlSeconds: number; uses: number }) => Promise<{ token: string; expiresAt: string; maxUses: number }>;
+  onRegisterNode: (input: Record<string, unknown>) => Promise<void>;
+  onRemoveNode: (ref: string) => Promise<void>;
   onStartTrace: (targetType: string, target?: string | null) => Promise<void>;
   onStopTrace: (id: string) => Promise<void>;
 }) {
   const sample = metrics?.sample;
+  const [joinToken, setJoinToken] = React.useState("");
   return (
     <div className="sandboxDashboard">
       <div className="overviewGrid">
@@ -1627,10 +1688,6 @@ function ObservabilityWorkspace({
             <RefreshCcw size={15} />
             Refresh
           </button>
-          <button className="primary" onClick={() => void onReplicate()} type="button" disabled={busy || !selected?.world || nodes.length === 0}>
-            <Layers size={15} />
-            Replicate Selected
-          </button>
           <button className="ghost" onClick={() => void onStartTrace("all", null)} type="button" disabled={busy}>
             <Route size={15} />
             Trace All
@@ -1640,6 +1697,29 @@ function ObservabilityWorkspace({
             Trace Selected
           </button>
         </div>
+      </DetailSection>
+
+      <DetailSection icon={<Server size={16} />} title="Node Management">
+        <NodeManagement
+          nodes={nodes}
+          busy={busy}
+          joinToken={joinToken}
+          onJoinToken={async (options) => {
+            const result = await onCreateJoinToken(options);
+            setJoinToken(result.token);
+          }}
+          onRegisterNode={onRegisterNode}
+          onRemoveNode={onRemoveNode}
+        />
+      </DetailSection>
+
+      <DetailSection icon={<Layers size={16} />} title="Replication">
+        <ReplicationLauncher
+          selected={selected}
+          nodes={nodes}
+          busy={busy}
+          onReplicate={onReplicate}
+        />
       </DetailSection>
 
       <DetailSection icon={<Server size={16} />} title="Nodes">
@@ -1703,6 +1783,184 @@ function ObservabilityWorkspace({
           ))}
         </div>
       </DetailSection>
+    </div>
+  );
+}
+
+function NodeManagement({
+  nodes,
+  busy,
+  joinToken,
+  onJoinToken,
+  onRegisterNode,
+  onRemoveNode
+}: {
+  nodes: ClusterNode[];
+  busy: boolean;
+  joinToken: string;
+  onJoinToken: (options: { ttlSeconds: number; uses: number }) => Promise<void>;
+  onRegisterNode: (input: Record<string, unknown>) => Promise<void>;
+  onRemoveNode: (ref: string) => Promise<void>;
+}) {
+  const [ttlSeconds, setTtlSeconds] = React.useState("86400");
+  const [uses, setUses] = React.useState("1");
+  const [name, setName] = React.useState("");
+  const [nodeId, setNodeId] = React.useState("");
+  const [ip, setIp] = React.useState("");
+  const [endpoint, setEndpoint] = React.useState("");
+  const [roles, setRoles] = React.useState("worker");
+  const [labels, setLabels] = React.useState("");
+  return (
+    <div className="managementStack">
+      <div className="managementGrid">
+        <div>
+          <label>Token TTL</label>
+          <input value={ttlSeconds} onChange={(event) => setTtlSeconds(event.target.value)} inputMode="numeric" />
+        </div>
+        <div>
+          <label>Uses</label>
+          <input value={uses} onChange={(event) => setUses(event.target.value)} inputMode="numeric" />
+        </div>
+        <button className="ghost fieldButton" onClick={() => void onJoinToken({ ttlSeconds: Number(ttlSeconds || 86400), uses: Number(uses || 1) })} type="button" disabled={busy}>
+          <KeyRound size={15} />
+          Join Token
+        </button>
+      </div>
+      {joinToken ? <input className="monoInput" value={joinToken} readOnly /> : null}
+
+      <div className="managementGrid wide">
+        <div>
+          <label>Name</label>
+          <input value={name} onChange={(event) => setName(event.target.value)} placeholder="worker-a" />
+        </div>
+        <div>
+          <label>Node ID</label>
+          <input value={nodeId} onChange={(event) => setNodeId(event.target.value)} placeholder="ins-a" />
+        </div>
+        <div>
+          <label>IP</label>
+          <input value={ip} onChange={(event) => setIp(event.target.value)} placeholder="10.0.0.10" />
+        </div>
+        <div>
+          <label>Endpoint</label>
+          <input value={endpoint} onChange={(event) => setEndpoint(event.target.value)} placeholder="https://node:38476" />
+        </div>
+        <div>
+          <label>Roles</label>
+          <input value={roles} onChange={(event) => setRoles(event.target.value)} placeholder="worker" />
+        </div>
+        <div>
+          <label>Labels</label>
+          <input value={labels} onChange={(event) => setLabels(event.target.value)} placeholder="zone=lab" />
+        </div>
+        <button
+          className="primary fieldButton"
+          onClick={() => {
+            void onRegisterNode({
+              name: name.trim(),
+              nodeId: (nodeId || name).trim(),
+              ip: ip.trim() || undefined,
+              endpoint: endpoint.trim() || undefined,
+              roles: splitTextList(roles),
+              labels: parseKeyValueText(labels)
+            });
+          }}
+          type="button"
+          disabled={busy || !name.trim()}
+        >
+          <Server size={15} />
+          Register
+        </button>
+      </div>
+
+      <div className="dataTable">
+        <div className="dataRow head">
+          <span>Node</span>
+          <span>Status</span>
+          <span>Endpoint</span>
+          <span>Action</span>
+        </div>
+        {nodes.map((node) => (
+          <div className="dataRow" key={node.id}>
+            <span>{node.name}</span>
+            <span>{node.status}</span>
+            <span>{node.endpoint || node.ip || "-"}</span>
+            <span>
+              <button className="ghost compactButton" onClick={() => void onRemoveNode(node.id)} type="button" disabled={busy}>
+                <Trash2 size={13} />
+                Remove
+              </button>
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ReplicationLauncher({
+  selected,
+  nodes,
+  busy,
+  onReplicate
+}: {
+  selected: InventoryRow | null;
+  nodes: ClusterNode[];
+  busy: boolean;
+  onReplicate: (options?: { nodes?: string[]; replicas?: number; includeHostMounts?: boolean; replace?: boolean }) => Promise<void>;
+}) {
+  const [selectedNodes, setSelectedNodes] = React.useState<string[]>([]);
+  const [replicas, setReplicas] = React.useState("");
+  const [includeHostMounts, setIncludeHostMounts] = React.useState(false);
+  const [replace, setReplace] = React.useState(false);
+
+  React.useEffect(() => {
+    setSelectedNodes((current) => current.length ? current.filter((node) => nodes.some((candidate) => candidate.id === node)) : nodes.map((node) => node.id));
+  }, [nodes]);
+
+  function toggleNode(id: string) {
+    setSelectedNodes((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  }
+
+  return (
+    <div className="managementStack">
+      <div className="replicationGrid">
+        <div>
+          <label>Replicas</label>
+          <input value={replicas} onChange={(event) => setReplicas(event.target.value)} inputMode="numeric" placeholder={String(selectedNodes.length || nodes.length || 1)} />
+        </div>
+        <label className="checkRow compactCheck">
+          <input type="checkbox" checked={includeHostMounts} onChange={(event) => setIncludeHostMounts(event.target.checked)} />
+          <span><strong>Host mounts</strong><small>copy mount config</small></span>
+        </label>
+        <label className="checkRow compactCheck">
+          <input type="checkbox" checked={replace} onChange={(event) => setReplace(event.target.checked)} />
+          <span><strong>Replace</strong><small>recreate existing replicas</small></span>
+        </label>
+        <button
+          className="primary fieldButton"
+          onClick={() => void onReplicate({
+            nodes: selectedNodes,
+            replicas: Number(replicas || selectedNodes.length || nodes.length || 1),
+            includeHostMounts,
+            replace
+          })}
+          type="button"
+          disabled={busy || !selected?.world || selectedNodes.length === 0}
+        >
+          <Layers size={15} />
+          Replicate
+        </button>
+      </div>
+      <div className="nodeChoiceGrid">
+        {nodes.map((node) => (
+          <label className="checkRow compactCheck" key={node.id}>
+            <input type="checkbox" checked={selectedNodes.includes(node.id)} onChange={() => toggleNode(node.id)} />
+            <span><strong>{node.name}</strong><small>{node.nodeId || node.ip || "-"}</small></span>
+          </label>
+        ))}
+      </div>
+      {!nodes.length ? <div className="sectionEmpty">No joined nodes.</div> : null}
     </div>
   );
 }
@@ -3069,6 +3327,22 @@ function nodeUsageText(node: Record<string, unknown>) {
     node.storageDiskUsagePer != null ? `storage ${node.storageDiskUsagePer}%` : null
   ].filter(Boolean);
   return parts.length ? parts.join(" / ") : "-";
+}
+
+function splitTextList(value: string) {
+  return value.split(/[,\s]+/).map((item) => item.trim()).filter(Boolean);
+}
+
+function parseKeyValueText(value: string) {
+  const result: Record<string, string> = {};
+  for (const item of splitTextList(value)) {
+    const index = item.indexOf("=");
+    if (index <= 0) continue;
+    const key = item.slice(0, index).trim();
+    const next = item.slice(index + 1).trim();
+    if (key && next) result[key] = next;
+  }
+  return result;
 }
 
 function formatDate(value?: string | null) {
