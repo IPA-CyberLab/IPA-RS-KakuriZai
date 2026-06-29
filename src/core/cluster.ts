@@ -4,6 +4,8 @@ import path from "node:path";
 import { CubeSandboxClient } from "../cube/client.js";
 import { buildCubeSandboxRequest } from "../cube/request.js";
 import { ensureDir, nowIso, randomId, readJson, slugify, writeJsonAtomic } from "./fs.js";
+import { runCommand } from "./process.js";
+import { WorldStore } from "./store.js";
 import { createWorld, getWorld, listWorlds, removeWorld } from "./worlds.js";
 
 const JOIN_TOKEN_PREFIX = "kzjoin";
@@ -56,6 +58,8 @@ export class ClusterStore {
       roles: normalizeList(input.roles || input.role || existing?.roles || ["worker"]),
       labels: { ...(existing?.labels || {}), ...(input.labels || {}) },
       capacity: { ...(existing?.capacity || {}), ...(input.capacity || {}) },
+      executor: normalizeExecutor(input.executor || existing?.executor),
+      replication: normalizeNodeReplication(input.replication || existing?.replication),
       status: input.status || "joined",
       joinedAt: existing?.joinedAt || now,
       lastSeenAt: now,
@@ -202,10 +206,12 @@ async function createReplicaWorld(config, source, node, options = {}) {
     targetNodeId: node.id,
     targetNodeName: node.name,
     stateMode: options.state?.mode || "definition",
-    state: options.state || { mode: "definition" }
+    state: options.state || { mode: "definition" },
+    ...(options.state?.executor ? { executor: options.state.executor } : {}),
+    ...(options.state?.directSandbox ? { directRestore: options.state.directSandbox } : {})
   };
   const name = cleanReplicaName(options.name || `${source.name}-${node.name}`);
-  return createWorld(config, {
+  const createInput = {
     name,
     backend: source.backend,
     sourcePath: includeHostMounts ? source.sourcePath : undefined,
@@ -231,7 +237,11 @@ async function createReplicaWorld(config, source, node, options = {}) {
       ...(options.state?.snapshotId ? { "kakurizai.replication.runtimeSnapshot": options.state.snapshotId } : {})
     },
     backendConfig
-  });
+  };
+  if (options.state?.directSandbox) {
+    return createDirectReplicaWorld(config, createInput, node, options.state);
+  }
+  return createWorld(config, createInput);
 }
 
 async function prepareReplicationState(config, source, nodes, input = {}) {
@@ -273,6 +283,7 @@ async function prepareReplicationState(config, source, nodes, input = {}) {
   }
 
   let committedTemplate = null;
+  const directRestores = new Map();
   const needsPortableTemplate = nodes.some((node) => !runtimeSnapshot || !nodeMatchesRuntimeSnapshot(node, runtimeSnapshot, sourceNode));
   if (mode === "runtime-snapshot" && needsPortableTemplate) {
     throw new Error("runtime snapshots are local to the origin node; use stateful or template-snapshot for cross-node replication");
@@ -288,7 +299,19 @@ async function prepareReplicationState(config, source, nodes, input = {}) {
       interval: input.waitInterval || "2s"
     });
     if (!distribution.distributed) {
-      throw new Error(`state template distribution failed: ${distribution.reason || "template redo failed"}`);
+      const direct = await restoreDirectReplicas(config, source, nodes, {
+        input,
+        request,
+        commit,
+        distribution,
+        runtimeSnapshot,
+        sourceNode,
+        capturedAt
+      });
+      if (!direct.restored) {
+        throw new Error(`state template distribution failed: ${distribution.reason || "template redo failed"}`);
+      }
+      for (const [key, restore] of direct.byNode) directRestores.set(key, restore);
     }
     committedTemplate = { ...commit, distribution };
   }
@@ -301,6 +324,7 @@ async function prepareReplicationState(config, source, nodes, input = {}) {
     runtimeSnapshotOriginNode: runtimeSnapshot?.originNodeId || sourceNode.nodeId || null,
     portableTemplateId: committedTemplate?.templateId || null,
     portableTemplateScope: committedTemplate?.distribution?.scope || [],
+    directRestoredNodes: [...directRestores.values()].map((restore) => restore.nodeId || restore.nodeName).filter(Boolean),
     memoryContinuous: false,
     memoryCaptured: Boolean(runtimeSnapshot?.snapshotId),
     reason: runtimeSnapshot?.snapshotId
@@ -324,6 +348,21 @@ async function prepareReplicationState(config, source, nodes, input = {}) {
         };
       }
       if (committedTemplate?.templateId) {
+        const directRestore = directRestores.get(nodeKey(node));
+        if (directRestore) {
+          return {
+            mode: "direct-cubelet",
+            templateId: committedTemplate.templateId,
+            capturedAt,
+            capturesMemory: false,
+            continuousMemory: false,
+            hydrateWorkspace: Boolean(materialized?.applied),
+            workspaceSnapshotPath,
+            directSandbox: directRestore.sandbox,
+            executor: directRestore.executor,
+            reason: "portable template state restored directly on the target cubelet"
+          };
+        }
         return {
           mode: "template-snapshot",
           templateId: committedTemplate.templateId,
@@ -345,6 +384,127 @@ async function prepareReplicationState(config, source, nodes, input = {}) {
       };
     }
   };
+}
+
+async function createDirectReplicaWorld(config, input, node, state) {
+  const store = new WorldStore(config);
+  const sandbox = state.directSandbox || {};
+  const world = await store.create({
+    ...input,
+    status: "ready",
+    sandbox: {
+      id: sandbox.sandboxId || sandbox.id,
+      containerId: sandbox.containerId || sandbox.sandboxId || sandbox.id,
+      baseId: state.templateId || input.backendConfig?.template || config.cube?.template || null,
+      runtime: "CubeSandbox",
+      mode: "direct-cubelet",
+      mountMode: input.backendConfig?.mountMode || "none",
+      status: "running",
+      reason: sandbox.reason || null,
+      sandboxIp: sandbox.sandboxIp || sandbox.ip || null,
+      runtimeSandboxIp: sandbox.runtimeSandboxIp || sandbox.sandboxIp || sandbox.ip || null,
+      network: sandbox.network || null,
+      bootstrap: { skipped: true, reason: "direct cubelet replica was restored by the target executor" }
+    }
+  });
+  const request = buildCubeSandboxRequest(world, {
+    ...config.cube,
+    template: state.templateId || world.backendConfig?.template || config.cube?.template,
+    cpu: world.backendConfig?.cpu || config.cube?.cpu,
+    memory: world.backendConfig?.memory || config.cube?.memory,
+    writableLayerSize: world.backendConfig?.writableLayerSize || config.cube?.writableLayerSize,
+    networkType: world.backendConfig?.networkType || config.cube?.networkType,
+    network: world.backendConfig?.network || null,
+    kubernetes: world.backendConfig?.kubernetes || null,
+    mountMode: world.backendConfig?.mountMode || "none"
+  });
+  world.backendConfig.cubeRequest = request;
+  world.backendConfig.mountMap = {};
+  world.backendConfig.replication = {
+    ...(world.backendConfig.replication || {}),
+    executor: state.executor,
+    directRestore: state.directSandbox
+  };
+  world.labels = {
+    ...(world.labels || {}),
+    "kakurizai.replication.direct": "true"
+  };
+  return store.save(world);
+}
+
+async function restoreDirectReplicas(config, source, nodes, context) {
+  const targets = nodes.filter((node) => !context.runtimeSnapshot || !nodeMatchesRuntimeSnapshot(node, context.runtimeSnapshot, context.sourceNode));
+  const byNode = new Map();
+  for (const node of targets) {
+    const restoreCommand = resolveRestoreCommand(config, node, context.input);
+    if (!restoreCommand) {
+      return { restored: false, byNode, reason: "no direct restore command configured" };
+    }
+    const executor = resolveNodeExecutor(config, node, context.input);
+    const contextPath = path.join(source.paths.logs, `direct-restore-${context.commit.templateId}-${nodeKey(node)}.json`);
+    await writeJsonAtomic(contextPath, {
+      version: 1,
+      source: {
+        id: source.id,
+        name: source.name,
+        sandboxId: source.sandbox?.containerId || source.sandbox?.id,
+        node: context.sourceNode
+      },
+      target: node,
+      executor,
+      templateId: context.commit.templateId,
+      runtimeSnapshotId: context.runtimeSnapshot?.snapshotId || null,
+      capturedAt: context.capturedAt,
+      cube: {
+        namespace: config.cube?.namespace || "default",
+        workspacePath: config.cube?.workspacePath || "/workspace"
+      },
+      createRequest: context.request,
+      distributionFailure: {
+        code: context.distribution?.code ?? null,
+        reason: context.distribution?.reason || null
+      }
+    });
+    const result = await runCommand("sh", ["-lc", restoreCommand], {
+      allowFailure: true,
+      env: {
+        KAKURIZAI_REPLICATION_CONTEXT: contextPath,
+        KAKURIZAI_TEMPLATE_ID: context.commit.templateId,
+        KAKURIZAI_RUNTIME_SNAPSHOT_ID: context.runtimeSnapshot?.snapshotId || "",
+        KAKURIZAI_SOURCE_SANDBOX_ID: source.sandbox?.containerId || source.sandbox?.id || "",
+        KAKURIZAI_SOURCE_WORLD_ID: source.id,
+        KAKURIZAI_TARGET_NODE_ID: node.nodeId || node.id || "",
+        KAKURIZAI_TARGET_NODE_NAME: node.name || "",
+        KAKURIZAI_TARGET_NODE_IP: node.ip || ""
+      }
+    });
+    await writeJsonAtomic(path.join(source.paths.logs, `direct-restore-${context.commit.templateId}-${nodeKey(node)}.result.json`), {
+      code: result.code,
+      stdout: result.stdout,
+      stderr: result.stderr
+    });
+    if (result.code !== 0) {
+      if (context.input.allowPartialState === true) continue;
+      return { restored: false, byNode, reason: result.stderr || result.stdout || `direct restore exited with ${result.code}` };
+    }
+    const response = parseJsonFromOutput(`${result.stdout}\n${result.stderr}`) || {};
+    const sandboxId = response.sandboxId || response.sandbox_id || response.containerId || response.id;
+    if (!sandboxId) {
+      if (context.input.allowPartialState === true) continue;
+      return { restored: false, byNode, reason: "direct restore did not return sandboxId" };
+    }
+    byNode.set(nodeKey(node), {
+      nodeId: node.nodeId || node.id,
+      nodeName: node.name,
+      executor,
+      sandbox: {
+        ...response,
+        sandboxId,
+        containerId: response.containerId || response.container_id || sandboxId
+      }
+    });
+  }
+  return { restored: byNode.size === targets.length, byNode };
 }
 
 function definitionStatePlan(reason) {
@@ -464,6 +624,71 @@ function cleanReplicaName(value) {
 function cleanOptional(value) {
   const text = String(value || "").trim();
   return text || null;
+}
+
+function normalizeExecutor(value) {
+  if (!value || typeof value !== "object") return null;
+  const type = cleanOptional(value.type || (value.container || value.lxcContainer ? "lxc" : null));
+  if (!type) return null;
+  return {
+    ...value,
+    type,
+    container: cleanOptional(value.container || value.lxcContainer),
+    namespace: cleanOptional(value.namespace),
+    cubecli: cleanOptional(value.cubecli),
+    lxc: cleanOptional(value.lxc)
+  };
+}
+
+function normalizeNodeReplication(value) {
+  if (!value || typeof value !== "object") return null;
+  return {
+    ...value,
+    restoreCommand: cleanOptional(value.restoreCommand || value.restore_command),
+    executor: normalizeExecutor(value.executor)
+  };
+}
+
+function resolveRestoreCommand(config, node, input = {}) {
+  return cleanOptional(
+    input.restoreCommand
+    || input.directRestoreCommand
+    || node.replication?.restoreCommand
+    || node.labels?.["kakurizai.replication.restoreCommand"]
+    || config.cube?.replication?.restoreCommand
+  );
+}
+
+function resolveNodeExecutor(config, node, input = {}) {
+  return normalizeExecutor(
+    input.executor
+    || node.replication?.executor
+    || node.executor
+    || config.cube?.replication?.executor
+  );
+}
+
+function nodeKey(node) {
+  return cleanOptional(node.nodeId || node.id || node.name || node.ip) || "node";
+}
+
+function parseJsonFromOutput(output) {
+  const text = String(output || "").trim();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    const first = text.indexOf("{");
+    const last = text.lastIndexOf("}");
+    if (first >= 0 && last > first) {
+      try {
+        return JSON.parse(text.slice(first, last + 1));
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
 }
 
 function normalizeList(value) {
