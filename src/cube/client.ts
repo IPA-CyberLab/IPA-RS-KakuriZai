@@ -933,6 +933,8 @@ export class CubeSandboxClient {
   async destroySandbox(world) {
     const sandboxId = world.sandbox?.id;
     if (!sandboxId) return { skipped: true, reason: "world has no sandbox id" };
+    const direct = directCubeCliCommand(world, this.config, ["unsafe", "destroy", sandboxIdForCubeCli(sandboxId)]);
+    if (direct) return runCommand(direct.command, direct.args, { allowFailure: true });
     if (world.sandbox?.mode === "master") {
       const masterBinary = commandExists(this.config.mastercli || "cubemastercli");
       if (!masterBinary) return { skipped: true, reason: "cubemastercli not found" };
@@ -946,6 +948,15 @@ export class CubeSandboxClient {
   async exec(world, command, options = {}) {
     const sandboxId = world.sandbox?.containerId || world.sandbox?.id;
     if (!sandboxId) throw new Error(`world ${world.name} is not provisioned in CubeSandbox`);
+    const direct = directCubeCliCommand(world, this.config, [
+      "exec",
+      ...(options.tty ? ["-i", "-t"] : []),
+      "-w",
+      this.config.workspacePath || "/workspace",
+      sandboxIdForCubeCli(sandboxId),
+      ...command
+    ]);
+    if (direct) return runCommand(direct.command, direct.args, { inherit: options.inherit, allowFailure: options.allowFailure });
     const binary = commandExists(this.config.cubecli || "cubecli");
     if (!binary) throw new Error("CubeSandbox is unavailable: cubecli not found");
     const args = [...cubeCliGlobalArgs(this.config), "exec"];
@@ -957,6 +968,18 @@ export class CubeSandboxClient {
   shellCommand(world) {
     const sandboxId = world.sandbox?.containerId || world.sandbox?.id;
     if (!sandboxId) throw new Error(`world ${world.name} is not provisioned in CubeSandbox`);
+    const direct = directCubeCliCommand(world, this.config, [
+      "exec",
+      "-i",
+      "-t",
+      "-w",
+      this.config.workspacePath || "/workspace",
+      sandboxIdForCubeCli(sandboxId),
+      "/bin/sh",
+      "-lc",
+      buildInteractiveShellScript()
+    ]);
+    if (direct) return direct;
     const binary = commandExists(this.config.cubecli || "cubecli");
     if (!binary) throw new Error("CubeSandbox is unavailable: cubecli not found");
     return {
@@ -1676,6 +1699,36 @@ function sandboxIdForCubeCli(sandboxId) {
 
 function cubeCliGlobalArgs(config) {
   return config.namespace ? ["--namespace", config.namespace] : [];
+}
+
+function directCubeCliCommand(world, config, cubeArgs) {
+  if (world.sandbox?.mode !== "direct-cubelet") return null;
+  const executor = world.backendConfig?.replication?.executor || world.backendConfig?.placement?.executor || null;
+  if (!executor) return null;
+  const namespace = executor.namespace || config.namespace || "default";
+  if (executor.type === "lxc") {
+    if (!executor.container) throw new Error(`direct cubelet executor for ${world.name} requires container`);
+    const lxc = commandExists(executor.lxc || "lxc");
+    if (!lxc) throw new Error("direct cubelet executor is unavailable: lxc not found");
+    const cubecli = executor.cubecli || config.cubecli || "cubecli";
+    const commandLine = [
+      "export PATH=/usr/local/services/cubetoolbox/Cubelet/bin:$PATH",
+      [shellQuote(cubecli), "--namespace", shellQuote(namespace), ...cubeArgs.map(shellQuote)].join(" ")
+    ].join("; ");
+    return {
+      command: lxc,
+      args: ["exec", executor.container, "--", "bash", "-lc", commandLine]
+    };
+  }
+  if (executor.type === "local") {
+    const cubecli = commandExists(executor.cubecli || config.cubecli || "cubecli");
+    if (!cubecli) throw new Error("direct cubelet executor is unavailable: cubecli not found");
+    return {
+      command: cubecli,
+      args: ["--namespace", namespace, ...cubeArgs]
+    };
+  }
+  return null;
 }
 
 function shellQuote(value) {

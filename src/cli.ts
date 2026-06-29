@@ -364,6 +364,7 @@ async function node(config, args) {
     const token = takeOption(args, "--token") || process.env.KAKURIZAI_JOIN_TOKEN;
     const name = takeOption(args, "--name") || takeOption(args, "-n");
     if (!name) throw new Error("node join requires --name");
+    const restoreCommand = takeOption(args, "--restore-command") || takeOption(args, "--direct-restore-command") || undefined;
     const result = await joinNode(config, {
       token,
       nodeId: takeOption(args, "--id") || takeOption(args, "--node-id") || name,
@@ -373,7 +374,9 @@ async function node(config, args) {
       ip: takeOption(args, "--ip") || undefined,
       roles: splitOptionValues(takeRepeatedOption(args, "--role")),
       labels: parseKeyValueOptions(takeRepeatedOption(args, "--label")),
-      capacity: parseKeyValueOptions(takeRepeatedOption(args, "--capacity"))
+      capacity: parseKeyValueOptions(takeRepeatedOption(args, "--capacity")),
+      executor: executorOptionsFromArgs(args),
+      replication: restoreCommand ? { restoreCommand } : undefined
     });
     if (args.includes("--json")) {
       console.log(JSON.stringify(result, null, 2));
@@ -684,6 +687,19 @@ function parseKeyValueOptions(values) {
     result[key] = value;
   }
   return result;
+}
+
+function executorOptionsFromArgs(args) {
+  const lxcContainer = takeOption(args, "--executor-lxc") || takeOption(args, "--lxc-container");
+  const cubecli = takeOption(args, "--executor-cubecli");
+  const namespace = takeOption(args, "--executor-namespace");
+  if (!lxcContainer && !cubecli && !namespace) return undefined;
+  return {
+    type: lxcContainer ? "lxc" : "local",
+    container: lxcContainer || undefined,
+    cubecli: cubecli || undefined,
+    namespace: namespace || undefined
+  };
 }
 
 function parseMountOption(value) {
