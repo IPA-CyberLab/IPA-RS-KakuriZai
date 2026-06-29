@@ -31,8 +31,13 @@ export function signSelfToken(options) {
     aud: options.audience,
     iat: now,
     exp: now + (options.expiresInSeconds || 3600),
-    scope: options.scope || "worlds:read worlds:write"
+    scope: Array.isArray(options.scope) ? options.scope.join(" ") : options.scope || (!options.roles && !options.permissions ? "worlds:read worlds:write" : undefined),
+    roles: options.roles || (options.role ? [options.role] : undefined),
+    permissions: options.permissions
   };
+  if (!payload.scope) delete payload.scope;
+  if (!payload.roles) delete payload.roles;
+  if (!payload.permissions) delete payload.permissions;
   const signingInput = `${base64urlJson(header)}.${base64urlJson(payload)}`;
   const signature = crypto.createHmac("sha256", options.secret).update(signingInput).digest("base64url");
   return `${signingInput}.${signature}`;

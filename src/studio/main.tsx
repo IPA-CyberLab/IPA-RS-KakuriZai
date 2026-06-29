@@ -16,6 +16,7 @@ import {
   HardDrive,
   KeyRound,
   Layers,
+  LogOut,
   Monitor,
   Moon,
   MoreHorizontal,
@@ -41,6 +42,9 @@ type AuthConfig = {
   issuer?: string;
   audience?: string;
   requiresToken: boolean;
+  requiresCredentials?: boolean;
+  mfaRequired?: boolean;
+  csrfHeader?: string;
 };
 
 type World = {
@@ -435,8 +439,12 @@ function Root() {
 
 function App() {
   const [authConfig, setAuthConfig] = React.useState<AuthConfig | null>(null);
-  const [token, setToken] = React.useState(() => localStorage.getItem("kakurizai.token") || "");
+  const [token, setToken] = React.useState("");
+  const [username, setUsername] = React.useState("");
+  const [password, setPassword] = React.useState("");
+  const [mfaCode, setMfaCode] = React.useState("");
   const [session, setSession] = React.useState<string | null>(null);
+  const [, setCsrfToken] = React.useState(() => sessionStorage.getItem("kakurizai.csrf") || "");
   const [theme, setTheme] = React.useState<ThemeMode>(() => localStorage.getItem("kakurizai.theme") === "light" ? "light" : "dark");
   const [worlds, setWorlds] = React.useState<World[]>([]);
   const [cube, setCube] = React.useState<CubeInspect | null>(null);
@@ -521,8 +529,7 @@ function App() {
 
   React.useEffect(() => {
     if (!authConfig) return;
-    if (!authConfig.requiresToken || token) void refresh();
-    else setStatus("Sign in required");
+    void refresh();
   }, [authConfig]);
 
   React.useEffect(() => {
@@ -562,6 +569,11 @@ function App() {
         api<World[]>("/api/worlds", { token }),
         api<CubeInspect>("/api/cube/inspect", { token })
       ]);
+      const nextCsrfToken = (sessionResult as { csrfToken?: string | null }).csrfToken || "";
+      if (nextCsrfToken) {
+        sessionStorage.setItem("kakurizai.csrf", nextCsrfToken);
+        setCsrfToken(nextCsrfToken);
+      }
       const nextInventory = buildInventory(worldsResult, cubeResult);
       setSession(sessionResult.user.subject);
       setWorlds(worldsResult);
@@ -569,6 +581,11 @@ function App() {
       setSelectedId((current) => nextInventory.some((row) => row.key === current) ? current : nextInventory[0]?.key || null);
       setStatus(`${nextInventory.length} Sandbox${nextInventory.length === 1 ? "" : "es"} / ${cubeResult.sandboxes.length} runtime`);
     } catch (error) {
+      if (authConfig?.requiresToken || authConfig?.requiresCredentials) {
+        setSession(null);
+        setCsrfToken("");
+        sessionStorage.removeItem("kakurizai.csrf");
+      }
       setStatus(error instanceof Error ? error.message : String(error));
     } finally {
       setBusy(false);
@@ -577,8 +594,40 @@ function App() {
 
   async function signIn(event: React.FormEvent) {
     event.preventDefault();
-    localStorage.setItem("kakurizai.token", token);
-    await refresh();
+    setBusy(true);
+    try {
+      const result = await api<{ user: { subject: string }; csrfToken?: string | null }>("/api/auth/login", {
+        method: "POST",
+        body: authConfig?.requiresCredentials
+          ? { username: username.trim(), password, totp: mfaCode.trim() || undefined }
+          : { token: token.trim(), totp: mfaCode.trim() || undefined }
+      });
+      setSession(result.user.subject);
+      const nextCsrfToken = result.csrfToken || "";
+      if (nextCsrfToken) sessionStorage.setItem("kakurizai.csrf", nextCsrfToken);
+      setCsrfToken(nextCsrfToken);
+      setToken("");
+      setPassword("");
+      setMfaCode("");
+      await refresh();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function signOut() {
+    try {
+      await api("/api/auth/logout", { method: "POST" });
+    } finally {
+      sessionStorage.removeItem("kakurizai.csrf");
+      setCsrfToken("");
+      setSession(null);
+      setWorlds([]);
+      setCube(null);
+      setStatus("Sign in required");
+    }
   }
 
   async function openCreateMenu() {
@@ -871,23 +920,54 @@ function App() {
     }
   }
 
-  if (authConfig?.requiresToken && !session) {
+  const authRequired = Boolean(authConfig?.requiresToken || authConfig?.requiresCredentials);
+  const canSubmitAuth = authConfig?.requiresCredentials
+    ? username.trim() && password && (!authConfig?.mfaRequired || mfaCode.trim())
+    : token.trim() && (!authConfig?.mfaRequired || mfaCode.trim());
+
+  if (authRequired && !session) {
     return (
       <div className="loginPage">
         <form className="loginPanel" onSubmit={signIn}>
           <div className="mark"><Shield size={22} /></div>
           <h1>KakuriZai Console</h1>
-          <p>{authConfig.label}</p>
+          <p>{status === "Sign in required" ? authConfig.label : status}</p>
           <div className="authMeta">
             <span>Provider</span><strong>{authConfig.provider}</strong>
             <span>Issuer</span><strong>{authConfig.issuer || "-"}</strong>
             <span>Audience</span><strong>{authConfig.audience || "-"}</strong>
           </div>
-          <label>
-            Bearer token
-            <input value={token} onChange={(event) => setToken(event.target.value)} placeholder="eyJ..." />
-          </label>
-          <button className="primary wide" type="submit"><KeyRound size={16} /> Sign in</button>
+          {authConfig.requiresCredentials ? (
+            <>
+              <label>
+                Username
+                <input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} />
+              </label>
+              <label>
+                Password
+                <input autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
+              </label>
+            </>
+          ) : (
+            <label>
+              Bearer token
+              <input value={token} onChange={(event) => setToken(event.target.value)} placeholder="eyJ..." />
+            </label>
+          )}
+          {authConfig.mfaRequired ? (
+            <label>
+              One-time code
+              <input
+                autoComplete="one-time-code"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={mfaCode}
+                onChange={(event) => setMfaCode(event.target.value)}
+                placeholder="123456"
+              />
+            </label>
+          ) : null}
+          <button className="primary wide" type="submit" disabled={busy || !canSubmitAuth}><KeyRound size={16} /> Sign in</button>
         </form>
       </div>
     );
@@ -1225,6 +1305,11 @@ function App() {
             <button className="ghost" onClick={() => void refresh()} title="Refresh" type="button" disabled={busy}>
               <RefreshCcw size={16} />
             </button>
+            {authRequired ? (
+              <button className="ghost iconButton" onClick={() => void signOut()} title="Sign out" type="button">
+                <LogOut size={16} />
+              </button>
+            ) : null}
             {!isNetworkView && selected && isPausedStatus(selected.status) ? (
               <button
                 className="ghost"
@@ -1298,7 +1383,7 @@ function App() {
               </DetailSection>
 
               <DetailSection icon={<Terminal size={16} />} title="Terminal">
-                <SandboxAccessLauncher world={selected.world} token={token} />
+                <SandboxAccessLauncher world={selected.world} />
               </DetailSection>
 
               <DetailSection icon={<Database size={16} />} title="Storage and Mounts">
@@ -1453,7 +1538,7 @@ function NetworkWorkspace({
   );
 }
 
-function SandboxAccessLauncher({ world, token }: { world?: World; token: string }) {
+function SandboxAccessLauncher({ world }: { world?: World }) {
   const [access, setAccess] = React.useState<DevAccessSession | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
@@ -1473,11 +1558,32 @@ function SandboxAccessLauncher({ world, token }: { world?: World; token: string 
     try {
       const session = await api<DevAccessSession>(`/api/worlds/${encodeURIComponent(world.id)}/dev-access`, {
         method: "POST",
-        token,
         body: { vscode: false, ssh: true }
       });
       setAccess(session);
     } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openVscodeWeb() {
+    const popup = window.open("about:blank", "_blank");
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api<{ vscodeUrl: string }>(`/api/worlds/${encodeURIComponent(world.id)}/dev-access/open`, {
+        method: "POST"
+      });
+      if (popup) {
+        popup.opener = null;
+        popup.location.href = result.vscodeUrl;
+      } else {
+        window.open(result.vscodeUrl, "_blank", "noopener,noreferrer");
+      }
+    } catch (nextError) {
+      popup?.close();
       setError(nextError instanceof Error ? nextError.message : String(nextError));
     } finally {
       setBusy(false);
@@ -1489,14 +1595,14 @@ function SandboxAccessLauncher({ world, token }: { world?: World; token: string 
       <div className="terminalLauncher accessLauncher">
         <button
           className="primary"
-          onClick={() => window.open(shellPageUrl(world.id, token), "_blank", "noopener,noreferrer")}
+          onClick={() => window.open(shellPageUrl(world.id), "_blank", "noopener,noreferrer")}
           type="button"
         >
           <Terminal size={15} />
           Open Terminal
           <ExternalLink size={14} />
         </button>
-        <button onClick={() => window.open(devAccessOpenUrl(world.id, token), "_blank", "noopener,noreferrer")} type="button">
+        <button onClick={() => void openVscodeWeb()} type="button" disabled={busy}>
           <Code2 size={15} />
           VS Code Web
           <ExternalLink size={14} />
@@ -1524,23 +1630,40 @@ function ShellPage({ worldId }: { worldId: string }) {
   const terminalRef = React.useRef<HTMLDivElement | null>(null);
   const socketRef = React.useRef<WebSocket | null>(null);
   const terminalInstanceRef = React.useRef<XTerminal | null>(null);
-  const [token] = React.useState(() => shellTokenFromLocation());
   const [session, setSession] = React.useState(1);
   const [connectionState, setConnectionState] = React.useState("connecting");
   const [worldName, setWorldName] = React.useState("");
 
   React.useEffect(() => {
-    api<World[]>("/api/worlds", { token })
+    api<World[]>("/api/worlds")
       .then((worlds) => {
         const world = worlds.find((candidate) => candidate.id === worldId);
         setWorldName(world?.name || worldId);
       })
       .catch(() => setWorldName(worldId));
-  }, [token, worldId]);
+  }, [worldId]);
+
+  React.useEffect(() => {
+    const updateViewportHeight = () => {
+      const height = window.visualViewport?.height || window.innerHeight;
+      document.documentElement.style.setProperty("--terminal-viewport-height", `${Math.max(1, Math.floor(height))}px`);
+    };
+    updateViewportHeight();
+    window.addEventListener("resize", updateViewportHeight);
+    window.visualViewport?.addEventListener("resize", updateViewportHeight);
+    window.visualViewport?.addEventListener("scroll", updateViewportHeight);
+    return () => {
+      window.removeEventListener("resize", updateViewportHeight);
+      window.visualViewport?.removeEventListener("resize", updateViewportHeight);
+      window.visualViewport?.removeEventListener("scroll", updateViewportHeight);
+      document.documentElement.style.removeProperty("--terminal-viewport-height");
+    };
+  }, []);
 
   React.useEffect(() => {
     if (!terminalRef.current) return;
     let disposed = false;
+    let fitFrame: number | null = null;
     const term = new XTerminal({
       cursorBlink: true,
       convertEol: true,
@@ -1577,7 +1700,6 @@ function ShellPage({ worldId }: { worldId: string }) {
     term.writeln(`Connecting to ${worldName || worldId}...`);
     const url = new URL(`/api/worlds/${encodeURIComponent(worldId)}/shell`, window.location.href);
     url.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    if (token) url.searchParams.set("token", token);
     const socket = new WebSocket(url);
     socketRef.current = socket;
     terminalInstanceRef.current = term;
@@ -1596,17 +1718,28 @@ function ShellPage({ worldId }: { worldId: string }) {
         // xterm can throw before the font metrics are ready.
       }
     };
+    const scheduleFit = () => {
+      if (disposed) return;
+      if (fitFrame !== null) window.cancelAnimationFrame(fitFrame);
+      fitFrame = window.requestAnimationFrame(() => {
+        fitFrame = null;
+        fit();
+      });
+    };
     const disposable = term.onData((data) => {
       send({ type: "input", data });
     });
-    const resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(fit);
+    const resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(scheduleFit);
     resizeObserver?.observe(terminalRef.current);
-    window.addEventListener("resize", fit);
+    window.addEventListener("resize", scheduleFit);
+    window.visualViewport?.addEventListener("resize", scheduleFit);
+    window.visualViewport?.addEventListener("scroll", scheduleFit);
+    const fitTimer = window.setTimeout(scheduleFit, 80);
     socket.addEventListener("open", () => {
       if (disposed) return;
       setConnectionState("connected");
+      scheduleFit();
       window.requestAnimationFrame(() => {
-        fit();
         term.focus();
       });
     });
@@ -1621,18 +1754,22 @@ function ShellPage({ worldId }: { worldId: string }) {
       setConnectionState("error");
       term.writeln("\r\nShell connection error.");
     });
-    window.requestAnimationFrame(fit);
+    scheduleFit();
     return () => {
       disposed = true;
+      if (fitFrame !== null) window.cancelAnimationFrame(fitFrame);
+      window.clearTimeout(fitTimer);
       disposable.dispose();
       resizeObserver?.disconnect();
-      window.removeEventListener("resize", fit);
+      window.removeEventListener("resize", scheduleFit);
+      window.visualViewport?.removeEventListener("resize", scheduleFit);
+      window.visualViewport?.removeEventListener("scroll", scheduleFit);
       socket.close();
       term.dispose();
       socketRef.current = null;
       terminalInstanceRef.current = null;
     };
-  }, [session, token, worldId]);
+  }, [session, worldId]);
 
   function disconnect() {
     socketRef.current?.close();
@@ -1655,7 +1792,13 @@ function ShellPage({ worldId }: { worldId: string }) {
           <button className="danger" onClick={disconnect} type="button" disabled={connectionState !== "connected"}>Disconnect</button>
         </div>
       </header>
-      <div className="terminalFrame" ref={terminalRef} />
+      <div
+        aria-label="Sandbox terminal"
+        className="terminalFrame"
+        onPointerDown={() => terminalInstanceRef.current?.focus()}
+        ref={terminalRef}
+        role="application"
+      />
     </main>
   );
 }
@@ -1665,22 +1808,8 @@ function shellWorldIdFromLocation() {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-function shellTokenFromLocation() {
-  const url = new URL(window.location.href);
-  const token = url.searchParams.get("token") || localStorage.getItem("kakurizai.token") || "";
-  if (token) localStorage.setItem("kakurizai.token", token);
-  return token;
-}
-
-function shellPageUrl(worldId: string, token: string) {
+function shellPageUrl(worldId: string) {
   const url = new URL(`/shell/${encodeURIComponent(worldId)}`, window.location.href);
-  if (token) url.searchParams.set("token", token);
-  return url.toString();
-}
-
-function devAccessOpenUrl(worldId: string, token: string) {
-  const url = new URL(`/api/worlds/${encodeURIComponent(worldId)}/dev-access/open`, window.location.href);
-  if (token) url.searchParams.set("token", token);
   return url.toString();
 }
 
@@ -2624,12 +2753,17 @@ function statusTone(status: string): "ok" | "warn" | "muted" {
 async function api<T = unknown>(path: string, options: { method?: string; token?: string | null; body?: unknown } = {}): Promise<T> {
   const headers: Record<string, string> = {};
   if (options.token) headers.Authorization = `Bearer ${options.token}`;
+  const method = options.method || "GET";
+  if (!["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase())) {
+    const csrfToken = sessionStorage.getItem("kakurizai.csrf");
+    if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
+  }
   let body: string | undefined;
   if (options.body) {
     headers["Content-Type"] = "application/json";
     body = JSON.stringify(options.body);
   }
-  const response = await fetch(path, { method: options.method || "GET", headers, body });
+  const response = await fetch(path, { method, headers, body, credentials: "same-origin" });
   const text = await response.text();
   const data = text ? JSON.parse(text) : null;
   if (!response.ok) throw new Error(`${response.status}: ${data?.error || response.statusText}`);

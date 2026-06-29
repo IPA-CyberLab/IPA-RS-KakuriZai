@@ -4,13 +4,58 @@
   "defaultBackend": "cube-sandbox-overlay",
   "studio": {
     "host": "127.0.0.1",
-    "port": 38476
+    "port": 38476,
+    "publicUrl": null,
+    "secureCookies": false,
+    "trustProxy": false,
+    "trustedProxies": [],
+    "allowedHosts": [],
+    "trustedOrigins": [],
+    "ipAllowlist": [],
+    "ipDenylist": [],
+    "rateLimit": {
+      "enabled": true,
+      "windowSeconds": 60,
+      "maxRequests": 600
+    },
+    "tls": {
+      "certFile": null,
+      "keyFile": null
+    }
   },
   "auth": {
     "provider": "self",
     "issuer": "kakurizai",
     "audience": "kakurizai-studio",
-    "secretFile": ".kakurizai/auth/self-secret"
+    "secretFile": ".kakurizai/auth/self-secret",
+    "sessionTtlSeconds": 28800,
+    "maxLoginAttempts": 12,
+    "persistSessions": true,
+    "sessionFile": ".kakurizai/auth/studio-sessions.json",
+    "rbac": {
+      "enabled": true,
+      "defaultRole": null,
+      "users": {},
+      "roles": {}
+    },
+    "totp": {
+      "enabled": false,
+      "issuer": "KakuriZai",
+      "users": {}
+    },
+    "mfa": {
+      "required": false
+    }
+  },
+  "audit": {
+    "enabled": true,
+    "logReads": false,
+    "file": ".kakurizai/audit/studio.jsonl",
+    "chain": true
+  },
+  "security": {
+    "enforceRemoteAccess": true,
+    "allowInsecureRemote": false
   },
   "cube": {
     "mode": "auto",
