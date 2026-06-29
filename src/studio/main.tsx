@@ -971,7 +971,7 @@ function App() {
     }
   }
 
-  async function replicateSelected(options: { nodes?: string[]; replicas?: number; includeHostMounts?: boolean; replace?: boolean } = {}) {
+  async function replicateSelected(options: { nodes?: string[]; replicas?: number; stateMode?: string; includeHostMounts?: boolean; replace?: boolean } = {}) {
     if (!selected?.world) return;
     setBusy(true);
     try {
@@ -980,6 +980,7 @@ function App() {
         body: {
           nodes: options.nodes || [],
           replicas: options.replicas || Math.max(1, clusterNodes.length || 1),
+          stateMode: options.stateMode || "stateful",
           includeHostMounts: Boolean(options.includeHostMounts),
           replace: Boolean(options.replace)
         }
@@ -1662,7 +1663,7 @@ function ObservabilityWorkspace({
   traces: TraceSession[];
   busy: boolean;
   onRefresh: () => Promise<void>;
-  onReplicate: (options?: { nodes?: string[]; replicas?: number; includeHostMounts?: boolean; replace?: boolean }) => Promise<void>;
+  onReplicate: (options?: { nodes?: string[]; replicas?: number; stateMode?: string; includeHostMounts?: boolean; replace?: boolean }) => Promise<void>;
   onCreateJoinToken: (options: { ttlSeconds: number; uses: number }) => Promise<{ token: string; expiresAt: string; maxUses: number }>;
   onRegisterNode: (input: Record<string, unknown>) => Promise<void>;
   onRemoveNode: (ref: string) => Promise<void>;
@@ -1907,10 +1908,11 @@ function ReplicationLauncher({
   selected: InventoryRow | null;
   nodes: ClusterNode[];
   busy: boolean;
-  onReplicate: (options?: { nodes?: string[]; replicas?: number; includeHostMounts?: boolean; replace?: boolean }) => Promise<void>;
+  onReplicate: (options?: { nodes?: string[]; replicas?: number; stateMode?: string; includeHostMounts?: boolean; replace?: boolean }) => Promise<void>;
 }) {
   const [selectedNodes, setSelectedNodes] = React.useState<string[]>([]);
   const [replicas, setReplicas] = React.useState("");
+  const [stateMode, setStateMode] = React.useState("stateful");
   const [includeHostMounts, setIncludeHostMounts] = React.useState(false);
   const [replace, setReplace] = React.useState(false);
 
@@ -1929,6 +1931,15 @@ function ReplicationLauncher({
           <label>Replicas</label>
           <input value={replicas} onChange={(event) => setReplicas(event.target.value)} inputMode="numeric" placeholder={String(selectedNodes.length || nodes.length || 1)} />
         </div>
+        <div>
+          <label>State</label>
+          <select value={stateMode} onChange={(event) => setStateMode(event.target.value)}>
+            <option value="stateful">Stateful</option>
+            <option value="runtime-snapshot">Runtime snapshot</option>
+            <option value="template-snapshot">Portable template</option>
+            <option value="definition">Definition</option>
+          </select>
+        </div>
         <label className="checkRow compactCheck">
           <input type="checkbox" checked={includeHostMounts} onChange={(event) => setIncludeHostMounts(event.target.checked)} />
           <span><strong>Host mounts</strong><small>copy mount config</small></span>
@@ -1942,6 +1953,7 @@ function ReplicationLauncher({
           onClick={() => void onReplicate({
             nodes: selectedNodes,
             replicas: Number(replicas || selectedNodes.length || nodes.length || 1),
+            stateMode,
             includeHostMounts,
             replace
           })}
