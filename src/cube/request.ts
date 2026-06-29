@@ -253,6 +253,8 @@ function replicationAnnotations(replication = {}) {
   if (state.templateId) annotations["kakurizai.replication.stateTemplateId"] = state.templateId;
   if (state.snapshotId) annotations["kakurizai.replication.runtimeSnapshotId"] = state.snapshotId;
   if (state.capturedAt) annotations["kakurizai.replication.stateCapturedAt"] = state.capturedAt;
+  if (state.capturesMemory != null) annotations["kakurizai.replication.capturesMemory"] = String(Boolean(state.capturesMemory));
+  if (state.continuousMemory != null) annotations["kakurizai.replication.continuousMemory"] = String(Boolean(state.continuousMemory));
   if (state.hydrateWorkspace != null) annotations["kakurizai.replication.hydrateWorkspace"] = String(Boolean(state.hydrateWorkspace));
   return annotations;
 }

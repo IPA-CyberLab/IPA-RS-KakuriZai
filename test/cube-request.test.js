@@ -152,6 +152,41 @@ test("cube request can launch without a host mount", async () => {
   assert.doesNotMatch(request.containers[0].args[0], /mount -t overlay/);
 });
 
+test("cube request annotates replication memory capture", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-replication-"));
+  const config = await loadConfig({ home: path.join(tmp, "home"), createSecrets: false });
+  const store = new WorldStore(config);
+  const world = await store.create({
+    name: "cube-replica",
+    backend: "cube-sandbox-overlay",
+    backendConfig: {
+      hostMount: false,
+      mountMode: "none",
+      replication: {
+        sourceWorldId: "source-1",
+        role: "replica",
+        stateMode: "direct-cubelet",
+        state: {
+          mode: "direct-cubelet",
+          templateId: "tpl-live",
+          snapshotId: "tpl-live",
+          capturedAt: "2026-06-29T00:00:00.000Z",
+          capturesMemory: true,
+          continuousMemory: false,
+          hydrateWorkspace: false
+        }
+      }
+    }
+  });
+
+  const request = buildCubeSandboxRequest(world, { template: "tpl-live", workspacePath: "/workspace" });
+
+  assert.equal(request.annotations["kakurizai.replication.stateMode"], "direct-cubelet");
+  assert.equal(request.annotations["kakurizai.replication.runtimeSnapshotId"], "tpl-live");
+  assert.equal(request.annotations["kakurizai.replication.capturesMemory"], "true");
+  assert.equal(request.annotations["kakurizai.replication.continuousMemory"], "false");
+});
+
 test("world disk size update is saved for later CubeSandbox requests", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-"));
   const source = path.join(tmp, "source");

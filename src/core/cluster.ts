@@ -325,11 +325,10 @@ async function prepareReplicationState(config, source, nodes, input = {}) {
     portableTemplateId: committedTemplate?.templateId || null,
     portableTemplateScope: committedTemplate?.distribution?.scope || [],
     directRestoredNodes: [...directRestores.values()].map((restore) => restore.nodeId || restore.nodeName).filter(Boolean),
-    memoryContinuous: false,
-    memoryCaptured: Boolean(runtimeSnapshot?.snapshotId),
-    reason: runtimeSnapshot?.snapshotId
-      ? "runtime snapshot captures rootfs and memory for replicas placed on the snapshot origin node; remote nodes use portable template state"
-      : "portable template state captures current rootfs/writable state for remote nodes"
+    directMemoryRestoredNodes: [...directRestores.values()].filter((restore) => restore.capturesMemory).map((restore) => restore.nodeId || restore.nodeName).filter(Boolean),
+    memoryContinuous: [...directRestores.values()].some((restore) => restore.continuousMemory === true),
+    memoryCaptured: Boolean(runtimeSnapshot?.snapshotId) || [...directRestores.values()].some((restore) => restore.capturesMemory === true),
+    reason: replicationStateReason(runtimeSnapshot, directRestores)
   };
   return {
     summary,
@@ -350,17 +349,21 @@ async function prepareReplicationState(config, source, nodes, input = {}) {
       if (committedTemplate?.templateId) {
         const directRestore = directRestores.get(nodeKey(node));
         if (directRestore) {
+          const capturesMemory = directRestore.capturesMemory === true;
           return {
             mode: "direct-cubelet",
             templateId: committedTemplate.templateId,
+            snapshotId: directRestore.snapshotId || directRestore.runtimeSnapshotId || committedTemplate.templateId,
             capturedAt,
-            capturesMemory: false,
-            continuousMemory: false,
+            capturesMemory,
+            continuousMemory: directRestore.continuousMemory === true,
             hydrateWorkspace: Boolean(materialized?.applied),
             workspaceSnapshotPath,
             directSandbox: directRestore.sandbox,
             executor: directRestore.executor,
-            reason: "portable template state restored directly on the target cubelet"
+            reason: capturesMemory
+              ? "runtime memory and rootfs restored directly on the target cubelet"
+              : "portable template state restored directly on the target cubelet"
           };
         }
         return {
@@ -497,6 +500,10 @@ async function restoreDirectReplicas(config, source, nodes, context) {
       nodeId: node.nodeId || node.id,
       nodeName: node.name,
       executor,
+      capturesMemory: boolFromResponse(response.capturesMemory ?? response.captures_memory ?? response.memoryCaptured ?? response.memory_captured, false),
+      continuousMemory: boolFromResponse(response.continuousMemory ?? response.continuous_memory ?? response.memoryContinuous ?? response.memory_continuous, false),
+      runtimeSnapshotId: cleanOptional(response.runtimeSnapshotId || response.runtime_snapshot_id),
+      snapshotId: cleanOptional(response.snapshotId || response.snapshot_id || response.runtimeSnapshotId || response.runtime_snapshot_id || context.commit.templateId),
       sandbox: {
         ...response,
         sandboxId,
@@ -505,6 +512,26 @@ async function restoreDirectReplicas(config, source, nodes, context) {
     });
   }
   return { restored: byNode.size === targets.length, byNode };
+}
+
+function replicationStateReason(runtimeSnapshot, directRestores) {
+  const directMemory = [...directRestores.values()].filter((restore) => restore.capturesMemory === true);
+  if (runtimeSnapshot?.snapshotId && directMemory.length) {
+    return "runtime snapshot memory and rootfs captured; remote direct restores reported memory image restoration";
+  }
+  if (runtimeSnapshot?.snapshotId) {
+    return "runtime snapshot captures rootfs and memory on the origin node; remote nodes need a direct restore hook that reports capturesMemory=true for memory failover";
+  }
+  return "portable template state captures current rootfs/writable state for remote nodes";
+}
+
+function boolFromResponse(value, fallback = false) {
+  if (value == null) return fallback;
+  if (typeof value === "boolean") return value;
+  const text = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "y", "on"].includes(text)) return true;
+  if (["0", "false", "no", "n", "off"].includes(text)) return false;
+  return fallback;
 }
 
 function definitionStatePlan(reason) {
