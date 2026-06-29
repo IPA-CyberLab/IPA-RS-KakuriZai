@@ -92,7 +92,7 @@ Sandbox commands:
   agctl apply <sandbox> [--dry-run] [--json]
   agctl lab kubernetes --name <name> [--json]
   agctl node join-token [--ttl 86400] [--uses 1]
-  agctl node join --token <token> --name <node> [--endpoint https://node:38476]
+  agctl node join --token <token> --name <node> [--endpoint https://node:38476] [--executor-lxc <container>] [--executor-ssh-host <host>]
   agctl node list [--json]
   agctl replicate <sandbox> [--node <node>] [--replicas 2] [--state-mode stateful|runtime-snapshot|template-snapshot|definition] [--include-host-mounts] [--json]
   agctl metrics [--json|--prometheus]
@@ -693,12 +693,20 @@ function executorOptionsFromArgs(args) {
   const lxcContainer = takeOption(args, "--executor-lxc") || takeOption(args, "--lxc-container");
   const cubecli = takeOption(args, "--executor-cubecli");
   const namespace = takeOption(args, "--executor-namespace");
-  if (!lxcContainer && !cubecli && !namespace) return undefined;
+  const sshHost = takeOption(args, "--executor-ssh-host");
+  const sshUser = takeOption(args, "--executor-ssh-user");
+  const sshKey = takeOption(args, "--executor-ssh-key");
+  const ssh = takeOption(args, "--executor-ssh");
+  if (!lxcContainer && !cubecli && !namespace && !sshHost && !sshUser && !sshKey && !ssh) return undefined;
   return {
-    type: lxcContainer ? "lxc" : "local",
+    type: sshHost && lxcContainer ? "ssh-lxc" : (lxcContainer ? "lxc" : "local"),
     container: lxcContainer || undefined,
     cubecli: cubecli || undefined,
-    namespace: namespace || undefined
+    namespace: namespace || undefined,
+    host: sshHost || undefined,
+    user: sshUser || undefined,
+    key: sshKey || undefined,
+    ssh: ssh || undefined
   };
 }
 

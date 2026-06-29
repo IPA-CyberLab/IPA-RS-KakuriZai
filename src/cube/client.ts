@@ -1720,6 +1720,23 @@ function directCubeCliCommand(world, config, cubeArgs) {
       args: ["exec", executor.container, "--", "bash", "-lc", commandLine]
     };
   }
+  if (executor.type === "ssh-lxc") {
+    if (!executor.host) throw new Error(`direct cubelet executor for ${world.name} requires host`);
+    if (!executor.container) throw new Error(`direct cubelet executor for ${world.name} requires container`);
+    const ssh = commandExists(executor.ssh || "ssh");
+    if (!ssh) throw new Error("direct cubelet executor is unavailable: ssh not found");
+    const cubecli = executor.cubecli || config.cubecli || "cubecli";
+    const commandLine = [
+      "export PATH=/usr/local/services/cubetoolbox/Cubelet/bin:$PATH",
+      [shellQuote(cubecli), "--namespace", shellQuote(namespace), ...cubeArgs.map(shellQuote)].join(" ")
+    ].join("; ");
+    const remoteCommand = ["lxc", "exec", shellQuote(executor.container), "--", "bash", "-lc", shellQuote(commandLine)].join(" ");
+    const destination = executor.user ? `${executor.user}@${executor.host}` : executor.host;
+    const args = ["-o", "StrictHostKeyChecking=accept-new"];
+    if (executor.key) args.push("-i", executor.key);
+    args.push(destination, remoteCommand);
+    return { command: ssh, args };
+  }
   if (executor.type === "local") {
     const cubecli = commandExists(executor.cubecli || config.cubecli || "cubecli");
     if (!cubecli) throw new Error("direct cubelet executor is unavailable: cubecli not found");

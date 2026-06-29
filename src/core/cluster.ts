@@ -628,15 +628,21 @@ function cleanOptional(value) {
 
 function normalizeExecutor(value) {
   if (!value || typeof value !== "object") return null;
-  const type = cleanOptional(value.type || (value.container || value.lxcContainer ? "lxc" : null));
+  const host = cleanOptional(value.host || value.sshHost || value.ssh_host);
+  const container = cleanOptional(value.container || value.lxcContainer || value.lxc_container);
+  const type = cleanOptional(value.type || (host && container ? "ssh-lxc" : (container ? "lxc" : null)));
   if (!type) return null;
   return {
     ...value,
     type,
-    container: cleanOptional(value.container || value.lxcContainer),
+    container,
     namespace: cleanOptional(value.namespace),
     cubecli: cleanOptional(value.cubecli),
-    lxc: cleanOptional(value.lxc)
+    lxc: cleanOptional(value.lxc),
+    host,
+    user: cleanOptional(value.user || value.sshUser || value.ssh_user),
+    key: cleanOptional(value.key || value.sshKey || value.ssh_key),
+    ssh: cleanOptional(value.ssh)
   };
 }
 
