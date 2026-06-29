@@ -25,6 +25,7 @@ export async function createWorld(config, input) {
   });
   const kubernetes = normalizeKubernetesConfig(input.kubernetes || input.k8s || {});
   const writableLayerSize = input.writableLayerSize || config.cube?.writableLayerSize || null;
+  const extraBackendConfig = input.backendConfig || {};
   const world = await store.create({
     name: input.name,
     sourcePath: input.sourcePath || requestedMounts[0]?.sourcePath,
@@ -52,7 +53,8 @@ export async function createWorld(config, input) {
       writableLayerMinimumSize: writableLayerSize,
       networkType: network.type,
       network,
-      kubernetes
+      kubernetes,
+      ...extraBackendConfig
     }
   });
   try {

@@ -221,6 +221,15 @@
       },
       "additionalProperties": false
     },
+    "observability": {
+      "type": "object",
+      "properties": {
+        "retentionSamples": { "type": "integer", "minimum": 1 },
+        "traceEvents": { "type": "integer", "minimum": 1 },
+        "tracing": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
     "cube": {
       "type": "object",
       "properties": {

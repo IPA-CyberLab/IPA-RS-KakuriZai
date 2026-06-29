@@ -164,7 +164,7 @@ test("studio self auth enforces totp, rbac, persistent session, and audit log", 
     assert.equal(sessionFile.sessions.length, 1);
     assert.equal(sessionFile.sessions[0].user.subject, "alice");
 
-    const audit = await waitForFile(path.join(tmp, "audit", "studio.jsonl"));
+    const audit = await waitForFile(path.join(tmp, "audit", "studio.jsonl"), /"status":403/);
     assert.match(audit, /"action":"auth.login"/);
     assert.match(audit, /"status":403/);
   } finally {
@@ -226,7 +226,7 @@ test("studio local auth uses password hash, totp, csrf, and audit hash chain", a
     });
     assert.equal(logoutWithoutCsrf.status, 403);
 
-    const audit = await waitForFile(path.join(tmp, "audit", "studio.jsonl"));
+    const audit = await waitForFile(path.join(tmp, "audit", "studio.jsonl"), /"hash":"[a-f0-9]{64}"/);
     assert.match(audit, /"seq":1/);
     assert.match(audit, /"hash":"[a-f0-9]{64}"/);
   } finally {
@@ -247,15 +247,17 @@ test("studio refuses remote exposure without production security", async () => {
   );
 });
 
-async function waitForFile(filePath) {
+async function waitForFile(filePath, pattern = null) {
   let lastError;
   for (let attempt = 0; attempt < 30; attempt += 1) {
     try {
-      return await fs.readFile(filePath, "utf8");
+      const content = await fs.readFile(filePath, "utf8");
+      if (!pattern || pattern.test(content)) return content;
     } catch (error) {
       lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 20));
     }
+    await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  throw lastError;
+  if (lastError) throw lastError;
+  throw new Error(`timed out waiting for ${filePath}`);
 }

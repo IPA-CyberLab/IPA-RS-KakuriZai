@@ -135,6 +135,48 @@ type CubeNode = {
   labels?: Record<string, string>;
 };
 
+type ClusterNode = {
+  id: string;
+  nodeId: string;
+  name: string;
+  status: string;
+  endpoint?: string | null;
+  ip?: string | null;
+  roles?: string[];
+  labels?: Record<string, string>;
+};
+
+type ObservabilitySnapshot = {
+  sample: {
+    ts: string;
+    summary: {
+      worlds: number;
+      replicas: number;
+      running: number;
+      failed: number;
+      nodes: number;
+      healthyNodes: number;
+    };
+    nodes: Array<Record<string, unknown>>;
+    worlds: Array<Record<string, unknown>>;
+    storage?: CubeStorage[];
+    cube?: Record<string, unknown>;
+  };
+  history: Array<ObservabilitySnapshot["sample"]>;
+};
+
+type TraceSession = {
+  id: string;
+  name: string;
+  targetType: string;
+  target?: string | null;
+  enabled: boolean;
+  startedAt: string;
+  expiresAt?: string;
+  stoppedAt?: string;
+  events?: Array<Record<string, unknown>>;
+};
+
 type CubeStorage = {
   nodeId: string;
   nodeIp: string;
@@ -402,7 +444,7 @@ type InventoryRow = {
 };
 
 type StateFilter = "all" | "running" | "paused" | "other";
-type AppView = "sandboxes" | "network";
+type AppView = "sandboxes" | "network" | "observability";
 type ThemeMode = "dark" | "light";
 type DnsPresetKey = "default" | "cloudflare" | "google" | "quad9" | "custom";
 
@@ -448,6 +490,9 @@ function App() {
   const [theme, setTheme] = React.useState<ThemeMode>(() => localStorage.getItem("kakurizai.theme") === "light" ? "light" : "dark");
   const [worlds, setWorlds] = React.useState<World[]>([]);
   const [cube, setCube] = React.useState<CubeInspect | null>(null);
+  const [clusterNodes, setClusterNodes] = React.useState<ClusterNode[]>([]);
+  const [observability, setObservability] = React.useState<ObservabilitySnapshot | null>(null);
+  const [traces, setTraces] = React.useState<TraceSession[]>([]);
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [status, setStatus] = React.useState("Starting");
   const [busy, setBusy] = React.useState(false);
@@ -564,10 +609,13 @@ function App() {
   async function refresh() {
     setBusy(true);
     try {
-      const [sessionResult, worldsResult, cubeResult] = await Promise.all([
+      const [sessionResult, worldsResult, cubeResult, nodesResult, metricsResult, tracesResult] = await Promise.all([
         api<{ user: { subject: string } }>("/api/session", { token }),
         api<World[]>("/api/worlds", { token }),
-        api<CubeInspect>("/api/cube/inspect", { token })
+        api<CubeInspect>("/api/cube/inspect", { token }),
+        api<ClusterNode[]>("/api/cluster/nodes", { token }),
+        api<ObservabilitySnapshot>("/api/observability/metrics", { token }),
+        api<TraceSession[]>("/api/observability/traces", { token })
       ]);
       const nextCsrfToken = (sessionResult as { csrfToken?: string | null }).csrfToken || "";
       if (nextCsrfToken) {
@@ -578,6 +626,9 @@ function App() {
       setSession(sessionResult.user.subject);
       setWorlds(worldsResult);
       setCube(cubeResult);
+      setClusterNodes(nodesResult);
+      setObservability(metricsResult);
+      setTraces(tracesResult);
       setSelectedId((current) => nextInventory.some((row) => row.key === current) ? current : nextInventory[0]?.key || null);
       setStatus(`${nextInventory.length} Sandbox${nextInventory.length === 1 ? "" : "es"} / ${cubeResult.sandboxes.length} runtime`);
     } catch (error) {
@@ -920,6 +971,51 @@ function App() {
     }
   }
 
+  async function replicateSelected() {
+    if (!selected?.world) return;
+    setBusy(true);
+    try {
+      const result = await api<{ created: World[]; existing: World[]; skipped: Array<{ reason: string }> }>(`/api/worlds/${encodeURIComponent(selected.world.id)}/replicate`, {
+        method: "POST",
+        body: { replicas: Math.max(1, clusterNodes.length || 1) }
+      });
+      setStatus(`Replicated ${selected.name}: ${result.created.length} created / ${result.existing.length} existing`);
+      await refresh();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function startTraceSession(targetType: string, target?: string | null) {
+    setBusy(true);
+    try {
+      const trace = await api<TraceSession>("/api/observability/traces", {
+        method: "POST",
+        body: { targetType, target: target || null, ttlSeconds: 60 * 60 }
+      });
+      setTraces((current) => [trace, ...current]);
+      setStatus(`Tracing ${trace.targetType}:${trace.target || "*"}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function stopTraceSession(id: string) {
+    setBusy(true);
+    try {
+      const trace = await api<TraceSession>(`/api/observability/traces/${encodeURIComponent(id)}/stop`, { method: "POST" });
+      setTraces((current) => current.map((item) => item.id === trace.id ? trace : item));
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const authRequired = Boolean(authConfig?.requiresToken || authConfig?.requiresCredentials);
   const canSubmitAuth = authConfig?.requiresCredentials
     ? username.trim() && password && (!authConfig?.mfaRequired || mfaCode.trim())
@@ -974,13 +1070,16 @@ function App() {
   }
 
   const isNetworkView = activeView === "network";
-  const titleLabel = isNetworkView ? "Network" : selected ? selected.name : "No sandbox selected";
-  const subtitleLabel = isNetworkView
+  const isObservabilityView = activeView === "observability";
+  const titleLabel = isObservabilityView ? "Observability" : isNetworkView ? "Network" : selected ? selected.name : "No sandbox selected";
+  const subtitleLabel = isObservabilityView
+    ? `${observability?.sample.summary.nodes || 0} nodes / ${observability?.sample.summary.replicas || 0} replicas`
+    : isNetworkView
     ? selected ? `${selected.name} / ${selected.runtime?.sandboxIp || selected.sandboxId || subtitleForSandbox(selected)}` : status
     : selected ? subtitleForSandbox(selected) : status;
 
   return (
-    <main className={`workbench ${isNetworkView ? "networkWorkbench" : ""}`}>
+    <main className={`workbench ${isNetworkView || isObservabilityView ? "networkWorkbench" : ""}`}>
       <aside className="activityBar">
         <button
           ref={activityMenuRef}
@@ -1017,6 +1116,18 @@ function App() {
           type="button"
         >
           <Network size={21} />
+        </button>
+        <button
+          className={`activityButton ${activeView === "observability" ? "active" : ""}`}
+          onClick={() => {
+            setActiveView("observability");
+            setActionMenuOpen(false);
+            setLaunchMenuOpen(false);
+          }}
+          title="Observability"
+          type="button"
+        >
+          <Activity size={21} />
         </button>
       </aside>
 
@@ -1248,7 +1359,7 @@ function App() {
         </form>
       ) : null}
 
-      {!isNetworkView ? (
+      {!isNetworkView && !isObservabilityView ? (
         <section className="sandboxPanel">
           <header className="panelHeader">
             <span>Sandboxes</span>
@@ -1310,7 +1421,13 @@ function App() {
                 <LogOut size={16} />
               </button>
             ) : null}
-            {!isNetworkView && selected && isPausedStatus(selected.status) ? (
+            {isObservabilityView ? (
+              <button className="ghost" onClick={() => void refresh()} title="Refresh metrics" type="button" disabled={busy}>
+                <Activity size={16} />
+                Metrics
+              </button>
+            ) : null}
+            {!isNetworkView && !isObservabilityView && selected && isPausedStatus(selected.status) ? (
               <button
                 className="ghost"
                 onClick={() => void resumeSelected()}
@@ -1321,7 +1438,7 @@ function App() {
                 <Play size={16} />
                 Resume
               </button>
-            ) : !isNetworkView && selected ? (
+            ) : !isNetworkView && !isObservabilityView && selected ? (
               <button
                 className="ghost"
                 onClick={() => void pauseSelected()}
@@ -1333,7 +1450,7 @@ function App() {
                 Pause
               </button>
             ) : null}
-            {!isNetworkView && selected ? (
+            {!isNetworkView && !isObservabilityView && selected ? (
               <button className="danger" onClick={() => void destroySelected()} type="button" disabled={busy || !selected.sandboxId && !selected.world}>
                 <Trash2 size={16} />
                 Delete
@@ -1343,7 +1460,19 @@ function App() {
         </header>
 
         <section className="editorPane">
-          {isNetworkView ? (
+          {isObservabilityView ? (
+            <ObservabilityWorkspace
+              selected={selected}
+              nodes={clusterNodes}
+              metrics={observability}
+              traces={traces}
+              busy={busy}
+              onRefresh={() => refresh()}
+              onReplicate={replicateSelected}
+              onStartTrace={startTraceSession}
+              onStopTrace={stopTraceSession}
+            />
+          ) : isNetworkView ? (
             <NetworkWorkspace
               selected={selected}
               rows={inventory}
@@ -1456,6 +1585,148 @@ function DetailSection({ icon, title, children }: { icon: React.ReactNode; title
       </header>
       {children}
     </section>
+  );
+}
+
+function ObservabilityWorkspace({
+  selected,
+  nodes,
+  metrics,
+  traces,
+  busy,
+  onRefresh,
+  onReplicate,
+  onStartTrace,
+  onStopTrace
+}: {
+  selected: InventoryRow | null;
+  nodes: ClusterNode[];
+  metrics: ObservabilitySnapshot | null;
+  traces: TraceSession[];
+  busy: boolean;
+  onRefresh: () => Promise<void>;
+  onReplicate: () => Promise<void>;
+  onStartTrace: (targetType: string, target?: string | null) => Promise<void>;
+  onStopTrace: (id: string) => Promise<void>;
+}) {
+  const sample = metrics?.sample;
+  return (
+    <div className="sandboxDashboard">
+      <div className="overviewGrid">
+        <Kpi icon={<Server size={16} />} label="Nodes" value={String(sample?.summary.nodes ?? nodes.length)} />
+        <Kpi icon={<Activity size={16} />} label="Healthy" value={String(sample?.summary.healthyNodes ?? "-")} tone="ok" />
+        <Kpi icon={<Box size={16} />} label="Worlds" value={String(sample?.summary.worlds ?? "-")} />
+        <Kpi icon={<Layers size={16} />} label="Replicas" value={String(sample?.summary.replicas ?? "-")} />
+        <Kpi icon={<Database size={16} />} label="Samples" value={String(metrics?.history?.length || 0)} />
+        <Kpi icon={<Route size={16} />} label="Traces" value={String(traces.length)} />
+      </div>
+
+      <DetailSection icon={<Activity size={16} />} title="Cluster Actions">
+        <div className="actionStrip">
+          <button className="ghost" onClick={() => void onRefresh()} type="button" disabled={busy}>
+            <RefreshCcw size={15} />
+            Refresh
+          </button>
+          <button className="primary" onClick={() => void onReplicate()} type="button" disabled={busy || !selected?.world || nodes.length === 0}>
+            <Layers size={15} />
+            Replicate Selected
+          </button>
+          <button className="ghost" onClick={() => void onStartTrace("all", null)} type="button" disabled={busy}>
+            <Route size={15} />
+            Trace All
+          </button>
+          <button className="ghost" onClick={() => void onStartTrace("world", selected?.world?.id || null)} type="button" disabled={busy || !selected?.world}>
+            <Route size={15} />
+            Trace Selected
+          </button>
+        </div>
+      </DetailSection>
+
+      <DetailSection icon={<Server size={16} />} title="Nodes">
+        <div className="dataTable">
+          <div className="dataRow head">
+            <span>Node</span>
+            <span>Status</span>
+            <span>Usage</span>
+            <span>Replicas</span>
+          </div>
+          {(sample?.nodes || nodes).map((node, index) => (
+            <div className="dataRow" key={String(node.id || node.nodeId || index)}>
+              <span>{String(node.name || node.nodeId || node.id || "-")}</span>
+              <span>{String(node.status || "-")}</span>
+              <span>{nodeUsageText(node)}</span>
+              <span>{String(node.replicaCount ?? "-")}</span>
+            </div>
+          ))}
+        </div>
+      </DetailSection>
+
+      <DetailSection icon={<Box size={16} />} title="World Metrics">
+        <div className="dataTable">
+          <div className="dataRow head">
+            <span>World</span>
+            <span>Status</span>
+            <span>Placement</span>
+            <span>Upper</span>
+          </div>
+          {(sample?.worlds || []).map((world, index) => (
+            <div className="dataRow" key={String(world.id || index)}>
+              <span>{String(world.name || "-")}</span>
+              <span>{String(world.status || "-")}</span>
+              <span>{String(world.nodeId || world.replicaOf || "-")}</span>
+              <span>{formatBytes(Number(world.upperBytes || 0))}</span>
+            </div>
+          ))}
+        </div>
+      </DetailSection>
+
+      <DetailSection icon={<Route size={16} />} title="Traces">
+        <TraceLauncher selected={selected} busy={busy} onStartTrace={onStartTrace} />
+        <div className="dataTable">
+          <div className="dataRow head">
+            <span>Trace</span>
+            <span>Target</span>
+            <span>Events</span>
+            <span>State</span>
+          </div>
+          {traces.map((trace) => (
+            <div className="dataRow" key={trace.id}>
+              <span>{trace.id}</span>
+              <span>{trace.targetType}:{trace.target || "*"}</span>
+              <span>{String(trace.events?.length || 0)} / {trace.events?.[trace.events.length - 1]?.path ? String(trace.events[trace.events.length - 1].path) : "-"}</span>
+              <span>
+                {trace.enabled ? (
+                  <button className="ghost compactButton" onClick={() => void onStopTrace(trace.id)} type="button" disabled={busy}>Stop</button>
+                ) : "stopped"}
+              </span>
+            </div>
+          ))}
+        </div>
+      </DetailSection>
+    </div>
+  );
+}
+
+function TraceLauncher({ selected, busy, onStartTrace }: { selected: InventoryRow | null; busy: boolean; onStartTrace: (targetType: string, target?: string | null) => Promise<void> }) {
+  const [targetType, setTargetType] = React.useState("all");
+  const [target, setTarget] = React.useState("");
+  React.useEffect(() => {
+    if (targetType === "world") setTarget(selected?.world?.id || "");
+  }, [targetType, selected?.world?.id]);
+  return (
+    <div className="traceLauncher">
+      <select value={targetType} onChange={(event) => setTargetType(event.target.value)}>
+        <option value="all">all</option>
+        <option value="world">world</option>
+        <option value="node">node</option>
+        <option value="path">path</option>
+      </select>
+      <input value={target} onChange={(event) => setTarget(event.target.value)} placeholder={targetType === "all" ? "*" : "target"} disabled={targetType === "all"} />
+      <button className="ghost" onClick={() => void onStartTrace(targetType, targetType === "all" ? null : target)} type="button" disabled={busy || (targetType !== "all" && !target.trim())}>
+        <Route size={15} />
+        Start Trace
+      </button>
+    </div>
   );
 }
 
@@ -2788,6 +3059,16 @@ function formatBytesNullable(bytes?: number | null) {
 
 function formatDiskMb(value?: number | null) {
   return value == null ? "-" : `${value} MB`;
+}
+
+function nodeUsageText(node: Record<string, unknown>) {
+  const parts = [
+    node.quotaCpuUsage != null ? `cpu ${node.quotaCpuUsage}` : null,
+    node.quotaMemUsage != null ? `mem ${node.quotaMemUsage} MB` : null,
+    node.dataDiskUsagePer != null ? `data ${node.dataDiskUsagePer}%` : null,
+    node.storageDiskUsagePer != null ? `storage ${node.storageDiskUsagePer}%` : null
+  ].filter(Boolean);
+  return parts.length ? parts.join(" / ") : "-";
 }
 
 function formatDate(value?: string | null) {

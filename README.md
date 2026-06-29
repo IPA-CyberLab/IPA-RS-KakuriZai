@@ -152,6 +152,37 @@ Use a reverse proxy with HTTPS or configure built-in TLS:
 
 Examples live in `config/auth0.example.json` and `config/cognito.example.json`.
 
+## Cluster Replication And Observability
+
+KakuriZai can keep a joined-node registry and replicate a saved sandbox across those nodes. Issue a join token on the controller, then register nodes:
+
+```sh
+agctl node join-token --uses 3
+agctl node join --token "$TOKEN" --name worker-a --id ins-a --ip 10.0.0.10
+agctl node list
+```
+
+Replicate a sandbox to joined nodes:
+
+```sh
+agctl replicate demo --replicas 2
+agctl replicate demo --node worker-a --replace --json
+```
+
+For CubeMaster-backed sandboxes, replica requests carry placement metadata plus `ins_id`/`ins_ip` and the Cube debug annotation so CubeMaster can schedule the sandbox on the requested node. Replicas are tracked as normal worlds with `kakurizai.replicaOf`, `kakurizai.replication.group`, and placement metadata.
+
+Studio includes an Observability view for node, sandbox, and replica metrics. CLI and API access are also available:
+
+```sh
+agctl metrics
+agctl metrics --prometheus
+agctl trace start --target world --ref <sandbox-id>
+agctl trace list --json
+agctl trace stop <trace-id>
+```
+
+Metrics are retained under `$KAKURIZAI_HOME/store/observability/metrics.json`; trace sessions and events are stored in `$KAKURIZAI_HOME/store/observability/traces.json`. The Studio API exposes `/api/observability/metrics`, `/api/observability/prometheus`, and `/api/observability/traces`.
+
 ## Sandbox Model
 
 Each sandbox stores:

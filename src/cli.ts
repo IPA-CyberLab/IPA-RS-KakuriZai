@@ -9,6 +9,8 @@ import { generateTotpSecret, totpAuthUrl } from "./auth/totp.js";
 import { commandExists } from "./core/fs.js";
 import { parseBooleanOption } from "./core/network.js";
 import { initConfigFile, loadConfig } from "./core/config.js";
+import { createJoinToken, joinNode, listClusterNodes, removeClusterNode, replicateWorld } from "./core/cluster.js";
+import { collectMetrics, listTraces, prometheusText, startTrace, stopTrace } from "./core/observability.js";
 import { runCommand } from "./core/process.js";
 import {
   readSandboxManifest,
@@ -53,6 +55,10 @@ export async function main(argv) {
   if (command === "apply") return apply(config, argv.slice(1));
   if (command === "lab") return lab(config, argv.slice(1));
   if (command === "k8s-lab") return kubernetesLab(config, argv.slice(1));
+  if (command === "node" || command === "nodes" || command === "cluster") return node(config, argv.slice(1));
+  if (command === "replicate" || command === "replica") return replicate(config, argv.slice(1));
+  if (command === "metrics" || command === "observability") return metrics(config, argv.slice(1));
+  if (command === "trace" || command === "traces") return trace(config, argv.slice(1));
   if (command === "export" || command === "manifest") return manifest(config, argv.slice(1));
   if (command === "terraform") return terraform(config, argv.slice(1));
   if (command === "auth") return auth(config, argv.slice(1));
@@ -85,6 +91,14 @@ Sandbox commands:
   agctl changed <sandbox> [--json]
   agctl apply <sandbox> [--dry-run] [--json]
   agctl lab kubernetes --name <name> [--json]
+  agctl node join-token [--ttl 86400] [--uses 1]
+  agctl node join --token <token> --name <node> [--endpoint https://node:38476]
+  agctl node list [--json]
+  agctl replicate <sandbox> [--node <node>] [--replicas 2] [--include-host-mounts] [--json]
+  agctl metrics [--json|--prometheus]
+  agctl trace start --target <all|world|node> [--ref <id>] [--ttl 3600]
+  agctl trace list [--json]
+  agctl trace stop <trace-id>
   agctl pause <sandbox> [--json]
   agctl resume <sandbox> [--json]
   agctl remove <sandbox> --yes
@@ -309,6 +323,198 @@ async function kubernetesLab(config, args) {
   for (const world of result.worlds) {
     console.log(`${world.name}\t${world.status}\t${world.sandbox?.id || world.sandbox?.status || "none"}`);
   }
+}
+
+async function node(config, args) {
+  const subcommand = args.shift() || "list";
+  if (subcommand === "list" || subcommand === "ls") {
+    const nodes = await listClusterNodes(config);
+    if (args.includes("--json")) {
+      console.log(JSON.stringify(nodes, null, 2));
+      return;
+    }
+    if (!nodes.length) {
+      console.log("no joined nodes");
+      return;
+    }
+    for (const item of nodes) {
+      console.log([
+        item.name,
+        item.status,
+        item.nodeId,
+        item.ip || "-",
+        item.endpoint || "-",
+        (item.roles || []).join(",") || "-"
+      ].join("\t"));
+    }
+    return;
+  }
+  if (subcommand === "join-token" || subcommand === "token") {
+    const ttl = Number(takeOption(args, "--ttl") || takeOption(args, "--ttl-seconds") || 24 * 60 * 60);
+    const uses = Number(takeOption(args, "--uses") || 1);
+    const result = await createJoinToken(config, { ttlSeconds: ttl, uses, name: takeOption(args, "--name") || undefined });
+    if (args.includes("--json")) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    console.log(result.token);
+    return;
+  }
+  if (subcommand === "join" || subcommand === "register") {
+    const token = takeOption(args, "--token") || process.env.KAKURIZAI_JOIN_TOKEN;
+    const name = takeOption(args, "--name") || takeOption(args, "-n");
+    if (!name) throw new Error("node join requires --name");
+    const result = await joinNode(config, {
+      token,
+      nodeId: takeOption(args, "--id") || takeOption(args, "--node-id") || name,
+      name,
+      endpoint: takeOption(args, "--endpoint") || takeOption(args, "--url") || undefined,
+      publicHost: takeOption(args, "--public-host") || undefined,
+      ip: takeOption(args, "--ip") || undefined,
+      roles: splitOptionValues(takeRepeatedOption(args, "--role")),
+      labels: parseKeyValueOptions(takeRepeatedOption(args, "--label")),
+      capacity: parseKeyValueOptions(takeRepeatedOption(args, "--capacity"))
+    });
+    if (args.includes("--json")) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    console.log(`joined ${result.name}\t${result.nodeId}`);
+    return;
+  }
+  if (subcommand === "remove" || subcommand === "rm") {
+    const ref = args.find((arg) => !arg.startsWith("-"));
+    if (!ref) throw new Error("node remove requires <node>");
+    const result = await removeClusterNode(config, ref);
+    if (args.includes("--json")) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    console.log(`removed node ${result.name}`);
+    return;
+  }
+  throw new Error("node supports: list, join-token, join, remove");
+}
+
+async function replicate(config, args) {
+  const nodes = splitOptionValues(takeRepeatedOption(args, "--node"));
+  const replicas = takeOption(args, "--replicas") || takeOption(args, "--count");
+  const includeHostMounts = takeFlag(args, "--include-host-mounts");
+  const replace = takeFlag(args, "--replace");
+  const failFast = takeFlag(args, "--fail-fast");
+  const json = args.includes("--json");
+  const ref = args.find((arg) => !arg.startsWith("-"));
+  if (!ref) throw new Error("replicate requires <sandbox>");
+  const result = await replicateWorld(config, ref, {
+    nodes,
+    replicas: replicas == null ? undefined : Number(replicas),
+    includeHostMounts,
+    replace,
+    continueOnError: !failFast
+  });
+  if (json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  console.log(`replicated ${result.source.name} to ${result.created.length} node${result.created.length === 1 ? "" : "s"}`);
+  for (const world of result.created) {
+    console.log(`created\t${world.name}\t${world.status}\t${world.backendConfig?.placement?.nodeName || "-"}`);
+  }
+  for (const world of result.existing) {
+    console.log(`existing\t${world.name}\t${world.status}\t${world.backendConfig?.placement?.nodeName || "-"}`);
+  }
+  for (const item of result.skipped) {
+    console.log(`skipped\t${item.node.name}\t${item.reason}`);
+  }
+}
+
+async function metrics(config, args) {
+  const snapshot = await collectMetrics(config);
+  if (args.includes("--prometheus")) {
+    console.log(prometheusText(snapshot));
+    return;
+  }
+  if (args.includes("--json")) {
+    console.log(JSON.stringify(snapshot, null, 2));
+    return;
+  }
+  console.log(`worlds=${snapshot.sample.summary.worlds} replicas=${snapshot.sample.summary.replicas} nodes=${snapshot.sample.summary.nodes} healthy=${snapshot.sample.summary.healthyNodes}`);
+  for (const node of snapshot.sample.nodes) {
+    console.log([
+      "node",
+      node.name,
+      node.status || "-",
+      node.nodeId || node.id || "-",
+      node.replicaCount || 0,
+      node.quotaCpuUsage ?? "-",
+      node.quotaMemUsage ?? "-"
+    ].join("\t"));
+  }
+  for (const world of snapshot.sample.worlds) {
+    console.log([
+      "world",
+      world.name,
+      world.status,
+      world.nodeId || "-",
+      world.replicaOf || "-",
+      formatBytes(world.upperBytes || 0)
+    ].join("\t"));
+  }
+}
+
+async function trace(config, args) {
+  const subcommand = args.shift() || "list";
+  if (subcommand === "list" || subcommand === "ls") {
+    const traces = await listTraces(config);
+    if (args.includes("--json")) {
+      console.log(JSON.stringify(traces, null, 2));
+      return;
+    }
+    if (!traces.length) {
+      console.log("no traces");
+      return;
+    }
+    for (const item of traces) {
+      console.log([
+        item.id,
+        item.enabled ? "active" : "stopped",
+        item.targetType,
+        item.target || "*",
+        (item.events || []).length,
+        item.startedAt
+      ].join("\t"));
+    }
+    return;
+  }
+  if (subcommand === "start") {
+    const targetType = takeOption(args, "--target") || takeOption(args, "--type") || "all";
+    const target = takeOption(args, "--ref") || takeOption(args, "--id") || takeOption(args, "--world") || takeOption(args, "--node") || null;
+    const ttl = Number(takeOption(args, "--ttl") || 60 * 60);
+    const result = await startTrace(config, {
+      name: takeOption(args, "--name") || undefined,
+      targetType,
+      target,
+      ttlSeconds: ttl
+    });
+    if (args.includes("--json")) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    console.log(`trace ${result.id} ${result.targetType}:${result.target || "*"}`);
+    return;
+  }
+  if (subcommand === "stop") {
+    const id = args.find((arg) => !arg.startsWith("-"));
+    if (!id) throw new Error("trace stop requires <trace-id>");
+    const result = await stopTrace(config, id);
+    if (args.includes("--json")) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    console.log(`stopped ${result.id}`);
+    return;
+  }
+  throw new Error("trace supports: list, start, stop");
 }
 
 async function manifest(config, args) {

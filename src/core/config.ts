@@ -73,6 +73,11 @@ export function defaultConfig(home = defaultHome()) {
       enforceRemoteAccess: true,
       allowInsecureRemote: false
     },
+    observability: {
+      retentionSamples: 288,
+      traceEvents: 2000,
+      tracing: true
+    },
     cube: {
       mode: process.env.KAKURIZAI_CUBE_MODE || "auto",
       cubecli: process.env.KAKURIZAI_CUBECLI || "cubecli",
@@ -130,6 +135,7 @@ export function mergeConfig(base, override) {
   result.auth.users = { ...base.auth?.users, ...(override?.auth?.users || {}) };
   result.audit = { ...base.audit, ...(override?.audit || {}) };
   result.security = { ...base.security, ...(override?.security || {}) };
+  result.observability = { ...base.observability, ...(override?.observability || {}) };
   result.cube = { ...base.cube, ...(override?.cube || {}) };
   result.isolatedAgent = { ...base.isolatedAgent, ...(override?.isolatedAgent || {}) };
   return result;

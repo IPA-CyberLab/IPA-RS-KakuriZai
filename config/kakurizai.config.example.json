@@ -57,6 +57,11 @@
     "enforceRemoteAccess": true,
     "allowInsecureRemote": false
   },
+  "observability": {
+    "retentionSamples": 288,
+    "traceEvents": 2000,
+    "tracing": true
+  },
   "cube": {
     "mode": "auto",
     "cubecli": "cubecli",

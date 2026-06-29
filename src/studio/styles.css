@@ -1059,6 +1059,26 @@ label {
   gap: 10px;
 }
 
+.actionStrip,
+.traceLauncher {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.traceLauncher {
+  display: grid;
+  grid-template-columns: minmax(110px, 160px) minmax(160px, 1fr) auto;
+}
+
+.compactButton {
+  min-height: 28px;
+  padding: 5px 8px;
+  font-size: 11px;
+}
+
 .metric {
   min-width: 0;
   display: grid;
@@ -1939,7 +1959,8 @@ label {
 
   .metricStrip,
   .metricStrip.compact,
-  .diskEditor {
+  .diskEditor,
+  .traceLauncher {
     grid-template-columns: 1fr;
     gap: 8px;
   }
