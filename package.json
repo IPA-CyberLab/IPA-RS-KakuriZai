@@ -10,7 +10,8 @@
     "agctl": "npm run build --silent && node ./dist/bin/agctl.js",
     "build": "tsc -p tsconfig.json && vite build && chmod +x dist/bin/agctl.js",
     "start": "npm run build --silent && node ./dist/bin/agctl.js studio",
-    "test": "npm run build --silent && node --test"
+    "test": "npm run build --silent && node --test",
+    "test:responsive": "playwright test --config playwright.config.mjs"
   },
   "engines": {
     "node": ">=20"
@@ -28,6 +29,7 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.56.1",
     "@types/node": "^25.0.3",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",

@@ -46,9 +46,109 @@ Automation can use `--json` on `list`, `show`, `changed`, `apply`, `lab kubernet
 Authentication is provider-based. Configure `auth.provider` in `KAKURIZAI_CONFIG` or `$KAKURIZAI_HOME/config.json`.
 
 - `self`: local HMAC JWT issuer. Use `agctl auth token`.
+- `local`: built-in username/password realm with scrypt password hashes and per-user TOTP.
 - `auth0`: normalized to OIDC with `domain` and `audience`.
 - `cognito`: normalized to OIDC with `region`, `userPoolId`, and `clientId`.
 - `oidc`: direct issuer/JWKS configuration.
+
+Studio does not put bearer tokens in the listening URL. Sign in once; the browser receives an HttpOnly `SameSite=Strict` session cookie and mutating API requests require an `X-CSRF-Token` header. Web terminals use the same cookie session instead of `?token=`.
+
+For a Proxmox-style local realm, create a password hash and TOTP secret:
+
+```sh
+printf '%s' 'change-this-password' | agctl auth password-hash --stdin
+agctl auth totp-secret --subject alice
+```
+
+```json
+{
+  "auth": {
+    "provider": "local",
+    "users": {
+      "alice": {
+        "passwordHash": "scrypt$N=16384,r=8,p=1,l=32$...",
+        "roles": ["admin"],
+        "totp": { "secret": "BASE32SECRET" }
+      }
+    },
+    "rbac": { "enabled": true }
+  }
+}
+```
+
+Self-auth tokens issued by `agctl auth token` carry the `admin` role by default. You can restrict tokens:
+
+```sh
+agctl auth token --subject alice --role viewer
+agctl auth token --subject ops --role operator --ttl 3600
+```
+
+Built-in roles are:
+
+- `viewer`: read-only Studio/world access.
+- `operator`: create/update/pause/resume/apply/shell/dev-access.
+- `admin`: operator permissions plus delete/admin.
+
+For self-auth TOTP, generate a secret and put it in config:
+
+```sh
+agctl auth totp-secret --subject alice
+```
+
+```json
+{
+  "auth": {
+    "provider": "self",
+    "totp": {
+      "enabled": true,
+      "users": {
+        "alice": { "secret": "BASE32SECRET" }
+      }
+    }
+  }
+}
+```
+
+For OIDC/Auth0/Cognito, prefer MFA at the identity provider. Set `"mfa": { "required": true }` to require an `amr`/`acr` MFA claim. RBAC can come from token `roles`, `groups`, `scope`, or explicit `auth.rbac.users` bindings.
+
+Studio sessions are persisted in `$KAKURIZAI_HOME/auth/studio-sessions.json` by default. Audit logs are JSONL at `$KAKURIZAI_HOME/audit/studio.jsonl`; write operations are logged by default, reads can be enabled with `"audit": { "logReads": true }`, and audit entries include a hash chain by default.
+
+The default listener is loopback-only. To make Studio reachable from another device:
+
+```sh
+agctl studio --host 0.0.0.0
+```
+
+Remote exposure is fail-closed. When Studio is bound to `0.0.0.0`, `::`, a LAN IP, or a public IP, startup is refused unless all of these are true:
+
+- authentication is not `none`;
+- MFA covers the login provider;
+- RBAC, persistent sessions, and audit logging are enabled;
+- built-in TLS is configured, or `studio.publicUrl` is HTTPS and `studio.secureCookies` is true;
+- the public host is pinned with `studio.publicUrl` or `studio.allowedHosts`.
+
+Use a reverse proxy with HTTPS or configure built-in TLS:
+
+```json
+{
+  "studio": {
+    "host": "0.0.0.0",
+    "port": 38476,
+    "publicUrl": "https://kakurizai.example.com/",
+    "secureCookies": true,
+    "trustProxy": true,
+    "trustedProxies": ["127.0.0.1"],
+    "allowedHosts": ["kakurizai.example.com"],
+    "trustedOrigins": ["https://kakurizai.example.com"],
+    "ipAllowlist": [],
+    "ipDenylist": [],
+    "tls": {
+      "certFile": "/etc/kakurizai/tls.crt",
+      "keyFile": "/etc/kakurizai/tls.key"
+    }
+  }
+}
+```
 
 Examples live in `config/auth0.example.json` and `config/cognito.example.json`.
 

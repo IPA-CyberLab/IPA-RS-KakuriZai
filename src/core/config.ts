@@ -20,13 +20,58 @@ export function defaultConfig(home = defaultHome()) {
     defaultBackend: defaultBackendForPlatform(),
     studio: {
       host: process.env.KAKURIZAI_HOST || "127.0.0.1",
-      port: Number(process.env.KAKURIZAI_PORT || 38476)
+      port: Number(process.env.KAKURIZAI_PORT || 38476),
+      publicUrl: process.env.KAKURIZAI_STUDIO_PUBLIC_URL || null,
+      secureCookies: process.env.KAKURIZAI_SECURE_COOKIES === "true",
+      trustProxy: process.env.KAKURIZAI_TRUST_PROXY === "true",
+      trustedProxies: [],
+      allowedHosts: [],
+      trustedOrigins: [],
+      ipAllowlist: [],
+      ipDenylist: [],
+      rateLimit: {
+        enabled: true,
+        windowSeconds: 60,
+        maxRequests: 600
+      },
+      tls: {
+        certFile: process.env.KAKURIZAI_TLS_CERT || null,
+        keyFile: process.env.KAKURIZAI_TLS_KEY || null
+      }
     },
     auth: {
       provider: process.env.KAKURIZAI_AUTH_PROVIDER || "self",
       issuer: "kakurizai",
       audience: "kakurizai-studio",
-      secretFile: path.join(home, "auth", "self-secret")
+      secretFile: path.join(home, "auth", "self-secret"),
+      sessionTtlSeconds: 8 * 60 * 60,
+      maxLoginAttempts: 12,
+      persistSessions: true,
+      sessionFile: path.join(home, "auth", "studio-sessions.json"),
+      rbac: {
+        enabled: true,
+        defaultRole: null,
+        users: {},
+        roles: {}
+      },
+      totp: {
+        enabled: false,
+        issuer: "KakuriZai",
+        users: {}
+      },
+      mfa: {
+        required: false
+      }
+    },
+    audit: {
+      enabled: true,
+      logReads: false,
+      file: path.join(home, "audit", "studio.jsonl"),
+      chain: true
+    },
+    security: {
+      enforceRemoteAccess: true,
+      allowInsecureRemote: false
     },
     cube: {
       mode: process.env.KAKURIZAI_CUBE_MODE || "auto",
@@ -73,7 +118,18 @@ export function defaultConfig(home = defaultHome()) {
 export function mergeConfig(base, override) {
   const result = { ...base, ...override };
   result.studio = { ...base.studio, ...(override?.studio || {}) };
+  result.studio.tls = { ...base.studio?.tls, ...(override?.studio?.tls || {}) };
+  result.studio.rateLimit = { ...base.studio?.rateLimit, ...(override?.studio?.rateLimit || {}) };
   result.auth = { ...base.auth, ...(override?.auth || {}) };
+  result.auth.rbac = { ...base.auth?.rbac, ...(override?.auth?.rbac || {}) };
+  result.auth.rbac.users = { ...base.auth?.rbac?.users, ...(override?.auth?.rbac?.users || {}) };
+  result.auth.rbac.roles = { ...base.auth?.rbac?.roles, ...(override?.auth?.rbac?.roles || {}) };
+  result.auth.totp = { ...base.auth?.totp, ...(override?.auth?.totp || {}) };
+  result.auth.totp.users = { ...base.auth?.totp?.users, ...(override?.auth?.totp?.users || {}) };
+  result.auth.mfa = { ...base.auth?.mfa, ...(override?.auth?.mfa || {}) };
+  result.auth.users = { ...base.auth?.users, ...(override?.auth?.users || {}) };
+  result.audit = { ...base.audit, ...(override?.audit || {}) };
+  result.security = { ...base.security, ...(override?.security || {}) };
   result.cube = { ...base.cube, ...(override?.cube || {}) };
   result.isolatedAgent = { ...base.isolatedAgent, ...(override?.isolatedAgent || {}) };
   return result;
@@ -126,6 +182,7 @@ export async function initConfigFile(options = {}) {
 
 export function normalizeAuthConfig(auth) {
   if (!auth || auth.provider === "none") return { provider: "none" };
+  if (auth.provider === "local") return auth;
   if (auth.provider === "self") return auth;
   if (auth.provider === "auth0") {
     const domain = required(auth.domain, "auth.domain");

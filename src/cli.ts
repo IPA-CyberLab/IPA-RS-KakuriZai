@@ -3,7 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
+import { hashPassword } from "./auth/password.js";
 import { createAuthProvider } from "./auth/providers.js";
+import { generateTotpSecret, totpAuthUrl } from "./auth/totp.js";
 import { commandExists } from "./core/fs.js";
 import { parseBooleanOption } from "./core/network.js";
 import { initConfigFile, loadConfig } from "./core/config.js";
@@ -87,7 +89,9 @@ Sandbox commands:
   agctl resume <sandbox> [--json]
   agctl remove <sandbox> --yes
   agctl studio [--host 127.0.0.1] [--port 38476]
-  agctl auth token [--subject local-user]
+  agctl auth token [--subject local-user] [--role admin|operator|viewer] [--ttl 28800]
+  agctl auth password-hash --password <password>
+  agctl auth totp-secret [--subject local-user]
 
 Unknown commands are delegated to IPA-RS-IsolatedAgent agentctl when available.`);
 }
@@ -348,12 +352,39 @@ async function terraform(config, args) {
 }
 
 async function auth(config, args) {
-  if (args[0] !== "token") throw new Error("auth supports: token");
+  const subcommand = args.shift();
+  if (subcommand === "password-hash") {
+    const password = takeOption(args, "--password") || (args.includes("--stdin") ? (await readStdin()).trimEnd() : null);
+    if (!password) throw new Error("auth password-hash requires --password <password> or --stdin");
+    console.log(hashPassword(password));
+    return;
+  }
+  if (subcommand === "totp-secret") {
+    const subject = takeOption(args, "--subject") || "local-user";
+    const secret = generateTotpSecret();
+    const issuer = config.auth?.totp?.issuer || "KakuriZai";
+    console.log(JSON.stringify({
+      subject,
+      secret,
+      otpauth: totpAuthUrl({ issuer, subject, secret })
+    }, null, 2));
+    return;
+  }
+  if (subcommand !== "token") throw new Error("auth supports: token, password-hash, totp-secret");
   const provider = createAuthProvider(config.auth);
   if (provider.type !== "self") throw new Error("auth token is only available for self provider");
   const subject = takeOption(args, "--subject") || "local-user";
   const ttl = Number(takeOption(args, "--ttl") || 8 * 60 * 60);
-  console.log(provider.issueToken({ subject, expiresInSeconds: ttl }));
+  const roles = splitOptionValues(takeRepeatedOption(args, "--role"));
+  const permissions = splitOptionValues(takeRepeatedOption(args, "--permission"));
+  const scope = splitOptionValues(takeRepeatedOption(args, "--scope"));
+  console.log(provider.issueToken({
+    subject,
+    expiresInSeconds: ttl,
+    roles: roles.length ? roles : ["admin"],
+    permissions: permissions.length ? permissions : undefined,
+    scope: scope.length ? scope : undefined
+  }));
 }
 
 async function studio(config, args) {
@@ -361,6 +392,12 @@ async function studio(config, args) {
   const port = Number(takeOption(args, "--port") || config.studio.port);
   const server = await startStudio({ ...config, studio: { ...config.studio, host, port } });
   console.log(`Agent Studio listening on ${server.url}`);
+  if (server.auth?.requiresToken) {
+    console.log("Sign in with a bearer token from: agctl auth token");
+  }
+  if ((host === "0.0.0.0" || host === "::") && !server.tls) {
+    console.log("Warning: Studio is listening on a non-loopback interface without built-in TLS. Put it behind HTTPS or configure studio.tls before exposing it to the internet.");
+  }
 }
 
 async function worldOrDelegate(config, command, args) {
@@ -452,6 +489,18 @@ function parseMountOption(value) {
     sourcePath: withoutMode,
     mode: modeMatch?.[1]
   };
+}
+
+function readStdin() {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => {
+      data += chunk;
+    });
+    process.stdin.on("end", () => resolve(data));
+    process.stdin.on("error", reject);
+  });
 }
 
 function printWorld(world) {
