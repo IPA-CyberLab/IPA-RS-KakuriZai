@@ -10,6 +10,8 @@ import pty from "node-pty";
 import { WebSocket, WebSocketServer } from "ws";
 import { createAuthProvider } from "./auth/providers.js";
 import { verifyTotp } from "./auth/totp.js";
+import { createJoinToken, joinNode, listClusterNodes, removeClusterNode, replicateWorld } from "./core/cluster.js";
+import { collectMetrics, listTraces, prometheusText, recordTraceEvent, startTrace, stopTrace } from "./core/observability.js";
 import { applyWorld, changedPaths, createKubernetesLab, createWorld, execWorld, getWorld, listWorlds, openWorld, pauseWorld, removeWorld, resumeWorld, updateWorldConfig } from "./core/worlds.js";
 import { applyProbeChecks, buildNetworkProbePlan, buildProbeScript, parseProbeOutput } from "./core/probe.js";
 import { CubeSandboxClient } from "./cube/client.js";
@@ -1108,6 +1110,24 @@ function auditRecord(request, status, extra = {}) {
   };
 }
 
+function traceEventFromRequest(request, status) {
+  const url = new URL(request.url, `http://${request.headers.host || "127.0.0.1"}`);
+  const target = targetFromPath(url.pathname);
+  return {
+    ts: new Date().toISOString(),
+    kind: "api",
+    action: auditAction(url, request),
+    status,
+    subject: request.user?.subject || null,
+    provider: request.user?.provider || null,
+    method: request.method,
+    path: url.pathname,
+    target,
+    worldId: target,
+    ip: requestIp(request, request.config)
+  };
+}
+
 function auditAction(url, request) {
   if (url.pathname === "/api/auth/login") return "auth.login";
   if (url.pathname === "/api/auth/logout") return "auth.logout";
@@ -1149,6 +1169,44 @@ async function api(config, devAccess, request, response, url) {
   if (request.method === "POST" && url.pathname === "/api/labs/kubernetes") {
     authorize(config, request, "worlds:write");
     return sendJson(request, response, await createKubernetesLab(config, await readBody(request)), 201);
+  }
+  if (request.method === "GET" && url.pathname === "/api/cluster/nodes") {
+    authorize(config, request, "worlds:read");
+    return sendJson(request, response, await listClusterNodes(config));
+  }
+  if (request.method === "GET" && url.pathname === "/api/observability/metrics") {
+    authorize(config, request, "worlds:read");
+    return sendJson(request, response, await collectMetrics(config));
+  }
+  if (request.method === "GET" && url.pathname === "/api/observability/prometheus") {
+    authorize(config, request, "worlds:read");
+    return sendText(request, response, prometheusText(await collectMetrics(config, { persist: false })), "text/plain; version=0.0.4; charset=utf-8");
+  }
+  if (request.method === "GET" && url.pathname === "/api/observability/traces") {
+    authorize(config, request, "worlds:read");
+    return sendJson(request, response, await listTraces(config));
+  }
+  if (request.method === "POST" && url.pathname === "/api/observability/traces") {
+    authorize(config, request, "worlds:write");
+    return sendJson(request, response, await startTrace(config, await readBody(request)), 201);
+  }
+  const traceStopMatch = /^\/api\/observability\/traces\/([^/]+)\/stop$/.exec(url.pathname);
+  if (request.method === "POST" && traceStopMatch) {
+    authorize(config, request, "worlds:write");
+    return sendJson(request, response, await stopTrace(config, decodeURIComponent(traceStopMatch[1])));
+  }
+  if (request.method === "POST" && url.pathname === "/api/cluster/join-token") {
+    authorize(config, request, "admin");
+    return sendJson(request, response, await createJoinToken(config, await readBody(request)), 201);
+  }
+  if (request.method === "POST" && url.pathname === "/api/cluster/nodes") {
+    authorize(config, request, "admin");
+    return sendJson(request, response, await joinNode(config, { ...(await readBody(request)), requireToken: false }), 201);
+  }
+  const clusterNodeMatch = /^\/api\/cluster\/nodes\/([^/]+)$/.exec(url.pathname);
+  if (request.method === "DELETE" && clusterNodeMatch) {
+    authorize(config, request, "admin");
+    return sendJson(request, response, await removeClusterNode(config, decodeURIComponent(clusterNodeMatch[1])));
   }
   const cubeSandboxMatch = /^\/api\/cube\/sandboxes\/([^/]+)\/([^/]+)$/.exec(url.pathname);
   if (cubeSandboxMatch) {
@@ -1225,6 +1283,10 @@ async function api(config, devAccess, request, response, url) {
     authorize(config, request, "worlds:write");
     const body = await readBody(request);
     return sendJson(request, response, await openWorld(config, decodeURIComponent(ref), body.target));
+  }
+  if (request.method === "POST" && action === "replicate") {
+    authorize(config, request, "worlds:write");
+    return sendJson(request, response, await replicateWorld(config, decodeURIComponent(ref), await readBody(request)), 201);
   }
   if (request.method === "POST" && action === "dev-access") {
     authorize(config, request, "devaccess:open");
@@ -1364,6 +1426,20 @@ function sendJson(requestOrResponse, responseOrValue, valueOrStatus, statusOrHea
   response.end(`${JSON.stringify(value, null, 2)}\n`);
   if (request?.audit && request.url?.startsWith("/api/") && !request.url.startsWith("/api/auth/config")) {
     void request.audit.write(auditRecord(request, status));
+  }
+  if (request?.config && request.url?.startsWith("/api/")) {
+    void recordTraceEvent(request.config, traceEventFromRequest(request, status));
+  }
+}
+
+function sendText(request, response, value, contentTypeValue = "text/plain; charset=utf-8", status = 200) {
+  response.writeHead(status, securityHeaders(request, contentTypeValue));
+  response.end(value);
+  if (request?.audit && request.url?.startsWith("/api/") && !request.url.startsWith("/api/auth/config")) {
+    void request.audit.write(auditRecord(request, status));
+  }
+  if (request?.config && request.url?.startsWith("/api/")) {
+    void recordTraceEvent(request.config, traceEventFromRequest(request, status));
   }
 }
 

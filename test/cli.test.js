@@ -110,6 +110,59 @@ test("cli creates Kubernetes lab batches", async () => {
   assert.deepEqual(worker.backendConfig.network.denyOut, ["10.0.0.0/8"]);
 });
 
+test("cli joins nodes and replicates a sandbox to a target node", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cli-replica-"));
+  const home = path.join(tmp, "home");
+
+  const token = (await runCli(home, ["node", "join-token", "--uses", "2"])).stdout.trim();
+  const node = JSON.parse((await runCli(home, [
+    "node",
+    "join",
+    "--token",
+    token,
+    "--name",
+    "worker-a",
+    "--id",
+    "ins-a",
+    "--ip",
+    "10.0.0.10",
+    "--label",
+    "zone=lab",
+    "--json"
+  ])).stdout);
+  assert.equal(node.nodeId, "ins-a");
+  assert.equal(node.labels.zone, "lab");
+
+  await runCli(home, ["create", "--name", "base", "--no-host-mount", "--backend", "cube-sandbox-overlay"]);
+  const result = JSON.parse((await runCli(home, [
+    "replicate",
+    "base",
+    "--node",
+    "worker-a",
+    "--json"
+  ])).stdout);
+
+  assert.equal(result.created.length, 1);
+  const replica = result.created[0];
+  assert.equal(replica.labels["kakurizai.replicaOf"], result.source.id);
+  assert.equal(replica.backendConfig.replication.sourceWorldId, result.source.id);
+  assert.equal(replica.backendConfig.placement.nodeId, "ins-a");
+  assert.equal(replica.backendConfig.cubeRequest.ins_id, "ins-a");
+  assert.equal(replica.backendConfig.cubeRequest.annotations["com.cube.debug"], "true");
+  assert.equal(replica.backendConfig.hostMount, false);
+
+  const metrics = JSON.parse((await runCli(home, ["metrics", "--json"])).stdout);
+  assert.equal(metrics.sample.summary.replicas, 1);
+  assert.equal(metrics.sample.nodes[0].replicaCount, 1);
+
+  const trace = (await runCli(home, ["trace", "start", "--target", "world", "--ref", result.source.id])).stdout;
+  assert.match(trace, /trace tr-/);
+  const traces = JSON.parse((await runCli(home, ["trace", "list", "--json"])).stdout);
+  assert.equal(traces.length, 1);
+  const stopped = JSON.parse((await runCli(home, ["trace", "stop", traces[0].id, "--json"])).stdout);
+  assert.equal(stopped.enabled, false);
+});
+
 test("cli applies sandbox yaml and exports terraform bundle", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cli-yaml-"));
   const home = path.join(tmp, "home");

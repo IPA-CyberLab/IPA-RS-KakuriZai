@@ -151,6 +151,19 @@ const cube = {
   capabilities: { destroy: true, logs: true, pause: true, resume: true }
 };
 
+const observability = {
+  sample: {
+    ts: "2026-06-28T00:00:00.000Z",
+    summary: { worlds: 2, replicas: 1, running: 1, failed: 0, nodes: 1, healthyNodes: 1 },
+    nodes: [{ id: "node-a", nodeId: "node-a", name: "node-a", status: "ready", replicaCount: 1, quotaCpuUsage: 2, quotaMemUsage: 2048, dataDiskUsagePer: 40 }],
+    worlds: [
+      { id: "world-a", name: "kakurizai-mobile-validation-sandbox-with-a-long-name", status: "running", nodeId: "node-a", upperBytes: 10485760 },
+      { id: "world-b", name: "paused-worker", status: "paused", nodeId: "node-b", replicaOf: "world-a", upperBytes: 0 }
+    ]
+  },
+  history: []
+};
+
 const mainViewports = [
   { name: "phone-320", width: 320, height: 568 },
   { name: "phone-390", width: 390, height: 844 },
@@ -202,6 +215,18 @@ test.describe("Studio responsive layout", () => {
       console.log(JSON.stringify(report.summary));
       expect(report.failures).toEqual([]);
     });
+
+    test(`observability view has no measured overlap at ${viewport.name}`, async ({ page }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await mockApi(page);
+      await page.goto(baseURL);
+      await page.waitForSelector(".workbench");
+      await page.getByTitle("Observability").click();
+      await page.waitForSelector(".traceLauncher");
+      const report = await auditLayout(page, `${viewport.name}-observability`);
+      console.log(JSON.stringify(report.summary));
+      expect(report.failures).toEqual([]);
+    });
   }
 
   for (const viewport of terminalViewports) {
@@ -230,6 +255,13 @@ async function mockApi(page) {
   }));
   await page.route("**/api/session", (route) => json(route, { user: { subject: "responsive-test" } }));
   await page.route("**/api/cube/inspect", (route) => json(route, cube));
+  await page.route("**/api/cluster/nodes", (route) => json(route, [
+    { id: "node-a", nodeId: "node-a", name: "node-a", status: "ready", ip: "10.0.0.10", roles: ["worker"] }
+  ]));
+  await page.route("**/api/observability/metrics", (route) => json(route, observability));
+  await page.route("**/api/observability/traces", (route) => json(route, [
+    { id: "tr-a", name: "all", targetType: "all", target: null, enabled: true, startedAt: "2026-06-28T00:00:00.000Z", events: [] }
+  ]));
   await page.route("**/api/network/probe", (route) => json(route, {
     generatedAt: "2026-06-28T00:00:00.000Z",
     nodes: [],
