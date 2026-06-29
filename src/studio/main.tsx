@@ -996,6 +996,38 @@ function App() {
     }
   }
 
+  async function reconcileFailover() {
+    setBusy(true);
+    try {
+      const result = await api<{ promoted: unknown[]; skipped: unknown[] }>("/api/cluster/failover/reconcile", {
+        method: "POST",
+        body: {}
+      });
+      setStatus(`Failover reconcile: ${result.promoted.length} promoted / ${result.skipped.length} skipped`);
+      await refresh();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function checkpointFailover() {
+    setBusy(true);
+    try {
+      const result = await api<{ results: unknown[] }>("/api/cluster/failover/checkpoint", {
+        method: "POST",
+        body: { world: selected?.world?.id || undefined, force: Boolean(selected?.world) }
+      });
+      setStatus(`Failover checkpoint: ${result.results.length} updated`);
+      await refresh();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function createClusterJoinToken(options: { ttlSeconds: number; uses: number }) {
     setBusy(true);
     try {
@@ -1523,6 +1555,8 @@ function App() {
               busy={busy}
               onRefresh={() => refresh()}
               onReplicate={replicateSelected}
+              onFailoverReconcile={reconcileFailover}
+              onFailoverCheckpoint={checkpointFailover}
               onCreateJoinToken={createClusterJoinToken}
               onRegisterNode={registerClusterNode}
               onRemoveNode={removeClusterNode}
@@ -1654,6 +1688,8 @@ function ObservabilityWorkspace({
   busy,
   onRefresh,
   onReplicate,
+  onFailoverReconcile,
+  onFailoverCheckpoint,
   onCreateJoinToken,
   onRegisterNode,
   onRemoveNode,
@@ -1667,6 +1703,8 @@ function ObservabilityWorkspace({
   busy: boolean;
   onRefresh: () => Promise<void>;
   onReplicate: (options?: { nodes?: string[]; replicas?: number; stateMode?: string; includeHostMounts?: boolean; replace?: boolean }) => Promise<void>;
+  onFailoverReconcile: () => Promise<void>;
+  onFailoverCheckpoint: () => Promise<void>;
   onCreateJoinToken: (options: { ttlSeconds: number; uses: number }) => Promise<{ token: string; expiresAt: string; maxUses: number }>;
   onRegisterNode: (input: Record<string, unknown>) => Promise<void>;
   onRemoveNode: (ref: string) => Promise<void>;
@@ -1699,6 +1737,14 @@ function ObservabilityWorkspace({
           <button className="ghost" onClick={() => void onStartTrace("world", selected?.world?.id || null)} type="button" disabled={busy || !selected?.world}>
             <Route size={15} />
             Trace Selected
+          </button>
+          <button className="ghost" onClick={() => void onFailoverCheckpoint()} type="button" disabled={busy}>
+            <Layers size={15} />
+            Checkpoint
+          </button>
+          <button className="ghost" onClick={() => void onFailoverReconcile()} type="button" disabled={busy}>
+            <Shield size={15} />
+            Failover
           </button>
         </div>
       </DetailSection>
