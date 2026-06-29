@@ -94,7 +94,7 @@ Sandbox commands:
   agctl node join-token [--ttl 86400] [--uses 1]
   agctl node join --token <token> --name <node> [--endpoint https://node:38476]
   agctl node list [--json]
-  agctl replicate <sandbox> [--node <node>] [--replicas 2] [--include-host-mounts] [--json]
+  agctl replicate <sandbox> [--node <node>] [--replicas 2] [--state-mode stateful|runtime-snapshot|template-snapshot|definition] [--include-host-mounts] [--json]
   agctl metrics [--json|--prometheus]
   agctl trace start --target <all|world|node> [--ref <id>] [--ttl 3600]
   agctl trace list [--json]
@@ -399,26 +399,33 @@ async function node(config, args) {
 async function replicate(config, args) {
   const nodes = splitOptionValues(takeRepeatedOption(args, "--node"));
   const replicas = takeOption(args, "--replicas") || takeOption(args, "--count");
+  const stateMode = takeOption(args, "--state-mode") || takeOption(args, "--state");
   const includeHostMounts = takeFlag(args, "--include-host-mounts");
   const replace = takeFlag(args, "--replace");
   const failFast = takeFlag(args, "--fail-fast");
+  const allowPartialState = takeFlag(args, "--allow-partial-state");
+  const definitionOnly = takeFlag(args, "--definition-only");
   const json = args.includes("--json");
   const ref = args.find((arg) => !arg.startsWith("-"));
   if (!ref) throw new Error("replicate requires <sandbox>");
   const result = await replicateWorld(config, ref, {
     nodes,
     replicas: replicas == null ? undefined : Number(replicas),
+    stateMode: definitionOnly ? "definition" : stateMode,
     includeHostMounts,
     replace,
+    allowPartialState,
     continueOnError: !failFast
   });
   if (json) {
     console.log(JSON.stringify(result, null, 2));
     return;
   }
-  console.log(`replicated ${result.source.name} to ${result.created.length} node${result.created.length === 1 ? "" : "s"}`);
+  console.log(`replicated ${result.source.name} to ${result.created.length} node${result.created.length === 1 ? "" : "s"} (${result.state?.requestedMode || "definition"})`);
+  if (result.state?.runtimeSnapshotId) console.log(`runtime_snapshot\t${result.state.runtimeSnapshotId}\tmemory=${result.state.memoryCaptured ? "captured" : "not-captured"}`);
+  if (result.state?.portableTemplateId) console.log(`portable_template\t${result.state.portableTemplateId}\tscope=${(result.state.portableTemplateScope || []).join(",") || "-"}`);
   for (const world of result.created) {
-    console.log(`created\t${world.name}\t${world.status}\t${world.backendConfig?.placement?.nodeName || "-"}`);
+    console.log(`created\t${world.name}\t${world.status}\t${world.backendConfig?.placement?.nodeName || "-"}\t${world.backendConfig?.replication?.stateMode || "definition"}`);
   }
   for (const world of result.existing) {
     console.log(`existing\t${world.name}\t${world.status}\t${world.backendConfig?.placement?.nodeName || "-"}`);

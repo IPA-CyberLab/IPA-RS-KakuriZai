@@ -166,10 +166,12 @@ Replicate a sandbox to joined nodes:
 
 ```sh
 agctl replicate demo --replicas 2
-agctl replicate demo --node worker-a --replace --json
+agctl replicate demo --node worker-a --state-mode stateful --replace --json
 ```
 
-For CubeMaster-backed sandboxes, replica requests carry placement metadata plus `ins_id`/`ins_ip` and the Cube debug annotation so CubeMaster can schedule the sandbox on the requested node. Replicas are tracked as normal worlds with `kakurizai.replicaOf`, `kakurizai.replication.group`, and placement metadata.
+For running CubeMaster-backed sandboxes, replication now captures state before creating replicas. `stateful` is the default: KakuriZai first materializes mounted `/workspace` state into the sandbox rootfs when host mounts are present, then creates a CubeMaster runtime snapshot. Replicas placed on the snapshot origin node use that runtime snapshot, including memory snapshot metadata. Replicas placed on other nodes use a committed AppSnapshot template distributed to the requested node, which preserves the current rootfs/writable state but not live RAM. Use `--state-mode runtime-snapshot` to require same-node runtime snapshot restore, `--state-mode template-snapshot` for portable cross-node rootfs state, or `--state-mode definition` only for explicit definition-only placement.
+
+For CubeMaster-backed sandboxes, replica requests carry placement metadata plus `ins_id`/`ins_ip`, `distribution_scope`, and the Cube debug annotation so CubeMaster can schedule the sandbox on the requested node and bind it to the matching template/snapshot locality. Replicas are tracked as normal worlds with `kakurizai.replicaOf`, `kakurizai.replication.group`, placement metadata, and `kakurizai.replication.stateMode`.
 
 Studio includes an Observability view for node, sandbox, and replica metrics. CLI and API access are also available:
 

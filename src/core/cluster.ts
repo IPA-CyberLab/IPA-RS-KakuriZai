@@ -1,6 +1,8 @@
 // @ts-nocheck
 import crypto from "node:crypto";
 import path from "node:path";
+import { CubeSandboxClient } from "../cube/client.js";
+import { buildCubeSandboxRequest } from "../cube/request.js";
 import { ensureDir, nowIso, randomId, readJson, slugify, writeJsonAtomic } from "./fs.js";
 import { createWorld, getWorld, listWorlds, removeWorld } from "./worlds.js";
 
@@ -141,6 +143,7 @@ export async function replicateWorld(config, ref, input = {}) {
   const source = await getWorld(config, ref);
   const store = new ClusterStore(config);
   const nodes = await selectTargetNodes(store, input);
+  const statePlan = await prepareReplicationState(config, source, nodes, input);
   const worlds = await listWorlds(config);
   const group = input.group || `rep-${source.id}-${Date.now().toString(36)}`;
   const created = [];
@@ -163,6 +166,7 @@ export async function replicateWorld(config, ref, input = {}) {
       created.push(await createReplicaWorld(config, source, node, {
         ...input,
         group,
+        state: statePlan.stateForNode(node),
         index: created.length + existing.length + skipped.length + 1
       }));
     } catch (error) {
@@ -170,7 +174,7 @@ export async function replicateWorld(config, ref, input = {}) {
       skipped.push({ node, reason: error.message || String(error) });
     }
   }
-  return { source, group, nodes, created, existing, skipped };
+  return { source, group, nodes, state: statePlan.summary, created, existing, skipped };
 }
 
 async function createReplicaWorld(config, source, node, options = {}) {
@@ -189,13 +193,16 @@ async function createReplicaWorld(config, source, node, options = {}) {
     nodeIp: node.ip || null,
     endpoint: node.endpoint || null
   };
+  backendConfig.template = options.state?.templateId || backendConfig.template || source.sandbox?.baseId || config.cube?.template || null;
   backendConfig.replication = {
     sourceWorldId: source.id,
     sourceWorldName: source.name,
     group: options.group,
     role: "replica",
     targetNodeId: node.id,
-    targetNodeName: node.name
+    targetNodeName: node.name,
+    stateMode: options.state?.mode || "definition",
+    state: options.state || { mode: "definition" }
   };
   const name = cleanReplicaName(options.name || `${source.name}-${node.name}`);
   return createWorld(config, {
@@ -205,7 +212,7 @@ async function createReplicaWorld(config, source, node, options = {}) {
     hostMount: includeHostMounts,
     mountMode: includeHostMounts ? source.backendConfig?.mountMode : "none",
     mounts: includeHostMounts ? source.backendConfig?.mounts : undefined,
-    template: backendConfig.template || source.sandbox?.baseId || config.cube?.template,
+    template: options.state?.templateId || backendConfig.template || source.sandbox?.baseId || config.cube?.template,
     cpu: backendConfig.cpu,
     memory: backendConfig.memory,
     writableLayerSize: backendConfig.writableLayerSize,
@@ -218,9 +225,200 @@ async function createReplicaWorld(config, source, node, options = {}) {
       "kakurizai.replicaSourceName": source.name,
       "kakurizai.replication.group": options.group,
       "kakurizai.replication.node": node.id,
-      "kakurizai.replication.nodeName": node.name
+      "kakurizai.replication.nodeName": node.name,
+      "kakurizai.replication.stateMode": options.state?.mode || "definition",
+      ...(options.state?.templateId ? { "kakurizai.replication.stateTemplate": options.state.templateId } : {}),
+      ...(options.state?.snapshotId ? { "kakurizai.replication.runtimeSnapshot": options.state.snapshotId } : {})
     },
     backendConfig
+  });
+}
+
+async function prepareReplicationState(config, source, nodes, input = {}) {
+  const mode = normalizeStateMode(input.stateMode || input.state || (input.definitionOnly ? "definition" : "stateful"));
+  const sandboxId = source.sandbox?.containerId || source.sandbox?.id;
+  if (mode === "definition" || !sandboxId) {
+    const reason = mode === "definition"
+      ? "definition-only replication was explicitly requested"
+      : "source sandbox is not running; only the saved definition can be replicated";
+    return definitionStatePlan(reason);
+  }
+  const client = new CubeSandboxClient(config.cube);
+  const capturedAt = nowIso();
+  const workspaceSnapshotPath = "/kakurizai/replication-state/workspace";
+  const sourceNode = await resolveSourceNode(client, source);
+  const materialize = source.backendConfig?.hostMount === true || (source.backendConfig?.mounts || []).length > 0;
+  let materialized = null;
+  if (materialize && input.materializeWorkspace !== false) {
+    materialized = await client.materializeReplicationState(source, {
+      workspace: config.cube?.workspacePath || "/workspace",
+      target: workspaceSnapshotPath
+    });
+    if (!materialized.applied && input.allowPartialState !== true) {
+      throw new Error(`cannot capture mounted workspace state before replication: ${materialized.reason || "materialize failed"}`);
+    }
+  }
+
+  let runtimeSnapshot = null;
+  if (mode !== "template-snapshot" && input.captureMemory !== false) {
+    const snapshot = await client.createRuntimeSnapshot(source, {
+      displayName: `${source.name}-replication-${Date.now().toString(36)}`,
+      wait: input.waitForState !== false
+    });
+    if (snapshot.created && snapshot.snapshotId) {
+      runtimeSnapshot = snapshot;
+    } else if (mode === "runtime-snapshot") {
+      throw new Error(`runtime snapshot failed: ${snapshot.reason || "snapshot id was not returned"}`);
+    }
+  }
+
+  let committedTemplate = null;
+  const needsPortableTemplate = nodes.some((node) => !runtimeSnapshot || !nodeMatchesRuntimeSnapshot(node, runtimeSnapshot, sourceNode));
+  if (mode === "runtime-snapshot" && needsPortableTemplate) {
+    throw new Error("runtime snapshots are local to the origin node; use stateful or template-snapshot for cross-node replication");
+  }
+  if (mode !== "runtime-snapshot" && needsPortableTemplate) {
+    const request = sourceCubeRequest(config, source);
+    const commit = await client.commitSandboxTemplate(source, request, { wait: input.waitForState !== false });
+    if (!commit.committed || !commit.templateId) {
+      throw new Error(`portable state template failed: ${commit.reason || "template id was not returned"}`);
+    }
+    const distribution = await client.distributeTemplate(commit.templateId, nodes, {
+      logDir: source.paths?.logs,
+      interval: input.waitInterval || "2s"
+    });
+    if (!distribution.distributed) {
+      throw new Error(`state template distribution failed: ${distribution.reason || "template redo failed"}`);
+    }
+    committedTemplate = { ...commit, distribution };
+  }
+
+  const summary = {
+    requestedMode: mode,
+    capturedAt,
+    materializedWorkspace: materialized ? Boolean(materialized.applied) : false,
+    runtimeSnapshotId: runtimeSnapshot?.snapshotId || null,
+    runtimeSnapshotOriginNode: runtimeSnapshot?.originNodeId || sourceNode.nodeId || null,
+    portableTemplateId: committedTemplate?.templateId || null,
+    portableTemplateScope: committedTemplate?.distribution?.scope || [],
+    memoryContinuous: false,
+    memoryCaptured: Boolean(runtimeSnapshot?.snapshotId),
+    reason: runtimeSnapshot?.snapshotId
+      ? "runtime snapshot captures rootfs and memory for replicas placed on the snapshot origin node; remote nodes use portable template state"
+      : "portable template state captures current rootfs/writable state for remote nodes"
+  };
+  return {
+    summary,
+    stateForNode(node) {
+      if (runtimeSnapshot?.snapshotId && nodeMatchesRuntimeSnapshot(node, runtimeSnapshot, sourceNode)) {
+        return {
+          mode: "runtime-snapshot",
+          templateId: runtimeSnapshot.snapshotId,
+          snapshotId: runtimeSnapshot.snapshotId,
+          capturedAt,
+          capturesMemory: true,
+          continuousMemory: false,
+          hydrateWorkspace: Boolean(materialized?.applied),
+          workspaceSnapshotPath,
+          reason: "runtime snapshot is local to this target node"
+        };
+      }
+      if (committedTemplate?.templateId) {
+        return {
+          mode: "template-snapshot",
+          templateId: committedTemplate.templateId,
+          capturedAt,
+          capturesMemory: false,
+          continuousMemory: false,
+          hydrateWorkspace: Boolean(materialized?.applied),
+          workspaceSnapshotPath,
+          reason: "portable AppSnapshot template distributed to the target node"
+        };
+      }
+      return {
+        mode: "definition",
+        capturedAt,
+        capturesMemory: false,
+        continuousMemory: false,
+        hydrateWorkspace: false,
+        reason: "no runtime state capture was available"
+      };
+    }
+  };
+}
+
+function definitionStatePlan(reason) {
+  return {
+    summary: {
+      requestedMode: "definition",
+      capturedAt: null,
+      materializedWorkspace: false,
+      runtimeSnapshotId: null,
+      runtimeSnapshotOriginNode: null,
+      portableTemplateId: null,
+      portableTemplateScope: [],
+      memoryCaptured: false,
+      memoryContinuous: false,
+      reason
+    },
+    stateForNode() {
+      return {
+        mode: "definition",
+        capturesMemory: false,
+        continuousMemory: false,
+        hydrateWorkspace: false,
+        reason
+      };
+    }
+  };
+}
+
+async function resolveSourceNode(client, source) {
+  const placement = source.backendConfig?.placement || {};
+  const fallback = {
+    nodeId: source.sandbox?.hostId || placement.nodeId || null,
+    nodeIp: source.sandbox?.hostIp || source.sandbox?.runtimeHostIp || placement.nodeIp || null
+  };
+  try {
+    const detail = await client.inspectWorldSandbox(source);
+    return {
+      nodeId: detail?.hostId || fallback.nodeId,
+      nodeIp: detail?.hostIp || fallback.nodeIp
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function nodeMatchesRuntimeSnapshot(node, snapshot, sourceNode = {}) {
+  const originNode = snapshot?.originNodeId || sourceNode.nodeId;
+  const originIp = snapshot?.originNodeIp || sourceNode.nodeIp;
+  return Boolean(
+    (originNode && [node.id, node.nodeId, node.name].includes(originNode))
+    || (originIp && [node.ip, node.publicHost].includes(originIp))
+  );
+}
+
+function normalizeStateMode(value) {
+  const mode = String(value || "stateful").trim().toLowerCase();
+  if (["definition", "definition-only", "placement"].includes(mode)) return "definition";
+  if (["runtime", "runtime-snapshot", "memory", "memory-snapshot"].includes(mode)) return "runtime-snapshot";
+  if (["template", "template-snapshot", "portable", "writable-layer", "rootfs"].includes(mode)) return "template-snapshot";
+  return "stateful";
+}
+
+function sourceCubeRequest(config, source) {
+  if (source.backendConfig?.cubeRequest) return source.backendConfig.cubeRequest;
+  return buildCubeSandboxRequest(source, {
+    ...config.cube,
+    template: source.backendConfig?.template || source.sandbox?.baseId || config.cube?.template,
+    cpu: source.backendConfig?.cpu || config.cube?.cpu,
+    memory: source.backendConfig?.memory || config.cube?.memory,
+    writableLayerSize: source.backendConfig?.writableLayerSize || config.cube?.writableLayerSize,
+    networkType: source.backendConfig?.networkType || config.cube?.networkType,
+    network: source.backendConfig?.network || null,
+    kubernetes: source.backendConfig?.kubernetes || null,
+    mountMode: source.backendConfig?.mountMode || config.cube?.mountMode || "agctl-overlay"
   });
 }
 

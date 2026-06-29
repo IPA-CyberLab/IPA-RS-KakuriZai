@@ -20,7 +20,11 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
   const placement = normalizePlacement(world.backendConfig?.placement || cubeConfig.placement || {});
   const replication = world.backendConfig?.replication || {};
   const workspaceArg = shellQuote(workspace);
-  const setup = setupCommandForMounts(mounts, { workspaceArg });
+  const setup = withReplicationHydration(
+    setupCommandForMounts(mounts, { workspaceArg }),
+    replication,
+    { workspaceArg }
+  );
   const writableLayerSize = cubeConfig.writableLayerSize || world.backendConfig?.writableLayerSize || null;
   const writableLayerRequestAnnotations = writableLayerAnnotations(writableLayerSize);
   const volumes = volumesForMounts(mounts, world, { writableLayerSize });
@@ -83,10 +87,12 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
   };
   if (placement.nodeId) {
     request.ins_id = placement.nodeId;
+    request.distribution_scope = [placement.nodeId];
     request.annotations["com.cube.debug"] = "true";
   }
   if (placement.nodeIp) {
     request.ins_ip = placement.nodeIp;
+    request.distribution_scope = [placement.nodeId || placement.nodeIp];
     request.annotations["com.cube.debug"] = "true";
   }
   return applyNetworkToCubeRequest(request, network, kubernetes);
@@ -242,6 +248,12 @@ function replicationAnnotations(replication = {}) {
   if (replication.role) annotations["kakurizai.replication.role"] = replication.role;
   if (replication.targetNodeId) annotations["kakurizai.replication.targetNodeId"] = replication.targetNodeId;
   if (replication.targetNodeName) annotations["kakurizai.replication.targetNodeName"] = replication.targetNodeName;
+  const state = replication.state || {};
+  if (replication.stateMode || state.mode) annotations["kakurizai.replication.stateMode"] = replication.stateMode || state.mode;
+  if (state.templateId) annotations["kakurizai.replication.stateTemplateId"] = state.templateId;
+  if (state.snapshotId) annotations["kakurizai.replication.runtimeSnapshotId"] = state.snapshotId;
+  if (state.capturedAt) annotations["kakurizai.replication.stateCapturedAt"] = state.capturedAt;
+  if (state.hydrateWorkspace != null) annotations["kakurizai.replication.hydrateWorkspace"] = String(Boolean(state.hydrateWorkspace));
   return annotations;
 }
 
@@ -268,6 +280,18 @@ function setupCommandForMounts(mounts, paths) {
     ])
   ];
   return ["set -eu", `mkdir -p ${dirs.join(" ")}`, "tail -f /dev/null"].join("; ");
+}
+
+function withReplicationHydration(setup, replication = {}, paths) {
+  const state = replication.state || {};
+  if (state.hydrateWorkspace !== true) return setup;
+  const snapshotPath = shellQuote(state.workspaceSnapshotPath || "/kakurizai/replication-state/workspace");
+  return [
+    "set -eu",
+    `mkdir -p ${paths.workspaceArg}`,
+    `if [ -d ${snapshotPath} ]; then cp -a ${snapshotPath}/. ${paths.workspaceArg}/; fi`,
+    setup.replace(/^set -eu;\s*/, "")
+  ].join("; ");
 }
 
 function volumesForMounts(mounts, world, options = {}) {
