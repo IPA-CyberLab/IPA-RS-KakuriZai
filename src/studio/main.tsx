@@ -83,6 +83,7 @@ type World = {
     kubernetes?: KubernetesConfig | null;
     hostMount?: boolean | null;
     mounts?: HostMountConfig[] | Record<string, unknown>;
+    replication?: Record<string, unknown> | null;
   };
   diskUsage?: {
     upperBytes: number;
@@ -975,7 +976,7 @@ function App() {
     if (!selected?.world) return;
     setBusy(true);
     try {
-      const result = await api<{ created: World[]; existing: World[]; skipped: Array<{ reason: string }> }>(`/api/worlds/${encodeURIComponent(selected.world.id)}/replicate`, {
+      const result = await api<{ created: World[]; existing: World[]; skipped: Array<{ reason: string }>; state?: { directMemoryRestoredNodes?: string[] } }>(`/api/worlds/${encodeURIComponent(selected.world.id)}/replicate`, {
         method: "POST",
         body: {
           nodes: options.nodes || [],
@@ -985,7 +986,8 @@ function App() {
           replace: Boolean(options.replace)
         }
       });
-      setStatus(`Replicated ${selected.name}: ${result.created.length} created / ${result.existing.length} existing`);
+      const directMemory = result.state?.directMemoryRestoredNodes?.length ? ` / memory ${result.state.directMemoryRestoredNodes.join(",")}` : "";
+      setStatus(`Replicated ${selected.name}: ${result.created.length} created / ${result.existing.length} existing${directMemory}`);
       await refresh();
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
@@ -1559,6 +1561,7 @@ function App() {
                   <Metric label="Created" value={formatDate(selected.createdAt)} />
                   <Metric label="Host mount" value={hasHostMount(selected) ? "enabled" : "disabled"} />
                   <Metric label="Terminal tools" value={formatBootstrapStatus(selected.world?.sandbox?.bootstrap)} />
+                  <Metric label="Replication memory" value={replicationMemoryText(selected.world)} />
                   <Metric label="Sandbox ID" value={selected.sandboxId || "-"} wide />
                   <Metric label="Source" value={hasHostMount(selected) ? selected.world?.sourcePath || selected.sourcePath || "-" : "-"} wide />
                   <Metric label="Base template" value={selected.templateId || selected.world?.sandbox?.baseId || cube?.template || "-"} wide />
@@ -3193,6 +3196,16 @@ function hasHostMount(row: InventoryRow) {
   const annotation = row.runtime?.annotations?.["kakurizai.hostMount"];
   if (annotation != null) return annotation === "true";
   return row.mountMode !== "none";
+}
+
+function replicationMemoryText(world?: World) {
+  const state = world?.backendConfig?.replication && typeof world.backendConfig.replication === "object"
+    ? (world.backendConfig.replication.state as Record<string, unknown> | undefined)
+    : null;
+  if (!state) return "-";
+  if (state.capturesMemory === true) return state.continuousMemory === true ? "continuous" : "captured";
+  if (state.capturesMemory === false) return "not captured";
+  return "-";
 }
 
 function subtitleForSandbox(row: InventoryRow) {

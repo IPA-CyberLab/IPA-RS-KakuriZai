@@ -427,8 +427,10 @@ async function replicate(config, args) {
   console.log(`replicated ${result.source.name} to ${result.created.length} node${result.created.length === 1 ? "" : "s"} (${result.state?.requestedMode || "definition"})`);
   if (result.state?.runtimeSnapshotId) console.log(`runtime_snapshot\t${result.state.runtimeSnapshotId}\tmemory=${result.state.memoryCaptured ? "captured" : "not-captured"}`);
   if (result.state?.portableTemplateId) console.log(`portable_template\t${result.state.portableTemplateId}\tscope=${(result.state.portableTemplateScope || []).join(",") || "-"}`);
+  if (result.state?.directMemoryRestoredNodes?.length) console.log(`direct_memory\t${result.state.directMemoryRestoredNodes.join(",")}`);
   for (const world of result.created) {
-    console.log(`created\t${world.name}\t${world.status}\t${world.backendConfig?.placement?.nodeName || "-"}\t${world.backendConfig?.replication?.stateMode || "definition"}`);
+    const state = world.backendConfig?.replication?.state || {};
+    console.log(`created\t${world.name}\t${world.status}\t${world.backendConfig?.placement?.nodeName || "-"}\t${world.backendConfig?.replication?.stateMode || "definition"}\tmemory=${state.capturesMemory ? "captured" : "not-captured"}`);
   }
   for (const world of result.existing) {
     console.log(`existing\t${world.name}\t${world.status}\t${world.backendConfig?.placement?.nodeName || "-"}`);
