@@ -3,10 +3,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
+import { hashPassword } from "./auth/password.js";
 import { createAuthProvider } from "./auth/providers.js";
+import { generateTotpSecret, totpAuthUrl } from "./auth/totp.js";
 import { commandExists } from "./core/fs.js";
 import { parseBooleanOption } from "./core/network.js";
 import { initConfigFile, loadConfig } from "./core/config.js";
+import { checkpointFailoverReplicas, createJoinToken, joinNode, listClusterNodes, reconcileFailover, removeClusterNode, replicateWorld } from "./core/cluster.js";
+import { collectMetrics, listTraces, prometheusText, startTrace, stopTrace } from "./core/observability.js";
 import { runCommand } from "./core/process.js";
 import {
   readSandboxManifest,
@@ -51,6 +55,11 @@ export async function main(argv) {
   if (command === "apply") return apply(config, argv.slice(1));
   if (command === "lab") return lab(config, argv.slice(1));
   if (command === "k8s-lab") return kubernetesLab(config, argv.slice(1));
+  if (command === "node" || command === "nodes" || command === "cluster") return node(config, argv.slice(1));
+  if (command === "replicate" || command === "replica") return replicate(config, argv.slice(1));
+  if (command === "failover") return failover(config, argv.slice(1));
+  if (command === "metrics" || command === "observability") return metrics(config, argv.slice(1));
+  if (command === "trace" || command === "traces") return trace(config, argv.slice(1));
   if (command === "export" || command === "manifest") return manifest(config, argv.slice(1));
   if (command === "terraform") return terraform(config, argv.slice(1));
   if (command === "auth") return auth(config, argv.slice(1));
@@ -83,11 +92,23 @@ Sandbox commands:
   agctl changed <sandbox> [--json]
   agctl apply <sandbox> [--dry-run] [--json]
   agctl lab kubernetes --name <name> [--json]
+  agctl node join-token [--ttl 86400] [--uses 1]
+  agctl node join --token <token> --name <node> [--endpoint https://node:38476] [--executor-lxc <container>] [--executor-ssh-host <host>]
+  agctl node list [--json]
+  agctl replicate <sandbox> [--node <node>] [--replicas 2] [--state-mode stateful|runtime-snapshot|template-snapshot|definition] [--include-host-mounts] [--json]
+  agctl failover reconcile [--world <sandbox>] [--force] [--json]
+  agctl failover checkpoint [--world <sandbox>] [--node <node>] [--json]
+  agctl metrics [--json|--prometheus]
+  agctl trace start --target <all|world|node> [--ref <id>] [--ttl 3600]
+  agctl trace list [--json]
+  agctl trace stop <trace-id>
   agctl pause <sandbox> [--json]
   agctl resume <sandbox> [--json]
   agctl remove <sandbox> --yes
   agctl studio [--host 127.0.0.1] [--port 38476]
-  agctl auth token [--subject local-user]
+  agctl auth token [--subject local-user] [--role admin|operator|viewer] [--ttl 28800]
+  agctl auth password-hash --password <password>
+  agctl auth totp-secret [--subject local-user]
 
 Unknown commands are delegated to IPA-RS-IsolatedAgent agentctl when available.`);
 }
@@ -307,6 +328,249 @@ async function kubernetesLab(config, args) {
   }
 }
 
+async function node(config, args) {
+  const subcommand = args.shift() || "list";
+  if (subcommand === "list" || subcommand === "ls") {
+    const nodes = await listClusterNodes(config);
+    if (args.includes("--json")) {
+      console.log(JSON.stringify(nodes, null, 2));
+      return;
+    }
+    if (!nodes.length) {
+      console.log("no joined nodes");
+      return;
+    }
+    for (const item of nodes) {
+      console.log([
+        item.name,
+        item.status,
+        item.nodeId,
+        item.ip || "-",
+        item.endpoint || "-",
+        (item.roles || []).join(",") || "-"
+      ].join("\t"));
+    }
+    return;
+  }
+  if (subcommand === "join-token" || subcommand === "token") {
+    const ttl = Number(takeOption(args, "--ttl") || takeOption(args, "--ttl-seconds") || 24 * 60 * 60);
+    const uses = Number(takeOption(args, "--uses") || 1);
+    const result = await createJoinToken(config, { ttlSeconds: ttl, uses, name: takeOption(args, "--name") || undefined });
+    if (args.includes("--json")) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    console.log(result.token);
+    return;
+  }
+  if (subcommand === "join" || subcommand === "register") {
+    const token = takeOption(args, "--token") || process.env.KAKURIZAI_JOIN_TOKEN;
+    const name = takeOption(args, "--name") || takeOption(args, "-n");
+    if (!name) throw new Error("node join requires --name");
+    const restoreCommand = takeOption(args, "--restore-command") || takeOption(args, "--direct-restore-command") || undefined;
+    const result = await joinNode(config, {
+      token,
+      nodeId: takeOption(args, "--id") || takeOption(args, "--node-id") || name,
+      name,
+      endpoint: takeOption(args, "--endpoint") || takeOption(args, "--url") || undefined,
+      publicHost: takeOption(args, "--public-host") || undefined,
+      ip: takeOption(args, "--ip") || undefined,
+      roles: splitOptionValues(takeRepeatedOption(args, "--role")),
+      labels: parseKeyValueOptions(takeRepeatedOption(args, "--label")),
+      capacity: parseKeyValueOptions(takeRepeatedOption(args, "--capacity")),
+      executor: executorOptionsFromArgs(args),
+      replication: restoreCommand ? { restoreCommand } : undefined
+    });
+    if (args.includes("--json")) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    console.log(`joined ${result.name}\t${result.nodeId}`);
+    return;
+  }
+  if (subcommand === "remove" || subcommand === "rm") {
+    const ref = args.find((arg) => !arg.startsWith("-"));
+    if (!ref) throw new Error("node remove requires <node>");
+    const result = await removeClusterNode(config, ref);
+    if (args.includes("--json")) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    console.log(`removed node ${result.name}`);
+    return;
+  }
+  throw new Error("node supports: list, join-token, join, remove");
+}
+
+async function replicate(config, args) {
+  const nodes = splitOptionValues(takeRepeatedOption(args, "--node"));
+  const replicas = takeOption(args, "--replicas") || takeOption(args, "--count");
+  const stateMode = takeOption(args, "--state-mode") || takeOption(args, "--state");
+  const includeHostMounts = takeFlag(args, "--include-host-mounts");
+  const replace = takeFlag(args, "--replace");
+  const failFast = takeFlag(args, "--fail-fast");
+  const allowPartialState = takeFlag(args, "--allow-partial-state");
+  const definitionOnly = takeFlag(args, "--definition-only");
+  const json = args.includes("--json");
+  const ref = args.find((arg) => !arg.startsWith("-"));
+  if (!ref) throw new Error("replicate requires <sandbox>");
+  const result = await replicateWorld(config, ref, {
+    nodes,
+    replicas: replicas == null ? undefined : Number(replicas),
+    stateMode: definitionOnly ? "definition" : stateMode,
+    includeHostMounts,
+    replace,
+    allowPartialState,
+    continueOnError: !failFast
+  });
+  if (json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  console.log(`replicated ${result.source.name} to ${result.created.length} node${result.created.length === 1 ? "" : "s"} (${result.state?.requestedMode || "definition"})`);
+  if (result.state?.runtimeSnapshotId) console.log(`runtime_snapshot\t${result.state.runtimeSnapshotId}\tmemory=${result.state.memoryCaptured ? "captured" : "not-captured"}`);
+  if (result.state?.portableTemplateId) console.log(`portable_template\t${result.state.portableTemplateId}\tscope=${(result.state.portableTemplateScope || []).join(",") || "-"}`);
+  if (result.state?.directMemoryRestoredNodes?.length) console.log(`direct_memory\t${result.state.directMemoryRestoredNodes.join(",")}`);
+  for (const world of result.created) {
+    const state = world.backendConfig?.replication?.state || {};
+    console.log(`created\t${world.name}\t${world.status}\t${world.backendConfig?.placement?.nodeName || "-"}\t${world.backendConfig?.replication?.stateMode || "definition"}\tmemory=${state.capturesMemory ? "captured" : "not-captured"}`);
+  }
+  for (const world of result.existing) {
+    console.log(`existing\t${world.name}\t${world.status}\t${world.backendConfig?.placement?.nodeName || "-"}`);
+  }
+  for (const item of result.skipped) {
+    console.log(`skipped\t${item.node.name}\t${item.reason}`);
+  }
+}
+
+async function failover(config, args) {
+  const subcommand = args[0] || "reconcile";
+  const json = args.includes("--json");
+  if (subcommand === "checkpoint") {
+    const result = await checkpointFailoverReplicas(config, {
+      world: takeOption(args, "--world") || takeOption(args, "--ref") || undefined,
+      node: takeRepeatedOption(args, "--node"),
+      replicas: takeOption(args, "--replicas") || undefined,
+      force: takeFlag(args, "--force"),
+      replace: !takeFlag(args, "--no-replace")
+    });
+    if (json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    console.log(`checkpointed\t${result.results.length}`);
+    return;
+  }
+  if (subcommand === "status" || subcommand === "reconcile") {
+    const result = await reconcileFailover(config, {
+      world: takeOption(args, "--world") || takeOption(args, "--ref") || undefined,
+      force: takeFlag(args, "--force")
+    });
+    if (json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    console.log(`promoted\t${result.promoted.length}`);
+    for (const item of result.promoted) {
+      console.log(`active\t${item.source.name}\t${item.source.sandbox?.id || "-"}\tfrom=${item.replica.name}`);
+    }
+    for (const item of result.skipped) {
+      console.log(`skipped\t${item.source}\t${item.reason}`);
+    }
+    return;
+  }
+  throw new Error(`unknown failover command: ${subcommand}`);
+}
+
+async function metrics(config, args) {
+  const snapshot = await collectMetrics(config);
+  if (args.includes("--prometheus")) {
+    console.log(prometheusText(snapshot));
+    return;
+  }
+  if (args.includes("--json")) {
+    console.log(JSON.stringify(snapshot, null, 2));
+    return;
+  }
+  console.log(`worlds=${snapshot.sample.summary.worlds} replicas=${snapshot.sample.summary.replicas} nodes=${snapshot.sample.summary.nodes} healthy=${snapshot.sample.summary.healthyNodes}`);
+  for (const node of snapshot.sample.nodes) {
+    console.log([
+      "node",
+      node.name,
+      node.status || "-",
+      node.nodeId || node.id || "-",
+      node.replicaCount || 0,
+      node.quotaCpuUsage ?? "-",
+      node.quotaMemUsage ?? "-"
+    ].join("\t"));
+  }
+  for (const world of snapshot.sample.worlds) {
+    console.log([
+      "world",
+      world.name,
+      world.status,
+      world.nodeId || "-",
+      world.replicaOf || "-",
+      formatBytes(world.upperBytes || 0)
+    ].join("\t"));
+  }
+}
+
+async function trace(config, args) {
+  const subcommand = args.shift() || "list";
+  if (subcommand === "list" || subcommand === "ls") {
+    const traces = await listTraces(config);
+    if (args.includes("--json")) {
+      console.log(JSON.stringify(traces, null, 2));
+      return;
+    }
+    if (!traces.length) {
+      console.log("no traces");
+      return;
+    }
+    for (const item of traces) {
+      console.log([
+        item.id,
+        item.enabled ? "active" : "stopped",
+        item.targetType,
+        item.target || "*",
+        (item.events || []).length,
+        item.startedAt
+      ].join("\t"));
+    }
+    return;
+  }
+  if (subcommand === "start") {
+    const targetType = takeOption(args, "--target") || takeOption(args, "--type") || "all";
+    const target = takeOption(args, "--ref") || takeOption(args, "--id") || takeOption(args, "--world") || takeOption(args, "--node") || null;
+    const ttl = Number(takeOption(args, "--ttl") || 60 * 60);
+    const result = await startTrace(config, {
+      name: takeOption(args, "--name") || undefined,
+      targetType,
+      target,
+      ttlSeconds: ttl
+    });
+    if (args.includes("--json")) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    console.log(`trace ${result.id} ${result.targetType}:${result.target || "*"}`);
+    return;
+  }
+  if (subcommand === "stop") {
+    const id = args.find((arg) => !arg.startsWith("-"));
+    if (!id) throw new Error("trace stop requires <trace-id>");
+    const result = await stopTrace(config, id);
+    if (args.includes("--json")) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    console.log(`stopped ${result.id}`);
+    return;
+  }
+  throw new Error("trace supports: list, start, stop");
+}
+
 async function manifest(config, args) {
   const ref = args.find((arg) => !arg.startsWith("-"));
   if (!ref) throw new Error("export requires a sandbox name or id");
@@ -348,12 +612,39 @@ async function terraform(config, args) {
 }
 
 async function auth(config, args) {
-  if (args[0] !== "token") throw new Error("auth supports: token");
+  const subcommand = args.shift();
+  if (subcommand === "password-hash") {
+    const password = takeOption(args, "--password") || (args.includes("--stdin") ? (await readStdin()).trimEnd() : null);
+    if (!password) throw new Error("auth password-hash requires --password <password> or --stdin");
+    console.log(hashPassword(password));
+    return;
+  }
+  if (subcommand === "totp-secret") {
+    const subject = takeOption(args, "--subject") || "local-user";
+    const secret = generateTotpSecret();
+    const issuer = config.auth?.totp?.issuer || "KakuriZai";
+    console.log(JSON.stringify({
+      subject,
+      secret,
+      otpauth: totpAuthUrl({ issuer, subject, secret })
+    }, null, 2));
+    return;
+  }
+  if (subcommand !== "token") throw new Error("auth supports: token, password-hash, totp-secret");
   const provider = createAuthProvider(config.auth);
   if (provider.type !== "self") throw new Error("auth token is only available for self provider");
   const subject = takeOption(args, "--subject") || "local-user";
   const ttl = Number(takeOption(args, "--ttl") || 8 * 60 * 60);
-  console.log(provider.issueToken({ subject, expiresInSeconds: ttl }));
+  const roles = splitOptionValues(takeRepeatedOption(args, "--role"));
+  const permissions = splitOptionValues(takeRepeatedOption(args, "--permission"));
+  const scope = splitOptionValues(takeRepeatedOption(args, "--scope"));
+  console.log(provider.issueToken({
+    subject,
+    expiresInSeconds: ttl,
+    roles: roles.length ? roles : ["admin"],
+    permissions: permissions.length ? permissions : undefined,
+    scope: scope.length ? scope : undefined
+  }));
 }
 
 async function studio(config, args) {
@@ -361,6 +652,12 @@ async function studio(config, args) {
   const port = Number(takeOption(args, "--port") || config.studio.port);
   const server = await startStudio({ ...config, studio: { ...config.studio, host, port } });
   console.log(`Agent Studio listening on ${server.url}`);
+  if (server.auth?.requiresToken) {
+    console.log("Sign in with a bearer token from: agctl auth token");
+  }
+  if ((host === "0.0.0.0" || host === "::") && !server.tls) {
+    console.log("Warning: Studio is listening on a non-loopback interface without built-in TLS. Put it behind HTTPS or configure studio.tls before exposing it to the internet.");
+  }
 }
 
 async function worldOrDelegate(config, command, args) {
@@ -436,6 +733,27 @@ function parseKeyValueOptions(values) {
   return result;
 }
 
+function executorOptionsFromArgs(args) {
+  const lxcContainer = takeOption(args, "--executor-lxc") || takeOption(args, "--lxc-container");
+  const cubecli = takeOption(args, "--executor-cubecli");
+  const namespace = takeOption(args, "--executor-namespace");
+  const sshHost = takeOption(args, "--executor-ssh-host");
+  const sshUser = takeOption(args, "--executor-ssh-user");
+  const sshKey = takeOption(args, "--executor-ssh-key");
+  const ssh = takeOption(args, "--executor-ssh");
+  if (!lxcContainer && !cubecli && !namespace && !sshHost && !sshUser && !sshKey && !ssh) return undefined;
+  return {
+    type: sshHost && lxcContainer ? "ssh-lxc" : (lxcContainer ? "lxc" : "local"),
+    container: lxcContainer || undefined,
+    cubecli: cubecli || undefined,
+    namespace: namespace || undefined,
+    host: sshHost || undefined,
+    user: sshUser || undefined,
+    key: sshKey || undefined,
+    ssh: ssh || undefined
+  };
+}
+
 function parseMountOption(value) {
   const input = String(value || "").trim();
   const modeMatch = /:(agctl-overlay|cubesandbox-readonly|unsafe-rw)$/.exec(input);
@@ -452,6 +770,18 @@ function parseMountOption(value) {
     sourcePath: withoutMode,
     mode: modeMatch?.[1]
   };
+}
+
+function readStdin() {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => {
+      data += chunk;
+    });
+    process.stdin.on("end", () => resolve(data));
+    process.stdin.on("error", reject);
+  });
 }
 
 function printWorld(world) {

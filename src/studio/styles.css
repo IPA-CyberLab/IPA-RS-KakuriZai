@@ -97,6 +97,8 @@
 html,
 body,
 #root {
+  width: 100%;
+  height: 100%;
   min-height: 100%;
 }
 
@@ -106,6 +108,7 @@ body {
   background: var(--surface);
   color: var(--ink);
   font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, ui-sans-serif, system-ui, sans-serif;
+  -webkit-text-size-adjust: 100%;
 }
 
 button,
@@ -113,6 +116,7 @@ input,
 select,
 textarea {
   font: inherit;
+  max-width: 100%;
 }
 
 button {
@@ -127,6 +131,11 @@ button {
   color: var(--ink);
   padding: 6px 10px;
   cursor: pointer;
+  touch-action: manipulation;
+}
+
+svg {
+  flex: 0 0 auto;
 }
 
 button:hover {
@@ -255,6 +264,7 @@ label {
   grid-template-columns: 48px 312px minmax(0, 1fr);
   width: 100vw;
   height: 100vh;
+  height: 100dvh;
   min-height: 0;
   background: var(--surface);
   overflow: hidden;
@@ -360,7 +370,9 @@ label {
   z-index: 10;
   width: min(460px, calc(100vw - 76px));
   max-height: calc(100vh - 16px);
+  max-height: calc(100dvh - 16px);
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -391,7 +403,7 @@ label {
 
 .inputRow {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) repeat(2, auto);
   gap: 8px;
 }
 
@@ -855,6 +867,7 @@ label {
 
 .toolbarActions {
   min-width: 0;
+  max-width: 100%;
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
@@ -1044,6 +1057,62 @@ label {
 .metricStrip.compact {
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 10px;
+}
+
+.actionStrip,
+.traceLauncher {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.managementStack {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.managementGrid,
+.replicationGrid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.managementGrid.wide {
+  grid-template-columns: repeat(4, minmax(130px, 1fr));
+}
+
+.nodeChoiceGrid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+}
+
+.fieldButton {
+  min-height: 34px;
+  align-self: end;
+}
+
+.monoInput {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.traceLauncher {
+  display: grid;
+  grid-template-columns: minmax(110px, 160px) minmax(160px, 1fr) auto;
+}
+
+.compactButton {
+  min-height: 28px;
+  padding: 5px 8px;
+  font-size: 11px;
 }
 
 .metric {
@@ -1242,9 +1311,10 @@ label {
   width: 100%;
   max-width: 100vw;
   height: 100vh;
+  height: var(--terminal-viewport-height, 100dvh);
   min-height: 0;
   display: grid;
-  grid-template-rows: 48px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   background: var(--terminal-bg);
   color: var(--ink);
   overflow: hidden;
@@ -1253,9 +1323,9 @@ label {
 .terminalTopbar {
   min-width: 0;
   overflow: hidden;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 14px;
   border-bottom: 1px solid var(--line-soft);
   background: var(--surface-2);
@@ -1281,6 +1351,18 @@ label {
   font-size: 11px;
 }
 
+.terminalTopbar .toolbarActions {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  padding-bottom: 2px;
+}
+
+.terminalTopbar .toolbarActions button,
+.terminalTopbar .terminalStatus {
+  flex: 0 0 auto;
+}
+
 .terminalStatus {
   min-height: 24px;
   display: inline-flex;
@@ -1304,14 +1386,16 @@ label {
 }
 
 .terminalFrame {
+  height: 100%;
   width: 100%;
   max-width: 100vw;
   min-width: 0;
   min-height: 0;
   background: var(--terminal-bg);
-  overflow: auto;
+  overflow: hidden;
   overscroll-behavior: contain;
   padding: 10px;
+  touch-action: manipulation;
 }
 
 .terminalFrame .xterm {
@@ -1326,7 +1410,11 @@ label {
 
 .terminalFrame .xterm-viewport {
   width: 100% !important;
-  overflow-y: auto;
+  overflow-y: auto !important;
+}
+
+.terminalFrame .xterm-helper-textarea {
+  font-size: 16px !important;
 }
 
 .dataTable {
@@ -1772,34 +1860,152 @@ label {
 
 @media (max-width: 860px) {
   body {
-    overflow: auto;
+    overflow: hidden;
   }
 
   .workbench {
-    grid-template-columns: 48px minmax(0, 1fr);
-    grid-template-rows: 260px minmax(620px, 1fr);
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 44px minmax(156px, 32dvh) minmax(0, 1fr);
     height: 100vh;
-    min-height: 100vh;
+    height: 100dvh;
+    min-height: 0;
   }
 
   .workbench.networkWorkbench {
-    grid-template-rows: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 44px minmax(0, 1fr);
   }
 
   .activityBar {
-    grid-row: 1 / -1;
+    grid-column: 1;
+    grid-row: 1;
+    min-width: 0;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    border-right: 0;
+    border-bottom: 1px solid var(--line-soft);
+    padding: 0 4px;
+  }
+
+  .activityButton {
+    flex: 0 0 44px;
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+    border-left: 0;
+    border-bottom: 2px solid transparent;
+  }
+
+  .activityButton.active {
+    border-left-color: transparent;
+    border-bottom-color: var(--active-line);
+  }
+
+  .actionMenu {
+    top: 48px;
+    left: 8px;
+    width: min(220px, calc(100vw - 16px));
+  }
+
+  .newSandboxMenu {
+    top: 48px;
+    right: 8px;
+    left: 8px;
+    width: auto;
+    max-height: calc(100vh - 56px);
+    max-height: calc(100dvh - 56px);
   }
 
   .sandboxPanel {
+    grid-column: 1;
+    grid-row: 2;
     min-height: 0;
     border-right: 0;
     border-bottom: 1px solid var(--line-soft);
   }
 
   .mainArea {
+    grid-column: 1;
+    grid-row: 3;
     min-height: 0;
-    grid-column: 2;
     grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .workbench.networkWorkbench .mainArea {
+    grid-row: 2;
+  }
+
+  .titleBar {
+    min-height: 0;
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 10px;
+  }
+
+  .titleBar > div:first-child,
+  .toolbarActions {
+    width: 100%;
+  }
+
+  .toolbarActions {
+    justify-content: flex-start;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    padding-bottom: 2px;
+  }
+
+  .toolbarActions button,
+  .toolbarActions .terminalStatus {
+    flex: 0 0 auto;
+  }
+
+  .editorPane {
+    min-height: 0;
+  }
+
+  .overviewGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .kpi {
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .kpi > span {
+    width: 28px;
+    height: 28px;
+  }
+
+  .detailSection {
+    gap: 10px;
+    padding: 12px 10px;
+  }
+
+  .wideMetric {
+    grid-column: span 1;
+  }
+
+  .metricStrip,
+  .metricStrip.compact,
+  .diskEditor,
+  .traceLauncher,
+  .managementGrid,
+  .managementGrid.wide,
+  .replicationGrid {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .networkWorkspaceTop {
+    padding: 12px 10px;
   }
 
   .networkWorkspaceHeader {
@@ -1808,25 +2014,6 @@ label {
 
   .networkWorkspaceHeader .probeToolbar {
     grid-column: 1 / -1;
-  }
-
-  .titleBar {
-    min-height: 92px;
-    align-items: flex-start;
-    flex-direction: column;
-    padding: 10px;
-  }
-
-  .toolbarActions {
-    justify-content: flex-start;
-  }
-
-  .wideMetric {
-    grid-column: span 1;
-  }
-
-  .diskEditor {
-    grid-template-columns: 1fr;
   }
 
   .togglePair {
@@ -1847,5 +2034,139 @@ label {
 
   .networkPeerBand {
     grid-column: auto;
+  }
+
+  .switchPanel,
+  .switchDevice {
+    gap: 12px;
+    padding: 12px;
+  }
+
+  .switchToolbar {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .switchStats {
+    justify-content: flex-start;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+
+  .switchDeviceHeader {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .accessLauncher {
+    max-width: 100%;
+  }
+
+  .terminalTopbar {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+    gap: 8px;
+    padding: 6px 8px;
+  }
+
+  .terminalFrame {
+    padding: 8px;
+  }
+}
+
+@media (max-width: 640px) {
+  .workbench {
+    grid-template-rows: 44px minmax(132px, 30dvh) minmax(0, 1fr);
+  }
+
+  .sandboxPanel {
+    grid-template-rows: 38px 40px 36px minmax(0, 1fr);
+  }
+
+  .panelHeader {
+    height: 38px;
+  }
+
+  .panelSearch {
+    height: 40px;
+    padding: 5px 8px;
+  }
+
+  .stateFilters {
+    height: 36px;
+    gap: 3px;
+    padding: 5px 6px;
+  }
+
+  .overviewGrid,
+  .accessDetails,
+  .nodeMeters {
+    grid-template-columns: 1fr;
+  }
+
+  .splitFields,
+  .networkOptionFields,
+  .dnsCustomFields {
+    grid-template-columns: 1fr;
+  }
+
+  .networkWorkspaceHeader {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .networkWorkspaceHeader > span:first-child {
+    display: none;
+  }
+
+  .networkWorkspaceHeader .probeToolbar {
+    grid-column: 1;
+  }
+
+  .probeToolbar {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    flex-wrap: nowrap;
+    padding-bottom: 2px;
+  }
+
+  .probeToolbar button,
+  .probeToolbar span {
+    flex: 0 0 auto;
+  }
+
+  .diskSizeControl {
+    grid-template-columns: minmax(0, 1fr) 64px;
+  }
+
+  .terminalTopbar .toolbarActions {
+    gap: 5px;
+  }
+
+  .terminalTopbar button {
+    min-height: 30px;
+    padding-inline: 8px;
+  }
+
+  .terminalStatus {
+    min-height: 26px;
+  }
+
+  .terminalFrame {
+    padding: 6px;
+  }
+}
+
+@media (max-width: 380px) {
+  .stateFilters button {
+    font-size: 10px;
+  }
+
+  .toolbarActions {
+    gap: 4px;
+  }
+
+  .toolbarActions button:not(.iconButton),
+  .terminalTopbar button:not(.iconButton) {
+    padding-inline: 7px;
   }
 }

@@ -16,6 +16,7 @@ import {
   HardDrive,
   KeyRound,
   Layers,
+  LogOut,
   Monitor,
   Moon,
   MoreHorizontal,
@@ -41,6 +42,9 @@ type AuthConfig = {
   issuer?: string;
   audience?: string;
   requiresToken: boolean;
+  requiresCredentials?: boolean;
+  mfaRequired?: boolean;
+  csrfHeader?: string;
 };
 
 type World = {
@@ -79,6 +83,7 @@ type World = {
     kubernetes?: KubernetesConfig | null;
     hostMount?: boolean | null;
     mounts?: HostMountConfig[] | Record<string, unknown>;
+    replication?: Record<string, unknown> | null;
   };
   diskUsage?: {
     upperBytes: number;
@@ -129,6 +134,48 @@ type CubeNode = {
   metadataUpdatedAt?: string | null;
   metricUpdatedAt?: string | null;
   labels?: Record<string, string>;
+};
+
+type ClusterNode = {
+  id: string;
+  nodeId: string;
+  name: string;
+  status: string;
+  endpoint?: string | null;
+  ip?: string | null;
+  roles?: string[];
+  labels?: Record<string, string>;
+};
+
+type ObservabilitySnapshot = {
+  sample: {
+    ts: string;
+    summary: {
+      worlds: number;
+      replicas: number;
+      running: number;
+      failed: number;
+      nodes: number;
+      healthyNodes: number;
+    };
+    nodes: Array<Record<string, unknown>>;
+    worlds: Array<Record<string, unknown>>;
+    storage?: CubeStorage[];
+    cube?: Record<string, unknown>;
+  };
+  history: Array<ObservabilitySnapshot["sample"]>;
+};
+
+type TraceSession = {
+  id: string;
+  name: string;
+  targetType: string;
+  target?: string | null;
+  enabled: boolean;
+  startedAt: string;
+  expiresAt?: string;
+  stoppedAt?: string;
+  events?: Array<Record<string, unknown>>;
 };
 
 type CubeStorage = {
@@ -398,7 +445,7 @@ type InventoryRow = {
 };
 
 type StateFilter = "all" | "running" | "paused" | "other";
-type AppView = "sandboxes" | "network";
+type AppView = "sandboxes" | "network" | "observability";
 type ThemeMode = "dark" | "light";
 type DnsPresetKey = "default" | "cloudflare" | "google" | "quad9" | "custom";
 
@@ -435,11 +482,18 @@ function Root() {
 
 function App() {
   const [authConfig, setAuthConfig] = React.useState<AuthConfig | null>(null);
-  const [token, setToken] = React.useState(() => localStorage.getItem("kakurizai.token") || "");
+  const [token, setToken] = React.useState("");
+  const [username, setUsername] = React.useState("");
+  const [password, setPassword] = React.useState("");
+  const [mfaCode, setMfaCode] = React.useState("");
   const [session, setSession] = React.useState<string | null>(null);
+  const [, setCsrfToken] = React.useState(() => sessionStorage.getItem("kakurizai.csrf") || "");
   const [theme, setTheme] = React.useState<ThemeMode>(() => localStorage.getItem("kakurizai.theme") === "light" ? "light" : "dark");
   const [worlds, setWorlds] = React.useState<World[]>([]);
   const [cube, setCube] = React.useState<CubeInspect | null>(null);
+  const [clusterNodes, setClusterNodes] = React.useState<ClusterNode[]>([]);
+  const [observability, setObservability] = React.useState<ObservabilitySnapshot | null>(null);
+  const [traces, setTraces] = React.useState<TraceSession[]>([]);
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [status, setStatus] = React.useState("Starting");
   const [busy, setBusy] = React.useState(false);
@@ -521,8 +575,7 @@ function App() {
 
   React.useEffect(() => {
     if (!authConfig) return;
-    if (!authConfig.requiresToken || token) void refresh();
-    else setStatus("Sign in required");
+    void refresh();
   }, [authConfig]);
 
   React.useEffect(() => {
@@ -557,18 +610,34 @@ function App() {
   async function refresh() {
     setBusy(true);
     try {
-      const [sessionResult, worldsResult, cubeResult] = await Promise.all([
+      const [sessionResult, worldsResult, cubeResult, nodesResult, metricsResult, tracesResult] = await Promise.all([
         api<{ user: { subject: string } }>("/api/session", { token }),
         api<World[]>("/api/worlds", { token }),
-        api<CubeInspect>("/api/cube/inspect", { token })
+        api<CubeInspect>("/api/cube/inspect", { token }),
+        api<ClusterNode[]>("/api/cluster/nodes", { token }),
+        api<ObservabilitySnapshot>("/api/observability/metrics", { token }),
+        api<TraceSession[]>("/api/observability/traces", { token })
       ]);
+      const nextCsrfToken = (sessionResult as { csrfToken?: string | null }).csrfToken || "";
+      if (nextCsrfToken) {
+        sessionStorage.setItem("kakurizai.csrf", nextCsrfToken);
+        setCsrfToken(nextCsrfToken);
+      }
       const nextInventory = buildInventory(worldsResult, cubeResult);
       setSession(sessionResult.user.subject);
       setWorlds(worldsResult);
       setCube(cubeResult);
+      setClusterNodes(nodesResult);
+      setObservability(metricsResult);
+      setTraces(tracesResult);
       setSelectedId((current) => nextInventory.some((row) => row.key === current) ? current : nextInventory[0]?.key || null);
       setStatus(`${nextInventory.length} Sandbox${nextInventory.length === 1 ? "" : "es"} / ${cubeResult.sandboxes.length} runtime`);
     } catch (error) {
+      if (authConfig?.requiresToken || authConfig?.requiresCredentials) {
+        setSession(null);
+        setCsrfToken("");
+        sessionStorage.removeItem("kakurizai.csrf");
+      }
       setStatus(error instanceof Error ? error.message : String(error));
     } finally {
       setBusy(false);
@@ -577,8 +646,40 @@ function App() {
 
   async function signIn(event: React.FormEvent) {
     event.preventDefault();
-    localStorage.setItem("kakurizai.token", token);
-    await refresh();
+    setBusy(true);
+    try {
+      const result = await api<{ user: { subject: string }; csrfToken?: string | null }>("/api/auth/login", {
+        method: "POST",
+        body: authConfig?.requiresCredentials
+          ? { username: username.trim(), password, totp: mfaCode.trim() || undefined }
+          : { token: token.trim(), totp: mfaCode.trim() || undefined }
+      });
+      setSession(result.user.subject);
+      const nextCsrfToken = result.csrfToken || "";
+      if (nextCsrfToken) sessionStorage.setItem("kakurizai.csrf", nextCsrfToken);
+      setCsrfToken(nextCsrfToken);
+      setToken("");
+      setPassword("");
+      setMfaCode("");
+      await refresh();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function signOut() {
+    try {
+      await api("/api/auth/logout", { method: "POST" });
+    } finally {
+      sessionStorage.removeItem("kakurizai.csrf");
+      setCsrfToken("");
+      setSession(null);
+      setWorlds([]);
+      setCube(null);
+      setStatus("Sign in required");
+    }
   }
 
   async function openCreateMenu() {
@@ -871,36 +972,200 @@ function App() {
     }
   }
 
-  if (authConfig?.requiresToken && !session) {
+  async function replicateSelected(options: { nodes?: string[]; replicas?: number; stateMode?: string; includeHostMounts?: boolean; replace?: boolean } = {}) {
+    if (!selected?.world) return;
+    setBusy(true);
+    try {
+      const result = await api<{ created: World[]; existing: World[]; skipped: Array<{ reason: string }>; state?: { directMemoryRestoredNodes?: string[] } }>(`/api/worlds/${encodeURIComponent(selected.world.id)}/replicate`, {
+        method: "POST",
+        body: {
+          nodes: options.nodes || [],
+          replicas: options.replicas || Math.max(1, clusterNodes.length || 1),
+          stateMode: options.stateMode || "stateful",
+          includeHostMounts: Boolean(options.includeHostMounts),
+          replace: Boolean(options.replace)
+        }
+      });
+      const directMemory = result.state?.directMemoryRestoredNodes?.length ? ` / memory ${result.state.directMemoryRestoredNodes.join(",")}` : "";
+      setStatus(`Replicated ${selected.name}: ${result.created.length} created / ${result.existing.length} existing${directMemory}`);
+      await refresh();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reconcileFailover() {
+    setBusy(true);
+    try {
+      const result = await api<{ promoted: unknown[]; skipped: unknown[] }>("/api/cluster/failover/reconcile", {
+        method: "POST",
+        body: {}
+      });
+      setStatus(`Failover reconcile: ${result.promoted.length} promoted / ${result.skipped.length} skipped`);
+      await refresh();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function checkpointFailover() {
+    setBusy(true);
+    try {
+      const result = await api<{ results: unknown[] }>("/api/cluster/failover/checkpoint", {
+        method: "POST",
+        body: { world: selected?.world?.id || undefined, force: Boolean(selected?.world) }
+      });
+      setStatus(`Failover checkpoint: ${result.results.length} updated`);
+      await refresh();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createClusterJoinToken(options: { ttlSeconds: number; uses: number }) {
+    setBusy(true);
+    try {
+      const result = await api<{ token: string; expiresAt: string; maxUses: number }>("/api/cluster/join-token", {
+        method: "POST",
+        body: options
+      });
+      setStatus(`Join token expires ${formatDate(result.expiresAt)}`);
+      return result;
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function registerClusterNode(input: Record<string, unknown>) {
+    setBusy(true);
+    try {
+      await api<ClusterNode>("/api/cluster/nodes", {
+        method: "POST",
+        body: input
+      });
+      setStatus(`Registered ${String(input.name || input.nodeId || "node")}`);
+      await refresh();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeClusterNode(ref: string) {
+    setBusy(true);
+    try {
+      await api<ClusterNode>(`/api/cluster/nodes/${encodeURIComponent(ref)}`, { method: "DELETE" });
+      setStatus(`Removed node ${ref}`);
+      await refresh();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function startTraceSession(targetType: string, target?: string | null) {
+    setBusy(true);
+    try {
+      const trace = await api<TraceSession>("/api/observability/traces", {
+        method: "POST",
+        body: { targetType, target: target || null, ttlSeconds: 60 * 60 }
+      });
+      setTraces((current) => [trace, ...current]);
+      setStatus(`Tracing ${trace.targetType}:${trace.target || "*"}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function stopTraceSession(id: string) {
+    setBusy(true);
+    try {
+      const trace = await api<TraceSession>(`/api/observability/traces/${encodeURIComponent(id)}/stop`, { method: "POST" });
+      setTraces((current) => current.map((item) => item.id === trace.id ? trace : item));
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const authRequired = Boolean(authConfig?.requiresToken || authConfig?.requiresCredentials);
+  const canSubmitAuth = authConfig?.requiresCredentials
+    ? username.trim() && password && (!authConfig?.mfaRequired || mfaCode.trim())
+    : token.trim() && (!authConfig?.mfaRequired || mfaCode.trim());
+
+  if (authRequired && !session) {
     return (
       <div className="loginPage">
         <form className="loginPanel" onSubmit={signIn}>
           <div className="mark"><Shield size={22} /></div>
           <h1>KakuriZai Console</h1>
-          <p>{authConfig.label}</p>
+          <p>{status === "Sign in required" ? authConfig.label : status}</p>
           <div className="authMeta">
             <span>Provider</span><strong>{authConfig.provider}</strong>
             <span>Issuer</span><strong>{authConfig.issuer || "-"}</strong>
             <span>Audience</span><strong>{authConfig.audience || "-"}</strong>
           </div>
-          <label>
-            Bearer token
-            <input value={token} onChange={(event) => setToken(event.target.value)} placeholder="eyJ..." />
-          </label>
-          <button className="primary wide" type="submit"><KeyRound size={16} /> Sign in</button>
+          {authConfig.requiresCredentials ? (
+            <>
+              <label>
+                Username
+                <input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} />
+              </label>
+              <label>
+                Password
+                <input autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
+              </label>
+            </>
+          ) : (
+            <label>
+              Bearer token
+              <input value={token} onChange={(event) => setToken(event.target.value)} placeholder="eyJ..." />
+            </label>
+          )}
+          {authConfig.mfaRequired ? (
+            <label>
+              One-time code
+              <input
+                autoComplete="one-time-code"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={mfaCode}
+                onChange={(event) => setMfaCode(event.target.value)}
+                placeholder="123456"
+              />
+            </label>
+          ) : null}
+          <button className="primary wide" type="submit" disabled={busy || !canSubmitAuth}><KeyRound size={16} /> Sign in</button>
         </form>
       </div>
     );
   }
 
   const isNetworkView = activeView === "network";
-  const titleLabel = isNetworkView ? "Network" : selected ? selected.name : "No sandbox selected";
-  const subtitleLabel = isNetworkView
+  const isObservabilityView = activeView === "observability";
+  const titleLabel = isObservabilityView ? "Observability" : isNetworkView ? "Network" : selected ? selected.name : "No sandbox selected";
+  const subtitleLabel = isObservabilityView
+    ? `${observability?.sample.summary.nodes || 0} nodes / ${observability?.sample.summary.replicas || 0} replicas`
+    : isNetworkView
     ? selected ? `${selected.name} / ${selected.runtime?.sandboxIp || selected.sandboxId || subtitleForSandbox(selected)}` : status
     : selected ? subtitleForSandbox(selected) : status;
 
   return (
-    <main className={`workbench ${isNetworkView ? "networkWorkbench" : ""}`}>
+    <main className={`workbench ${isNetworkView || isObservabilityView ? "networkWorkbench" : ""}`}>
       <aside className="activityBar">
         <button
           ref={activityMenuRef}
@@ -937,6 +1202,18 @@ function App() {
           type="button"
         >
           <Network size={21} />
+        </button>
+        <button
+          className={`activityButton ${activeView === "observability" ? "active" : ""}`}
+          onClick={() => {
+            setActiveView("observability");
+            setActionMenuOpen(false);
+            setLaunchMenuOpen(false);
+          }}
+          title="Observability"
+          type="button"
+        >
+          <Activity size={21} />
         </button>
       </aside>
 
@@ -1168,7 +1445,7 @@ function App() {
         </form>
       ) : null}
 
-      {!isNetworkView ? (
+      {!isNetworkView && !isObservabilityView ? (
         <section className="sandboxPanel">
           <header className="panelHeader">
             <span>Sandboxes</span>
@@ -1225,7 +1502,18 @@ function App() {
             <button className="ghost" onClick={() => void refresh()} title="Refresh" type="button" disabled={busy}>
               <RefreshCcw size={16} />
             </button>
-            {!isNetworkView && selected && isPausedStatus(selected.status) ? (
+            {authRequired ? (
+              <button className="ghost iconButton" onClick={() => void signOut()} title="Sign out" type="button">
+                <LogOut size={16} />
+              </button>
+            ) : null}
+            {isObservabilityView ? (
+              <button className="ghost" onClick={() => void refresh()} title="Refresh metrics" type="button" disabled={busy}>
+                <Activity size={16} />
+                Metrics
+              </button>
+            ) : null}
+            {!isNetworkView && !isObservabilityView && selected && isPausedStatus(selected.status) ? (
               <button
                 className="ghost"
                 onClick={() => void resumeSelected()}
@@ -1236,7 +1524,7 @@ function App() {
                 <Play size={16} />
                 Resume
               </button>
-            ) : !isNetworkView && selected ? (
+            ) : !isNetworkView && !isObservabilityView && selected ? (
               <button
                 className="ghost"
                 onClick={() => void pauseSelected()}
@@ -1248,7 +1536,7 @@ function App() {
                 Pause
               </button>
             ) : null}
-            {!isNetworkView && selected ? (
+            {!isNetworkView && !isObservabilityView && selected ? (
               <button className="danger" onClick={() => void destroySelected()} type="button" disabled={busy || !selected.sandboxId && !selected.world}>
                 <Trash2 size={16} />
                 Delete
@@ -1258,7 +1546,24 @@ function App() {
         </header>
 
         <section className="editorPane">
-          {isNetworkView ? (
+          {isObservabilityView ? (
+            <ObservabilityWorkspace
+              selected={selected}
+              nodes={clusterNodes}
+              metrics={observability}
+              traces={traces}
+              busy={busy}
+              onRefresh={() => refresh()}
+              onReplicate={replicateSelected}
+              onFailoverReconcile={reconcileFailover}
+              onFailoverCheckpoint={checkpointFailover}
+              onCreateJoinToken={createClusterJoinToken}
+              onRegisterNode={registerClusterNode}
+              onRemoveNode={removeClusterNode}
+              onStartTrace={startTraceSession}
+              onStopTrace={stopTraceSession}
+            />
+          ) : isNetworkView ? (
             <NetworkWorkspace
               selected={selected}
               rows={inventory}
@@ -1290,6 +1595,7 @@ function App() {
                   <Metric label="Created" value={formatDate(selected.createdAt)} />
                   <Metric label="Host mount" value={hasHostMount(selected) ? "enabled" : "disabled"} />
                   <Metric label="Terminal tools" value={formatBootstrapStatus(selected.world?.sandbox?.bootstrap)} />
+                  <Metric label="Replication memory" value={replicationMemoryText(selected.world)} />
                   <Metric label="Sandbox ID" value={selected.sandboxId || "-"} wide />
                   <Metric label="Source" value={hasHostMount(selected) ? selected.world?.sourcePath || selected.sourcePath || "-" : "-"} wide />
                   <Metric label="Base template" value={selected.templateId || selected.world?.sandbox?.baseId || cube?.template || "-"} wide />
@@ -1298,7 +1604,7 @@ function App() {
               </DetailSection>
 
               <DetailSection icon={<Terminal size={16} />} title="Terminal">
-                <SandboxAccessLauncher world={selected.world} token={token} />
+                <SandboxAccessLauncher world={selected.world} />
               </DetailSection>
 
               <DetailSection icon={<Database size={16} />} title="Storage and Mounts">
@@ -1371,6 +1677,375 @@ function DetailSection({ icon, title, children }: { icon: React.ReactNode; title
       </header>
       {children}
     </section>
+  );
+}
+
+function ObservabilityWorkspace({
+  selected,
+  nodes,
+  metrics,
+  traces,
+  busy,
+  onRefresh,
+  onReplicate,
+  onFailoverReconcile,
+  onFailoverCheckpoint,
+  onCreateJoinToken,
+  onRegisterNode,
+  onRemoveNode,
+  onStartTrace,
+  onStopTrace
+}: {
+  selected: InventoryRow | null;
+  nodes: ClusterNode[];
+  metrics: ObservabilitySnapshot | null;
+  traces: TraceSession[];
+  busy: boolean;
+  onRefresh: () => Promise<void>;
+  onReplicate: (options?: { nodes?: string[]; replicas?: number; stateMode?: string; includeHostMounts?: boolean; replace?: boolean }) => Promise<void>;
+  onFailoverReconcile: () => Promise<void>;
+  onFailoverCheckpoint: () => Promise<void>;
+  onCreateJoinToken: (options: { ttlSeconds: number; uses: number }) => Promise<{ token: string; expiresAt: string; maxUses: number }>;
+  onRegisterNode: (input: Record<string, unknown>) => Promise<void>;
+  onRemoveNode: (ref: string) => Promise<void>;
+  onStartTrace: (targetType: string, target?: string | null) => Promise<void>;
+  onStopTrace: (id: string) => Promise<void>;
+}) {
+  const sample = metrics?.sample;
+  const [joinToken, setJoinToken] = React.useState("");
+  return (
+    <div className="sandboxDashboard">
+      <div className="overviewGrid">
+        <Kpi icon={<Server size={16} />} label="Nodes" value={String(sample?.summary.nodes ?? nodes.length)} />
+        <Kpi icon={<Activity size={16} />} label="Healthy" value={String(sample?.summary.healthyNodes ?? "-")} tone="ok" />
+        <Kpi icon={<Box size={16} />} label="Worlds" value={String(sample?.summary.worlds ?? "-")} />
+        <Kpi icon={<Layers size={16} />} label="Replicas" value={String(sample?.summary.replicas ?? "-")} />
+        <Kpi icon={<Database size={16} />} label="Samples" value={String(metrics?.history?.length || 0)} />
+        <Kpi icon={<Route size={16} />} label="Traces" value={String(traces.length)} />
+      </div>
+
+      <DetailSection icon={<Activity size={16} />} title="Cluster Actions">
+        <div className="actionStrip">
+          <button className="ghost" onClick={() => void onRefresh()} type="button" disabled={busy}>
+            <RefreshCcw size={15} />
+            Refresh
+          </button>
+          <button className="ghost" onClick={() => void onStartTrace("all", null)} type="button" disabled={busy}>
+            <Route size={15} />
+            Trace All
+          </button>
+          <button className="ghost" onClick={() => void onStartTrace("world", selected?.world?.id || null)} type="button" disabled={busy || !selected?.world}>
+            <Route size={15} />
+            Trace Selected
+          </button>
+          <button className="ghost" onClick={() => void onFailoverCheckpoint()} type="button" disabled={busy}>
+            <Layers size={15} />
+            Checkpoint
+          </button>
+          <button className="ghost" onClick={() => void onFailoverReconcile()} type="button" disabled={busy}>
+            <Shield size={15} />
+            Failover
+          </button>
+        </div>
+      </DetailSection>
+
+      <DetailSection icon={<Server size={16} />} title="Node Management">
+        <NodeManagement
+          nodes={nodes}
+          busy={busy}
+          joinToken={joinToken}
+          onJoinToken={async (options) => {
+            const result = await onCreateJoinToken(options);
+            setJoinToken(result.token);
+          }}
+          onRegisterNode={onRegisterNode}
+          onRemoveNode={onRemoveNode}
+        />
+      </DetailSection>
+
+      <DetailSection icon={<Layers size={16} />} title="Replication">
+        <ReplicationLauncher
+          selected={selected}
+          nodes={nodes}
+          busy={busy}
+          onReplicate={onReplicate}
+        />
+      </DetailSection>
+
+      <DetailSection icon={<Server size={16} />} title="Nodes">
+        <div className="dataTable">
+          <div className="dataRow head">
+            <span>Node</span>
+            <span>Status</span>
+            <span>Usage</span>
+            <span>Replicas</span>
+          </div>
+          {(sample?.nodes || nodes).map((node, index) => (
+            <div className="dataRow" key={String(node.id || node.nodeId || index)}>
+              <span>{String(node.name || node.nodeId || node.id || "-")}</span>
+              <span>{String(node.status || "-")}</span>
+              <span>{nodeUsageText(node)}</span>
+              <span>{String(node.replicaCount ?? "-")}</span>
+            </div>
+          ))}
+        </div>
+      </DetailSection>
+
+      <DetailSection icon={<Box size={16} />} title="World Metrics">
+        <div className="dataTable">
+          <div className="dataRow head">
+            <span>World</span>
+            <span>Status</span>
+            <span>Placement</span>
+            <span>Upper</span>
+          </div>
+          {(sample?.worlds || []).map((world, index) => (
+            <div className="dataRow" key={String(world.id || index)}>
+              <span>{String(world.name || "-")}</span>
+              <span>{String(world.status || "-")}</span>
+              <span>{String(world.nodeId || world.replicaOf || "-")}</span>
+              <span>{formatBytes(Number(world.upperBytes || 0))}</span>
+            </div>
+          ))}
+        </div>
+      </DetailSection>
+
+      <DetailSection icon={<Route size={16} />} title="Traces">
+        <TraceLauncher selected={selected} busy={busy} onStartTrace={onStartTrace} />
+        <div className="dataTable">
+          <div className="dataRow head">
+            <span>Trace</span>
+            <span>Target</span>
+            <span>Events</span>
+            <span>State</span>
+          </div>
+          {traces.map((trace) => (
+            <div className="dataRow" key={trace.id}>
+              <span>{trace.id}</span>
+              <span>{trace.targetType}:{trace.target || "*"}</span>
+              <span>{String(trace.events?.length || 0)} / {trace.events?.[trace.events.length - 1]?.path ? String(trace.events[trace.events.length - 1].path) : "-"}</span>
+              <span>
+                {trace.enabled ? (
+                  <button className="ghost compactButton" onClick={() => void onStopTrace(trace.id)} type="button" disabled={busy}>Stop</button>
+                ) : "stopped"}
+              </span>
+            </div>
+          ))}
+        </div>
+      </DetailSection>
+    </div>
+  );
+}
+
+function NodeManagement({
+  nodes,
+  busy,
+  joinToken,
+  onJoinToken,
+  onRegisterNode,
+  onRemoveNode
+}: {
+  nodes: ClusterNode[];
+  busy: boolean;
+  joinToken: string;
+  onJoinToken: (options: { ttlSeconds: number; uses: number }) => Promise<void>;
+  onRegisterNode: (input: Record<string, unknown>) => Promise<void>;
+  onRemoveNode: (ref: string) => Promise<void>;
+}) {
+  const [ttlSeconds, setTtlSeconds] = React.useState("86400");
+  const [uses, setUses] = React.useState("1");
+  const [name, setName] = React.useState("");
+  const [nodeId, setNodeId] = React.useState("");
+  const [ip, setIp] = React.useState("");
+  const [endpoint, setEndpoint] = React.useState("");
+  const [roles, setRoles] = React.useState("worker");
+  const [labels, setLabels] = React.useState("");
+  return (
+    <div className="managementStack">
+      <div className="managementGrid">
+        <div>
+          <label>Token TTL</label>
+          <input value={ttlSeconds} onChange={(event) => setTtlSeconds(event.target.value)} inputMode="numeric" />
+        </div>
+        <div>
+          <label>Uses</label>
+          <input value={uses} onChange={(event) => setUses(event.target.value)} inputMode="numeric" />
+        </div>
+        <button className="ghost fieldButton" onClick={() => void onJoinToken({ ttlSeconds: Number(ttlSeconds || 86400), uses: Number(uses || 1) })} type="button" disabled={busy}>
+          <KeyRound size={15} />
+          Join Token
+        </button>
+      </div>
+      {joinToken ? <input className="monoInput" value={joinToken} readOnly /> : null}
+
+      <div className="managementGrid wide">
+        <div>
+          <label>Name</label>
+          <input value={name} onChange={(event) => setName(event.target.value)} placeholder="worker-a" />
+        </div>
+        <div>
+          <label>Node ID</label>
+          <input value={nodeId} onChange={(event) => setNodeId(event.target.value)} placeholder="ins-a" />
+        </div>
+        <div>
+          <label>IP</label>
+          <input value={ip} onChange={(event) => setIp(event.target.value)} placeholder="10.0.0.10" />
+        </div>
+        <div>
+          <label>Endpoint</label>
+          <input value={endpoint} onChange={(event) => setEndpoint(event.target.value)} placeholder="https://node:38476" />
+        </div>
+        <div>
+          <label>Roles</label>
+          <input value={roles} onChange={(event) => setRoles(event.target.value)} placeholder="worker" />
+        </div>
+        <div>
+          <label>Labels</label>
+          <input value={labels} onChange={(event) => setLabels(event.target.value)} placeholder="zone=lab" />
+        </div>
+        <button
+          className="primary fieldButton"
+          onClick={() => {
+            void onRegisterNode({
+              name: name.trim(),
+              nodeId: (nodeId || name).trim(),
+              ip: ip.trim() || undefined,
+              endpoint: endpoint.trim() || undefined,
+              roles: splitTextList(roles),
+              labels: parseKeyValueText(labels)
+            });
+          }}
+          type="button"
+          disabled={busy || !name.trim()}
+        >
+          <Server size={15} />
+          Register
+        </button>
+      </div>
+
+      <div className="dataTable">
+        <div className="dataRow head">
+          <span>Node</span>
+          <span>Status</span>
+          <span>Endpoint</span>
+          <span>Action</span>
+        </div>
+        {nodes.map((node) => (
+          <div className="dataRow" key={node.id}>
+            <span>{node.name}</span>
+            <span>{node.status}</span>
+            <span>{node.endpoint || node.ip || "-"}</span>
+            <span>
+              <button className="ghost compactButton" onClick={() => void onRemoveNode(node.id)} type="button" disabled={busy}>
+                <Trash2 size={13} />
+                Remove
+              </button>
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ReplicationLauncher({
+  selected,
+  nodes,
+  busy,
+  onReplicate
+}: {
+  selected: InventoryRow | null;
+  nodes: ClusterNode[];
+  busy: boolean;
+  onReplicate: (options?: { nodes?: string[]; replicas?: number; stateMode?: string; includeHostMounts?: boolean; replace?: boolean }) => Promise<void>;
+}) {
+  const [selectedNodes, setSelectedNodes] = React.useState<string[]>([]);
+  const [replicas, setReplicas] = React.useState("");
+  const [stateMode, setStateMode] = React.useState("stateful");
+  const [includeHostMounts, setIncludeHostMounts] = React.useState(false);
+  const [replace, setReplace] = React.useState(false);
+
+  React.useEffect(() => {
+    setSelectedNodes((current) => current.length ? current.filter((node) => nodes.some((candidate) => candidate.id === node)) : nodes.map((node) => node.id));
+  }, [nodes]);
+
+  function toggleNode(id: string) {
+    setSelectedNodes((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  }
+
+  return (
+    <div className="managementStack">
+      <div className="replicationGrid">
+        <div>
+          <label>Replicas</label>
+          <input value={replicas} onChange={(event) => setReplicas(event.target.value)} inputMode="numeric" placeholder={String(selectedNodes.length || nodes.length || 1)} />
+        </div>
+        <div>
+          <label>State</label>
+          <select value={stateMode} onChange={(event) => setStateMode(event.target.value)}>
+            <option value="stateful">Stateful</option>
+            <option value="runtime-snapshot">Runtime snapshot</option>
+            <option value="template-snapshot">Portable template</option>
+            <option value="definition">Definition</option>
+          </select>
+        </div>
+        <label className="checkRow compactCheck">
+          <input type="checkbox" checked={includeHostMounts} onChange={(event) => setIncludeHostMounts(event.target.checked)} />
+          <span><strong>Host mounts</strong><small>copy mount config</small></span>
+        </label>
+        <label className="checkRow compactCheck">
+          <input type="checkbox" checked={replace} onChange={(event) => setReplace(event.target.checked)} />
+          <span><strong>Replace</strong><small>recreate existing replicas</small></span>
+        </label>
+        <button
+          className="primary fieldButton"
+          onClick={() => void onReplicate({
+            nodes: selectedNodes,
+            replicas: Number(replicas || selectedNodes.length || nodes.length || 1),
+            stateMode,
+            includeHostMounts,
+            replace
+          })}
+          type="button"
+          disabled={busy || !selected?.world || selectedNodes.length === 0}
+        >
+          <Layers size={15} />
+          Replicate
+        </button>
+      </div>
+      <div className="nodeChoiceGrid">
+        {nodes.map((node) => (
+          <label className="checkRow compactCheck" key={node.id}>
+            <input type="checkbox" checked={selectedNodes.includes(node.id)} onChange={() => toggleNode(node.id)} />
+            <span><strong>{node.name}</strong><small>{node.nodeId || node.ip || "-"}</small></span>
+          </label>
+        ))}
+      </div>
+      {!nodes.length ? <div className="sectionEmpty">No joined nodes.</div> : null}
+    </div>
+  );
+}
+
+function TraceLauncher({ selected, busy, onStartTrace }: { selected: InventoryRow | null; busy: boolean; onStartTrace: (targetType: string, target?: string | null) => Promise<void> }) {
+  const [targetType, setTargetType] = React.useState("all");
+  const [target, setTarget] = React.useState("");
+  React.useEffect(() => {
+    if (targetType === "world") setTarget(selected?.world?.id || "");
+  }, [targetType, selected?.world?.id]);
+  return (
+    <div className="traceLauncher">
+      <select value={targetType} onChange={(event) => setTargetType(event.target.value)}>
+        <option value="all">all</option>
+        <option value="world">world</option>
+        <option value="node">node</option>
+        <option value="path">path</option>
+      </select>
+      <input value={target} onChange={(event) => setTarget(event.target.value)} placeholder={targetType === "all" ? "*" : "target"} disabled={targetType === "all"} />
+      <button className="ghost" onClick={() => void onStartTrace(targetType, targetType === "all" ? null : target)} type="button" disabled={busy || (targetType !== "all" && !target.trim())}>
+        <Route size={15} />
+        Start Trace
+      </button>
+    </div>
   );
 }
 
@@ -1453,7 +2128,7 @@ function NetworkWorkspace({
   );
 }
 
-function SandboxAccessLauncher({ world, token }: { world?: World; token: string }) {
+function SandboxAccessLauncher({ world }: { world?: World }) {
   const [access, setAccess] = React.useState<DevAccessSession | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
@@ -1473,11 +2148,32 @@ function SandboxAccessLauncher({ world, token }: { world?: World; token: string 
     try {
       const session = await api<DevAccessSession>(`/api/worlds/${encodeURIComponent(world.id)}/dev-access`, {
         method: "POST",
-        token,
         body: { vscode: false, ssh: true }
       });
       setAccess(session);
     } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openVscodeWeb() {
+    const popup = window.open("about:blank", "_blank");
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api<{ vscodeUrl: string }>(`/api/worlds/${encodeURIComponent(world.id)}/dev-access/open`, {
+        method: "POST"
+      });
+      if (popup) {
+        popup.opener = null;
+        popup.location.href = result.vscodeUrl;
+      } else {
+        window.open(result.vscodeUrl, "_blank", "noopener,noreferrer");
+      }
+    } catch (nextError) {
+      popup?.close();
       setError(nextError instanceof Error ? nextError.message : String(nextError));
     } finally {
       setBusy(false);
@@ -1489,14 +2185,14 @@ function SandboxAccessLauncher({ world, token }: { world?: World; token: string 
       <div className="terminalLauncher accessLauncher">
         <button
           className="primary"
-          onClick={() => window.open(shellPageUrl(world.id, token), "_blank", "noopener,noreferrer")}
+          onClick={() => window.open(shellPageUrl(world.id), "_blank", "noopener,noreferrer")}
           type="button"
         >
           <Terminal size={15} />
           Open Terminal
           <ExternalLink size={14} />
         </button>
-        <button onClick={() => window.open(devAccessOpenUrl(world.id, token), "_blank", "noopener,noreferrer")} type="button">
+        <button onClick={() => void openVscodeWeb()} type="button" disabled={busy}>
           <Code2 size={15} />
           VS Code Web
           <ExternalLink size={14} />
@@ -1524,23 +2220,40 @@ function ShellPage({ worldId }: { worldId: string }) {
   const terminalRef = React.useRef<HTMLDivElement | null>(null);
   const socketRef = React.useRef<WebSocket | null>(null);
   const terminalInstanceRef = React.useRef<XTerminal | null>(null);
-  const [token] = React.useState(() => shellTokenFromLocation());
   const [session, setSession] = React.useState(1);
   const [connectionState, setConnectionState] = React.useState("connecting");
   const [worldName, setWorldName] = React.useState("");
 
   React.useEffect(() => {
-    api<World[]>("/api/worlds", { token })
+    api<World[]>("/api/worlds")
       .then((worlds) => {
         const world = worlds.find((candidate) => candidate.id === worldId);
         setWorldName(world?.name || worldId);
       })
       .catch(() => setWorldName(worldId));
-  }, [token, worldId]);
+  }, [worldId]);
+
+  React.useEffect(() => {
+    const updateViewportHeight = () => {
+      const height = window.visualViewport?.height || window.innerHeight;
+      document.documentElement.style.setProperty("--terminal-viewport-height", `${Math.max(1, Math.floor(height))}px`);
+    };
+    updateViewportHeight();
+    window.addEventListener("resize", updateViewportHeight);
+    window.visualViewport?.addEventListener("resize", updateViewportHeight);
+    window.visualViewport?.addEventListener("scroll", updateViewportHeight);
+    return () => {
+      window.removeEventListener("resize", updateViewportHeight);
+      window.visualViewport?.removeEventListener("resize", updateViewportHeight);
+      window.visualViewport?.removeEventListener("scroll", updateViewportHeight);
+      document.documentElement.style.removeProperty("--terminal-viewport-height");
+    };
+  }, []);
 
   React.useEffect(() => {
     if (!terminalRef.current) return;
     let disposed = false;
+    let fitFrame: number | null = null;
     const term = new XTerminal({
       cursorBlink: true,
       convertEol: true,
@@ -1577,7 +2290,6 @@ function ShellPage({ worldId }: { worldId: string }) {
     term.writeln(`Connecting to ${worldName || worldId}...`);
     const url = new URL(`/api/worlds/${encodeURIComponent(worldId)}/shell`, window.location.href);
     url.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    if (token) url.searchParams.set("token", token);
     const socket = new WebSocket(url);
     socketRef.current = socket;
     terminalInstanceRef.current = term;
@@ -1596,17 +2308,28 @@ function ShellPage({ worldId }: { worldId: string }) {
         // xterm can throw before the font metrics are ready.
       }
     };
+    const scheduleFit = () => {
+      if (disposed) return;
+      if (fitFrame !== null) window.cancelAnimationFrame(fitFrame);
+      fitFrame = window.requestAnimationFrame(() => {
+        fitFrame = null;
+        fit();
+      });
+    };
     const disposable = term.onData((data) => {
       send({ type: "input", data });
     });
-    const resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(fit);
+    const resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(scheduleFit);
     resizeObserver?.observe(terminalRef.current);
-    window.addEventListener("resize", fit);
+    window.addEventListener("resize", scheduleFit);
+    window.visualViewport?.addEventListener("resize", scheduleFit);
+    window.visualViewport?.addEventListener("scroll", scheduleFit);
+    const fitTimer = window.setTimeout(scheduleFit, 80);
     socket.addEventListener("open", () => {
       if (disposed) return;
       setConnectionState("connected");
+      scheduleFit();
       window.requestAnimationFrame(() => {
-        fit();
         term.focus();
       });
     });
@@ -1621,18 +2344,22 @@ function ShellPage({ worldId }: { worldId: string }) {
       setConnectionState("error");
       term.writeln("\r\nShell connection error.");
     });
-    window.requestAnimationFrame(fit);
+    scheduleFit();
     return () => {
       disposed = true;
+      if (fitFrame !== null) window.cancelAnimationFrame(fitFrame);
+      window.clearTimeout(fitTimer);
       disposable.dispose();
       resizeObserver?.disconnect();
-      window.removeEventListener("resize", fit);
+      window.removeEventListener("resize", scheduleFit);
+      window.visualViewport?.removeEventListener("resize", scheduleFit);
+      window.visualViewport?.removeEventListener("scroll", scheduleFit);
       socket.close();
       term.dispose();
       socketRef.current = null;
       terminalInstanceRef.current = null;
     };
-  }, [session, token, worldId]);
+  }, [session, worldId]);
 
   function disconnect() {
     socketRef.current?.close();
@@ -1655,7 +2382,13 @@ function ShellPage({ worldId }: { worldId: string }) {
           <button className="danger" onClick={disconnect} type="button" disabled={connectionState !== "connected"}>Disconnect</button>
         </div>
       </header>
-      <div className="terminalFrame" ref={terminalRef} />
+      <div
+        aria-label="Sandbox terminal"
+        className="terminalFrame"
+        onPointerDown={() => terminalInstanceRef.current?.focus()}
+        ref={terminalRef}
+        role="application"
+      />
     </main>
   );
 }
@@ -1665,22 +2398,8 @@ function shellWorldIdFromLocation() {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-function shellTokenFromLocation() {
-  const url = new URL(window.location.href);
-  const token = url.searchParams.get("token") || localStorage.getItem("kakurizai.token") || "";
-  if (token) localStorage.setItem("kakurizai.token", token);
-  return token;
-}
-
-function shellPageUrl(worldId: string, token: string) {
+function shellPageUrl(worldId: string) {
   const url = new URL(`/shell/${encodeURIComponent(worldId)}`, window.location.href);
-  if (token) url.searchParams.set("token", token);
-  return url.toString();
-}
-
-function devAccessOpenUrl(worldId: string, token: string) {
-  const url = new URL(`/api/worlds/${encodeURIComponent(worldId)}/dev-access/open`, window.location.href);
-  if (token) url.searchParams.set("token", token);
   return url.toString();
 }
 
@@ -2525,6 +3244,16 @@ function hasHostMount(row: InventoryRow) {
   return row.mountMode !== "none";
 }
 
+function replicationMemoryText(world?: World) {
+  const state = world?.backendConfig?.replication && typeof world.backendConfig.replication === "object"
+    ? (world.backendConfig.replication.state as Record<string, unknown> | undefined)
+    : null;
+  if (!state) return "-";
+  if (state.capturesMemory === true) return state.continuousMemory === true ? "continuous" : "captured";
+  if (state.capturesMemory === false) return "not captured";
+  return "-";
+}
+
 function subtitleForSandbox(row: InventoryRow) {
   if (!hasHostMount(row)) return "host mount disabled";
   return row.sourcePath || row.runtime?.hostId || "-";
@@ -2624,12 +3353,17 @@ function statusTone(status: string): "ok" | "warn" | "muted" {
 async function api<T = unknown>(path: string, options: { method?: string; token?: string | null; body?: unknown } = {}): Promise<T> {
   const headers: Record<string, string> = {};
   if (options.token) headers.Authorization = `Bearer ${options.token}`;
+  const method = options.method || "GET";
+  if (!["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase())) {
+    const csrfToken = sessionStorage.getItem("kakurizai.csrf");
+    if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
+  }
   let body: string | undefined;
   if (options.body) {
     headers["Content-Type"] = "application/json";
     body = JSON.stringify(options.body);
   }
-  const response = await fetch(path, { method: options.method || "GET", headers, body });
+  const response = await fetch(path, { method, headers, body, credentials: "same-origin" });
   const text = await response.text();
   const data = text ? JSON.parse(text) : null;
   if (!response.ok) throw new Error(`${response.status}: ${data?.error || response.statusText}`);
@@ -2654,6 +3388,32 @@ function formatBytesNullable(bytes?: number | null) {
 
 function formatDiskMb(value?: number | null) {
   return value == null ? "-" : `${value} MB`;
+}
+
+function nodeUsageText(node: Record<string, unknown>) {
+  const parts = [
+    node.quotaCpuUsage != null ? `cpu ${node.quotaCpuUsage}` : null,
+    node.quotaMemUsage != null ? `mem ${node.quotaMemUsage} MB` : null,
+    node.dataDiskUsagePer != null ? `data ${node.dataDiskUsagePer}%` : null,
+    node.storageDiskUsagePer != null ? `storage ${node.storageDiskUsagePer}%` : null
+  ].filter(Boolean);
+  return parts.length ? parts.join(" / ") : "-";
+}
+
+function splitTextList(value: string) {
+  return value.split(/[,\s]+/).map((item) => item.trim()).filter(Boolean);
+}
+
+function parseKeyValueText(value: string) {
+  const result: Record<string, string> = {};
+  for (const item of splitTextList(value)) {
+    const index = item.indexOf("=");
+    if (index <= 0) continue;
+    const key = item.slice(0, index).trim();
+    const next = item.slice(index + 1).trim();
+    if (key && next) result[key] = next;
+  }
+  return result;
 }
 
 function formatDate(value?: string | null) {

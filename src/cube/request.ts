@@ -17,8 +17,14 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
     ...(cubeConfig.network || {})
   });
   const kubernetes = normalizeKubernetesConfig(cubeConfig.kubernetes || world.backendConfig?.kubernetes || {});
+  const placement = normalizePlacement(world.backendConfig?.placement || cubeConfig.placement || {});
+  const replication = world.backendConfig?.replication || {};
   const workspaceArg = shellQuote(workspace);
-  const setup = setupCommandForMounts(mounts, { workspaceArg });
+  const setup = withReplicationHydration(
+    setupCommandForMounts(mounts, { workspaceArg }),
+    replication,
+    { workspaceArg }
+  );
   const writableLayerSize = cubeConfig.writableLayerSize || world.backendConfig?.writableLayerSize || null;
   const writableLayerRequestAnnotations = writableLayerAnnotations(writableLayerSize);
   const volumes = volumesForMounts(mounts, world, { writableLayerSize });
@@ -58,6 +64,8 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
       "kakurizai.hostMount": String(mounts.length > 0),
       "kakurizai.mounts": JSON.stringify(mounts.map(publicMountSpec)),
       "kakurizai.overlayMounts": String(mounts.filter((mount) => mount.mode === "agctl-overlay").length),
+      ...placementAnnotations(placement),
+      ...replicationAnnotations(replication),
       ...kubernetesAnnotations(kubernetes),
       "cube.master.appsnapshot.template.id": cubeConfig.template || "kakurizai-base",
       "cube.master.appsnapshot.template.version": cubeConfig.templateVersion || "v2",
@@ -66,6 +74,8 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
     labels: {
       "app.kubernetes.io/managed-by": "kakurizai",
       "kakurizai.world": world.id,
+      ...(placement.nodeId ? { "kakurizai.placement.node": placement.nodeId } : {}),
+      ...(replication.sourceWorldId ? { "kakurizai.replica-of": replication.sourceWorldId } : {}),
       ...(kubernetes.enabled ? {
         "kakurizai.kubernetes.cluster": kubernetes.clusterName,
         "kakurizai.kubernetes.node-role": kubernetes.nodeRole
@@ -75,6 +85,16 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
     network_type: network.type || "tap",
     namespace: cubeConfig.namespace || "kakurizai"
   };
+  if (placement.nodeId) {
+    request.ins_id = placement.nodeId;
+    request.distribution_scope = [placement.nodeId];
+    request.annotations["com.cube.debug"] = "true";
+  }
+  if (placement.nodeIp) {
+    request.ins_ip = placement.nodeIp;
+    request.distribution_scope = [placement.nodeId || placement.nodeIp];
+    request.annotations["com.cube.debug"] = "true";
+  }
   return applyNetworkToCubeRequest(request, network, kubernetes);
 }
 
@@ -202,6 +222,48 @@ function kubernetesAnnotations(kubernetes) {
   return annotations;
 }
 
+function normalizePlacement(placement) {
+  return {
+    nodeId: cleanString(placement.nodeId || placement.id || placement.insId || placement.ins_id),
+    nodeIp: cleanString(placement.nodeIp || placement.ip || placement.insIp || placement.ins_ip),
+    nodeName: cleanString(placement.nodeName || placement.name),
+    endpoint: cleanString(placement.endpoint)
+  };
+}
+
+function placementAnnotations(placement) {
+  const annotations = {};
+  if (placement.nodeId) annotations["kakurizai.placement.nodeId"] = placement.nodeId;
+  if (placement.nodeIp) annotations["kakurizai.placement.nodeIp"] = placement.nodeIp;
+  if (placement.nodeName) annotations["kakurizai.placement.nodeName"] = placement.nodeName;
+  if (placement.endpoint) annotations["kakurizai.placement.endpoint"] = placement.endpoint;
+  return annotations;
+}
+
+function replicationAnnotations(replication = {}) {
+  const annotations = {};
+  if (replication.sourceWorldId) annotations["kakurizai.replication.sourceWorldId"] = replication.sourceWorldId;
+  if (replication.sourceWorldName) annotations["kakurizai.replication.sourceWorldName"] = replication.sourceWorldName;
+  if (replication.group) annotations["kakurizai.replication.group"] = replication.group;
+  if (replication.role) annotations["kakurizai.replication.role"] = replication.role;
+  if (replication.targetNodeId) annotations["kakurizai.replication.targetNodeId"] = replication.targetNodeId;
+  if (replication.targetNodeName) annotations["kakurizai.replication.targetNodeName"] = replication.targetNodeName;
+  const state = replication.state || {};
+  if (replication.stateMode || state.mode) annotations["kakurizai.replication.stateMode"] = replication.stateMode || state.mode;
+  if (state.templateId) annotations["kakurizai.replication.stateTemplateId"] = state.templateId;
+  if (state.snapshotId) annotations["kakurizai.replication.runtimeSnapshotId"] = state.snapshotId;
+  if (state.capturedAt) annotations["kakurizai.replication.stateCapturedAt"] = state.capturedAt;
+  if (state.capturesMemory != null) annotations["kakurizai.replication.capturesMemory"] = String(Boolean(state.capturesMemory));
+  if (state.continuousMemory != null) annotations["kakurizai.replication.continuousMemory"] = String(Boolean(state.continuousMemory));
+  if (state.hydrateWorkspace != null) annotations["kakurizai.replication.hydrateWorkspace"] = String(Boolean(state.hydrateWorkspace));
+  return annotations;
+}
+
+function cleanString(value) {
+  const text = String(value || "").trim();
+  return text || null;
+}
+
 function setJsonAnnotation(annotations, key, value) {
   if (value) annotations[key] = JSON.stringify(value);
   else delete annotations[key];
@@ -220,6 +282,18 @@ function setupCommandForMounts(mounts, paths) {
     ])
   ];
   return ["set -eu", `mkdir -p ${dirs.join(" ")}`, "tail -f /dev/null"].join("; ");
+}
+
+function withReplicationHydration(setup, replication = {}, paths) {
+  const state = replication.state || {};
+  if (state.hydrateWorkspace !== true) return setup;
+  const snapshotPath = shellQuote(state.workspaceSnapshotPath || "/kakurizai/replication-state/workspace");
+  return [
+    "set -eu",
+    `mkdir -p ${paths.workspaceArg}`,
+    `if [ -d ${snapshotPath} ]; then cp -a ${snapshotPath}/. ${paths.workspaceArg}/; fi`,
+    setup.replace(/^set -eu;\s*/, "")
+  ].join("; ");
 }
 
 function volumesForMounts(mounts, world, options = {}) {

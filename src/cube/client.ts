@@ -260,6 +260,258 @@ export class CubeSandboxClient {
     throw new Error("CubeSandbox API create is not wired yet; use cube.mode=auto, cube.mode=master, or cube.mode=cli");
   }
 
+  async materializeReplicationState(world, options = {}) {
+    const sandboxId = world.sandbox?.containerId || world.sandbox?.id;
+    if (!sandboxId) return { applied: false, skipped: true, reason: "world has no sandbox id" };
+    const binary = commandExists(this.config.cubecli || "cubecli");
+    if (!binary) return { applied: false, skipped: true, reason: "cubecli not found" };
+    const workspace = options.workspace || this.config.workspacePath || "/workspace";
+    const target = options.target || "/kakurizai/replication-state/workspace";
+    const script = [
+      "set -eu",
+      `workspace=${shellQuote(workspace)}`,
+      `target=${shellQuote(target)}`,
+      "rm -rf \"$target\"",
+      "mkdir -p \"$target\"",
+      "if [ -d \"$workspace\" ]; then cp -a \"$workspace\"/. \"$target\"/; fi",
+      "printf 'workspace=%s\\ntarget=%s\\n' \"$workspace\" \"$target\""
+    ].join("; ");
+    const result = await runCommand(binary, [
+      ...cubeCliGlobalArgs(this.config),
+      "exec",
+      sandboxIdForCubeCli(sandboxId),
+      "/bin/sh",
+      "-lc",
+      script
+    ], {
+      allowFailure: true
+    });
+    const output = `${result.stdout}\n${result.stderr}`;
+    await fs.writeFile(path.join(world.paths.logs, "cube-replication-materialize.log"), output, "utf8");
+    return {
+      applied: result.code === 0,
+      skipped: false,
+      code: result.code,
+      workspace,
+      target,
+      reason: result.code === 0 ? null : parseFailure(output) || `cubecli exec exited with ${result.code}`,
+      output
+    };
+  }
+
+  async createRuntimeSnapshot(world, options = {}) {
+    const sandboxId = options.sandboxId || world.sandbox?.containerId || world.sandbox?.id;
+    if (!sandboxId) return { created: false, skipped: true, reason: "world has no sandbox id" };
+    const binary = commandExists(this.config.mastercli || "cubemastercli");
+    if (!binary) return { created: false, skipped: true, reason: "cubemastercli not found" };
+    const displayName = options.displayName || `kakurizai-${world.name}-${Date.now().toString(36)}`;
+    const result = await runCommand(binary, [
+      "snapshot",
+      "create",
+      "--sandbox-id",
+      sandboxId,
+      "--display-name",
+      displayName,
+      "--json"
+    ], {
+      allowFailure: true
+    });
+    const output = `${result.stdout}\n${result.stderr}`;
+    await fs.writeFile(path.join(world.paths.logs, "cubemaster-snapshot-create.log"), output, "utf8");
+    const raw = parseJsonFromOutput(output);
+    if (result.code !== 0 || !isSuccessRet(raw?.ret)) {
+      return {
+        created: false,
+        skipped: false,
+        code: result.code,
+        reason: raw?.ret?.ret_msg || parseFailure(output) || `cubemastercli snapshot create exited with ${result.code}`,
+        response: raw,
+        output
+      };
+    }
+    const operationId = raw?.operation?.operation_id || raw?.operation?.operationID || null;
+    let operation = raw?.operation || null;
+    if (operationId && options.wait !== false && !operationFinishedStatus(operation?.status)) {
+      const watched = await this.waitSnapshotOperation(world, operationId, { binary, interval: options.interval || "2s" });
+      operation = watched.operation || operation;
+      if (!watched.ready) {
+        return {
+          created: false,
+          skipped: false,
+          code: watched.code,
+          reason: watched.reason || "snapshot operation did not finish successfully",
+          response: raw,
+          operation: watched
+        };
+      }
+    }
+    const snapshot = raw?.snapshot || {};
+    return {
+      created: true,
+      snapshotId: snapshot.snapshot_id || operation?.snapshot_id || raw?.operation?.snapshot_id || null,
+      operationId,
+      originNodeId: snapshot.origin_node_id || null,
+      originSandboxId: snapshot.origin_sandbox_id || sandboxId,
+      status: snapshot.status || operation?.status || null,
+      response: raw,
+      operation
+    };
+  }
+
+  async waitSnapshotOperation(world, operationId, options = {}) {
+    const binary = options.binary || commandExists(this.config.mastercli || "cubemastercli");
+    if (!binary) return { ready: false, skipped: true, reason: "cubemastercli not found" };
+    const result = await runCommand(binary, [
+      "snapshot",
+      "operation",
+      "watch",
+      "--operation-id",
+      operationId,
+      "--interval",
+      options.interval || "2s",
+      "--json"
+    ], {
+      allowFailure: true
+    });
+    const output = `${result.stdout}\n${result.stderr}`;
+    await fs.writeFile(path.join(world.paths.logs, `cubemaster-snapshot-operation-${operationId}.log`), output, "utf8");
+    const raw = parseJsonFromOutput(output);
+    const status = raw?.operation?.status || null;
+    return {
+      ready: result.code === 0 && isSuccessRet(raw?.ret) && operationFinishedStatus(status) && String(status).toUpperCase() !== "FAILED",
+      code: result.code,
+      reason: result.code === 0 ? null : raw?.operation?.error_message || raw?.ret?.ret_msg || parseFailure(output) || `cubemastercli snapshot operation watch exited with ${result.code}`,
+      operation: raw?.operation || null,
+      response: raw,
+      output
+    };
+  }
+
+  async commitSandboxTemplate(world, request, options = {}) {
+    const sandboxId = options.sandboxId || world.sandbox?.containerId || world.sandbox?.id;
+    if (!sandboxId) return { committed: false, skipped: true, reason: "world has no sandbox id" };
+    const binary = commandExists(this.config.mastercli || "cubemastercli");
+    if (!binary) return { committed: false, skipped: true, reason: "cubemastercli not found" };
+    if (!request || !Array.isArray(request.containers) || request.containers.length === 0) {
+      return { committed: false, skipped: true, reason: "cube create request is not available" };
+    }
+    const requestPath = path.join(world.paths.logs, `cubemaster-template-commit-${Date.now()}.json`);
+    await fs.writeFile(requestPath, `${JSON.stringify(request, null, 2)}\n`, "utf8");
+    const result = await runCommand(binary, [
+      "tpl",
+      "commit",
+      "--sandbox-id",
+      sandboxId,
+      "--file",
+      requestPath,
+      "--json"
+    ], {
+      allowFailure: true
+    });
+    const output = `${result.stdout}\n${result.stderr}`;
+    await fs.writeFile(path.join(world.paths.logs, "cubemaster-template-commit.log"), output, "utf8");
+    const raw = parseJsonFromOutput(output);
+    if (result.code !== 0 || !isSuccessRet(raw?.ret)) {
+      return {
+        committed: false,
+        skipped: false,
+        code: result.code,
+        requestPath,
+        reason: raw?.ret?.ret_msg || parseFailure(output) || `cubemastercli tpl commit exited with ${result.code}`,
+        response: raw,
+        output
+      };
+    }
+    const buildId = raw?.build_id || raw?.buildID || null;
+    let build = null;
+    if (buildId && options.wait !== false) {
+      build = await this.waitTemplateBuild(world, buildId, { binary, interval: options.interval || "2s" });
+      if (!build.ready) {
+        return {
+          committed: false,
+          skipped: false,
+          code: build.code,
+          requestPath,
+          reason: build.reason || "template commit build did not finish successfully",
+          response: raw,
+          build
+        };
+      }
+    }
+    return {
+      committed: true,
+      templateId: raw?.template_id || raw?.templateID || build?.templateId || null,
+      buildId,
+      requestPath,
+      response: raw,
+      build
+    };
+  }
+
+  async waitTemplateBuild(world, buildId, options = {}) {
+    const binary = options.binary || commandExists(this.config.mastercli || "cubemastercli");
+    if (!binary) return { ready: false, skipped: true, reason: "cubemastercli not found" };
+    const result = await runCommand(binary, [
+      "tpl",
+      "build-watch",
+      "--build-id",
+      buildId,
+      "--interval",
+      options.interval || "2s",
+      "--json"
+    ], {
+      allowFailure: true
+    });
+    const output = `${result.stdout}\n${result.stderr}`;
+    await fs.writeFile(path.join(world.paths.logs, `cubemaster-template-build-${buildId}.log`), output, "utf8");
+    const raw = parseJsonFromOutput(output);
+    const status = String(raw?.status || "").toLowerCase();
+    return {
+      ready: result.code === 0 && isSuccessRet(raw?.ret) && status === "ready",
+      code: result.code,
+      templateId: raw?.template_id || raw?.templateID || null,
+      reason: result.code === 0 ? null : raw?.message || raw?.ret?.ret_msg || parseFailure(output) || `cubemastercli tpl build-watch exited with ${result.code}`,
+      response: raw,
+      output
+    };
+  }
+
+  async distributeTemplate(templateId, nodes, options = {}) {
+    const binary = commandExists(this.config.mastercli || "cubemastercli");
+    if (!binary) return { distributed: false, skipped: true, reason: "cubemastercli not found" };
+    const scope = [...new Set((nodes || []).map((node) => node.nodeId || node.id || node.ip).filter(Boolean))];
+    if (!templateId || !scope.length) {
+      return { distributed: false, skipped: true, reason: "template id and target nodes are required" };
+    }
+    const args = [
+      "tpl",
+      "redo",
+      "--template-id",
+      templateId,
+      "--wait",
+      "--interval",
+      options.interval || "2s",
+      "--json"
+    ];
+    for (const node of scope) args.push("--node", node);
+    const result = await runCommand(binary, args, { allowFailure: true });
+    const output = `${result.stdout}\n${result.stderr}`;
+    if (options.logDir) {
+      await fs.writeFile(path.join(options.logDir, `cubemaster-template-redo-${templateId}.log`), output, "utf8");
+    }
+    const raw = parseJsonFromOutput(output);
+    const status = String(raw?.job?.status || raw?.status || "").toUpperCase();
+    return {
+      distributed: result.code === 0 && isSuccessRet(raw?.ret) && (status === "READY" || status === ""),
+      code: result.code,
+      scope,
+      job: raw?.job || null,
+      reason: result.code === 0 ? null : raw?.job?.error_message || raw?.ret?.ret_msg || parseFailure(output) || `cubemastercli tpl redo exited with ${result.code}`,
+      response: raw,
+      output
+    };
+  }
+
   async inspect() {
     const status = this.available();
     const cubecli = commandExists(this.config.cubecli || "cubecli");
@@ -681,6 +933,8 @@ export class CubeSandboxClient {
   async destroySandbox(world) {
     const sandboxId = world.sandbox?.id;
     if (!sandboxId) return { skipped: true, reason: "world has no sandbox id" };
+    const direct = directCubeCliCommand(world, this.config, ["unsafe", "destroy", sandboxIdForCubeCli(sandboxId)]);
+    if (direct) return runCommand(direct.command, direct.args, { allowFailure: true });
     if (world.sandbox?.mode === "master") {
       const masterBinary = commandExists(this.config.mastercli || "cubemastercli");
       if (!masterBinary) return { skipped: true, reason: "cubemastercli not found" };
@@ -694,17 +948,38 @@ export class CubeSandboxClient {
   async exec(world, command, options = {}) {
     const sandboxId = world.sandbox?.containerId || world.sandbox?.id;
     if (!sandboxId) throw new Error(`world ${world.name} is not provisioned in CubeSandbox`);
+    const direct = directCubeCliCommand(world, this.config, [
+      "exec",
+      ...(options.tty ? ["-i", "-t"] : []),
+      "-w",
+      this.config.workspacePath || "/workspace",
+      sandboxIdForCubeCli(sandboxId),
+      ...command
+    ]);
+    if (direct) return runCommand(direct.command, direct.args, { inherit: options.inherit, allowFailure: options.allowFailure, timeoutMs: options.timeoutMs });
     const binary = commandExists(this.config.cubecli || "cubecli");
     if (!binary) throw new Error("CubeSandbox is unavailable: cubecli not found");
     const args = [...cubeCliGlobalArgs(this.config), "exec"];
     if (options.tty) args.push("-i", "-t");
     args.push("-w", this.config.workspacePath || "/workspace", sandboxIdForCubeCli(sandboxId), ...command);
-    return runCommand(binary, args, { inherit: options.inherit, allowFailure: options.allowFailure });
+    return runCommand(binary, args, { inherit: options.inherit, allowFailure: options.allowFailure, timeoutMs: options.timeoutMs });
   }
 
   shellCommand(world) {
     const sandboxId = world.sandbox?.containerId || world.sandbox?.id;
     if (!sandboxId) throw new Error(`world ${world.name} is not provisioned in CubeSandbox`);
+    const direct = directCubeCliCommand(world, this.config, [
+      "exec",
+      "-i",
+      "-t",
+      "-w",
+      this.config.workspacePath || "/workspace",
+      sandboxIdForCubeCli(sandboxId),
+      "/bin/sh",
+      "-lc",
+      buildInteractiveShellScript()
+    ]);
+    if (direct) return direct;
     const binary = commandExists(this.config.cubecli || "cubecli");
     if (!binary) throw new Error("CubeSandbox is unavailable: cubecli not found");
     return {
@@ -1180,6 +1455,35 @@ function parseJson(output) {
   return JSON.parse(output);
 }
 
+function parseJsonFromOutput(output) {
+  const text = String(output || "").trim();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(text.slice(start, end + 1));
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
+function isSuccessRet(ret) {
+  if (!ret) return false;
+  const code = Number(ret.ret_code ?? ret.retCode ?? ret.code);
+  return code === 0 || code === 200;
+}
+
+function operationFinishedStatus(status) {
+  return ["READY", "FAILED", "ERROR"].includes(String(status || "").toUpperCase());
+}
+
 function parseNodesJson(output) {
   const raw = parseJson(output);
   const items = Array.isArray(raw?.data) ? raw.data : [];
@@ -1395,6 +1699,53 @@ function sandboxIdForCubeCli(sandboxId) {
 
 function cubeCliGlobalArgs(config) {
   return config.namespace ? ["--namespace", config.namespace] : [];
+}
+
+function directCubeCliCommand(world, config, cubeArgs) {
+  if (world.sandbox?.mode !== "direct-cubelet") return null;
+  const executor = world.backendConfig?.replication?.executor || world.backendConfig?.placement?.executor || null;
+  if (!executor) return null;
+  const namespace = executor.namespace || config.namespace || "default";
+  if (executor.type === "lxc") {
+    if (!executor.container) throw new Error(`direct cubelet executor for ${world.name} requires container`);
+    const lxc = commandExists(executor.lxc || "lxc");
+    if (!lxc) throw new Error("direct cubelet executor is unavailable: lxc not found");
+    const cubecli = executor.cubecli || config.cubecli || "cubecli";
+    const commandLine = [
+      "export PATH=/usr/local/services/cubetoolbox/Cubelet/bin:$PATH",
+      [shellQuote(cubecli), "--namespace", shellQuote(namespace), ...cubeArgs.map(shellQuote)].join(" ")
+    ].join("; ");
+    return {
+      command: lxc,
+      args: ["exec", executor.container, "--", "bash", "-lc", commandLine]
+    };
+  }
+  if (executor.type === "ssh-lxc") {
+    if (!executor.host) throw new Error(`direct cubelet executor for ${world.name} requires host`);
+    if (!executor.container) throw new Error(`direct cubelet executor for ${world.name} requires container`);
+    const ssh = commandExists(executor.ssh || "ssh");
+    if (!ssh) throw new Error("direct cubelet executor is unavailable: ssh not found");
+    const cubecli = executor.cubecli || config.cubecli || "cubecli";
+    const commandLine = [
+      "export PATH=/usr/local/services/cubetoolbox/Cubelet/bin:$PATH",
+      [shellQuote(cubecli), "--namespace", shellQuote(namespace), ...cubeArgs.map(shellQuote)].join(" ")
+    ].join("; ");
+    const remoteCommand = ["lxc", "exec", shellQuote(executor.container), "--", "bash", "-lc", shellQuote(commandLine)].join(" ");
+    const destination = executor.user ? `${executor.user}@${executor.host}` : executor.host;
+    const args = ["-o", "StrictHostKeyChecking=accept-new"];
+    if (executor.key) args.push("-i", executor.key);
+    args.push(destination, remoteCommand);
+    return { command: ssh, args };
+  }
+  if (executor.type === "local") {
+    const cubecli = commandExists(executor.cubecli || config.cubecli || "cubecli");
+    if (!cubecli) throw new Error("direct cubelet executor is unavailable: cubecli not found");
+    return {
+      command: cubecli,
+      args: ["--namespace", namespace, ...cubeArgs]
+    };
+  }
+  return null;
 }
 
 function shellQuote(value) {

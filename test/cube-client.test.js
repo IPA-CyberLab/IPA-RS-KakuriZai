@@ -264,6 +264,57 @@ test("cube client opens web shell with colorized bash profile", () => {
   assert.match(shell.args[10], /exec bash --rcfile/);
 });
 
+test("cube client opens direct replica shells through ssh lxc executor", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-direct-"));
+  const ssh = path.join(tmp, "ssh");
+  await fs.writeFile(ssh, "#!/bin/sh\nexit 0\n", "utf8");
+  await fs.chmod(ssh, 0o755);
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${tmp}${path.delimiter}${originalPath || ""}`;
+  try {
+    const client = new CubeSandboxClient({
+      namespace: "kakurizai",
+      workspacePath: "/workspace"
+    });
+    const shell = client.shellCommand({
+      name: "worker-replica",
+      sandbox: {
+        id: "4fac1c9a074d49bf8e29ee1d90592b22",
+        mode: "direct-cubelet"
+      },
+      backendConfig: {
+        replication: {
+          executor: {
+            type: "ssh-lxc",
+            host: "100.123.154.79",
+            user: "mizuame",
+            key: "/root/.ssh/kz-host-key",
+            container: "kz-cs-worker",
+            cubecli: "/usr/local/services/cubetoolbox/Cubelet/bin/cubecli"
+          }
+        }
+      }
+    });
+
+    assert.equal(shell.command, ssh);
+    assert.deepEqual(shell.args.slice(0, 5), [
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-i",
+      "/root/.ssh/kz-host-key",
+      "mizuame@100.123.154.79"
+    ]);
+    assert.match(shell.args[5], /^lxc exec 'kz-cs-worker' -- bash -lc /);
+    assert.match(shell.args[5], /--namespace/);
+    assert.match(shell.args[5], /kakurizai/);
+    assert.match(shell.args[5], /exec/);
+    assert.match(shell.args[5], /\/workspace/);
+    assert.match(shell.args[5], /4fac1c9a074d/);
+  } finally {
+    process.env.PATH = originalPath;
+  }
+});
+
 test("cube client starts sandbox dev access services", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-dev-access-"));
   const cubecli = path.join(tmp, "cubecli");
@@ -428,6 +479,63 @@ test("cube client bypasses CubeSandbox datapath when VLAN is enabled", async () 
   assert.equal(result.vlan.enabled, true);
   assert.equal(result.datapath.skipped, true);
   assert.match(result.datapath.reason, /bypasses/);
+});
+
+test("cube client captures runtime snapshots and distributes committed templates", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-replication-state-"));
+  const mastercli = path.join(tmp, "cubemastercli");
+  const argsFile = path.join(tmp, "args.txt");
+  await fs.writeFile(mastercli, `#!/bin/sh
+printf '%s\\n' "$*" >> "${argsFile}"
+case "$1 $2" in
+  "snapshot create")
+    printf '%s\\n' '{"ret":{"ret_code":200,"ret_msg":"success"},"snapshot":{"snapshot_id":"snap-1","origin_node_id":"node-a","origin_sandbox_id":"sb-1","status":"READY"},"operation":{"operation_id":"op-1","snapshot_id":"snap-1","status":"READY","progress":100}}'
+    ;;
+  "tpl commit")
+    printf '%s\\n' '{"ret":{"ret_code":200,"ret_msg":"success"},"template_id":"tpl-1","build_id":"build-1"}'
+    ;;
+  "tpl build-watch")
+    printf '%s\\n' '{"ret":{"ret_code":200,"ret_msg":"success"},"build_id":"build-1","template_id":"tpl-1","status":"ready","progress":100}'
+    ;;
+  "tpl redo")
+    printf '%s\\n' '{"ret":{"ret_code":200,"ret_msg":"success"},"job":{"job_id":"job-1","template_id":"tpl-1","status":"READY","progress":100}}'
+    ;;
+  *)
+    printf 'unexpected args: %s\\n' "$*" >&2
+    exit 9
+    ;;
+esac
+`, "utf8");
+  await fs.chmod(mastercli, 0o755);
+
+  const client = new CubeSandboxClient({ mastercli });
+  const world = {
+    id: "world-1",
+    name: "source",
+    paths: { logs: tmp },
+    sandbox: { id: "sb-1" }
+  };
+  const request = {
+    requestID: "req-1",
+    containers: [{ name: "workspace", resources: { cpu: "1000m", mem: "512Mi" } }],
+    annotations: { "cube.master.appsnapshot.template.id": "base", "cube.master.appsnapshot.template.version": "v2" }
+  };
+
+  const snapshot = await client.createRuntimeSnapshot(world);
+  const commit = await client.commitSandboxTemplate(world, request);
+  const redo = await client.distributeTemplate("tpl-1", [{ id: "node-b", nodeId: "node-b" }], { logDir: tmp });
+
+  assert.equal(snapshot.snapshotId, "snap-1");
+  assert.equal(snapshot.originNodeId, "node-a");
+  assert.equal(commit.templateId, "tpl-1");
+  assert.equal(commit.build.ready, true);
+  assert.equal(redo.distributed, true);
+
+  const args = await fs.readFile(argsFile, "utf8");
+  assert.match(args, /snapshot create --sandbox-id sb-1/);
+  assert.match(args, /tpl commit --sandbox-id sb-1 --file /);
+  assert.match(args, /tpl build-watch --build-id build-1/);
+  assert.match(args, /tpl redo --template-id tpl-1 .*--node node-b/);
 });
 
 async function createMasterApi() {
