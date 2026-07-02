@@ -24,10 +24,17 @@
     }
   },
   "auth": {
-    "provider": "self",
-    "issuer": "kakurizai",
+    "provider": "keycloak",
+    "serverUrl": "http://127.0.0.1:8080",
+    "realm": "kakurizai",
+    "clientId": "kakurizai-studio",
+    "clientSecret": null,
     "audience": "kakurizai-studio",
-    "secretFile": ".kakurizai/auth/self-secret",
+    "scopes": [
+      "openid",
+      "profile",
+      "email"
+    ],
     "sessionTtlSeconds": 28800,
     "maxLoginAttempts": 12,
     "persistSessions": true,
@@ -38,13 +45,8 @@
       "users": {},
       "roles": {}
     },
-    "totp": {
-      "enabled": false,
-      "issuer": "KakuriZai",
-      "users": {}
-    },
     "mfa": {
-      "required": false
+      "required": true
     }
   },
   "audit": {

@@ -1,15 +1,12 @@
 // @ts-nocheck
 import crypto from "node:crypto";
 import { normalizeAuthConfig } from "../core/config.js";
-import { decodeJwt, signSelfToken, verifyClaims, verifySelfToken } from "./jwt.js";
-import { verifyPasswordHash } from "./password.js";
+import { decodeJwt, verifyClaims } from "./jwt.js";
 
 export function createAuthProvider(rawConfig) {
   const config = normalizeAuthConfig(rawConfig);
   if (config.provider === "none") return new NoAuthProvider();
-  if (config.provider === "local") return new LocalAuthProvider(config);
-  if (config.provider === "self") return new SelfAuthProvider(config);
-  if (config.provider === "oidc") return new OidcAuthProvider(config);
+  if (config.provider === "keycloak" || config.provider === "oidc") return new OidcAuthProvider(config);
   throw new Error(`unsupported auth provider: ${config.provider}`);
 }
 
@@ -17,7 +14,7 @@ export class NoAuthProvider {
   type = "none";
 
   publicConfig() {
-    return { provider: "none", label: "Disabled", requiresToken: false };
+    return { provider: "none", label: "Disabled", requiresRedirect: false };
   }
 
   async verifyRequest() {
@@ -25,117 +22,89 @@ export class NoAuthProvider {
   }
 }
 
-export class LocalAuthProvider {
-  constructor(config) {
-    this.type = "local";
-    this.config = config;
-    this.users = config.users || config.local?.users || {};
-  }
-
-  publicConfig() {
-    return {
-      provider: "local",
-      label: this.config.label || "KakuriZai Local Auth",
-      requiresToken: false,
-      requiresCredentials: true
-    };
-  }
-
-  async verifyLogin(body) {
-    const username = String(body.username || body.user || "").trim();
-    const password = body.password;
-    if (!username || !password) throw unauthorized("missing username or password");
-    const record = this.users[username];
-    if (!record || record.disabled) throw unauthorized("invalid username or password");
-    if (!record.passwordHash) throw unauthorized("local user password hash is not configured");
-    let valid = false;
-    try {
-      valid = verifyPasswordHash(password, record.passwordHash);
-    } catch (error) {
-      throw unauthorized(error.message || "invalid password hash");
-    }
-    if (!valid) throw unauthorized("invalid username or password");
-    return {
-      subject: username,
-      provider: "local",
-      claims: {
-        amr: ["pwd"],
-        roles: record.roles || record.role,
-        permissions: record.permissions || record.permission || record.scope,
-        displayName: record.displayName || username
-      }
-    };
-  }
-
-  async verifyRequest() {
-    throw unauthorized("local auth requires a session login");
-  }
-}
-
-export class SelfAuthProvider {
-  constructor(config) {
-    this.type = "self";
-    this.config = config;
-  }
-
-  publicConfig() {
-    return {
-      provider: "self",
-      label: "KakuriZai Self Auth",
-      issuer: this.config.issuer,
-      audience: this.config.audience,
-      requiresToken: true
-    };
-  }
-
-  issueToken(options = {}) {
-    return signSelfToken({
-      subject: options.subject || "local-user",
-      issuer: this.config.issuer,
-      audience: this.config.audience,
-      secret: this.config.secret,
-      expiresInSeconds: options.expiresInSeconds || 8 * 60 * 60,
-      scope: options.scope,
-      role: options.role,
-      roles: options.roles || (!options.role ? ["admin"] : undefined),
-      permissions: options.permissions
-    });
-  }
-
-  async verifyRequest(request) {
-    const token = bearerToken(request);
-    if (!token) throw unauthorized("missing bearer token");
-    let claims;
-    try {
-      claims = verifySelfToken(token, this.config);
-    } catch (error) {
-      throw unauthorized(error.message || "invalid token");
-    }
-    return { subject: claims.sub, provider: "self", claims };
-  }
-}
-
 export class OidcAuthProvider {
   constructor(config) {
-    this.type = "oidc";
+    this.type = config.provider || "oidc";
     this.config = config;
+    this.discovery = null;
+    this.discoveryLoadedAt = 0;
     this.jwks = null;
     this.jwksLoadedAt = 0;
   }
 
   publicConfig() {
     return {
-      provider: this.config.providerName || "oidc",
+      provider: this.config.providerName || this.config.provider || "oidc",
       label: this.config.label || this.config.providerName || "OIDC",
       issuer: this.config.issuer,
       audience: this.config.audience,
-      requiresToken: true
+      clientId: this.config.clientId,
+      loginUrl: "/api/auth/login",
+      logoutUrl: "/api/auth/logout",
+      requiresRedirect: true,
+      supportsBearer: true
+    };
+  }
+
+  async authorizationUrl(options) {
+    const discovery = await this.loadDiscovery();
+    const authorizationEndpoint = discovery.authorization_endpoint || this.config.authorizationEndpoint;
+    if (!authorizationEndpoint) throw new Error("OIDC authorization endpoint is not configured");
+    const url = new URL(authorizationEndpoint);
+    url.searchParams.set("client_id", this.config.clientId);
+    url.searchParams.set("response_type", "code");
+    url.searchParams.set("redirect_uri", options.redirectUri);
+    url.searchParams.set("scope", normalizeScope(this.config.scopes));
+    url.searchParams.set("state", options.state);
+    url.searchParams.set("nonce", options.nonce);
+    for (const [key, value] of Object.entries(this.config.authorizationParams || {})) {
+      if (value != null) url.searchParams.set(key, String(value));
+    }
+    return url.toString();
+  }
+
+  async exchangeCode(options) {
+    const discovery = await this.loadDiscovery();
+    const tokenEndpoint = discovery.token_endpoint || this.config.tokenEndpoint;
+    if (!tokenEndpoint) throw new Error("OIDC token endpoint is not configured");
+    const body = new URLSearchParams();
+    body.set("grant_type", "authorization_code");
+    body.set("code", options.code);
+    body.set("redirect_uri", options.redirectUri);
+    body.set("client_id", this.config.clientId);
+    const headers = { "content-type": "application/x-www-form-urlencoded" };
+    if (this.config.clientSecret) {
+      if ((this.config.tokenEndpointAuthMethod || "client_secret_post") === "client_secret_basic") {
+        headers.authorization = `Basic ${Buffer.from(`${this.config.clientId}:${this.config.clientSecret}`).toString("base64")}`;
+      } else {
+        body.set("client_secret", this.config.clientSecret);
+      }
+    }
+    const response = await fetch(tokenEndpoint, { method: "POST", headers, body });
+    const tokenSet = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message = tokenSet.error_description || tokenSet.error || `OIDC token exchange failed: ${response.status}`;
+      throw unauthorized(message);
+    }
+    const claims = await this.verifyJwt(tokenSet.id_token || tokenSet.access_token, {
+      nonce: options.nonce,
+      requireNonce: Boolean(tokenSet.id_token)
+    });
+    return {
+      user: this.userFromClaims(claims),
+      tokenSet: redactTokenSet(tokenSet)
     };
   }
 
   async verifyRequest(request) {
     const token = bearerToken(request);
     if (!token) throw unauthorized("missing bearer token");
+    const claims = await this.verifyJwt(token);
+    return this.userFromClaims(claims);
+  }
+
+  async verifyJwt(token, options = {}) {
+    if (!token) throw unauthorized("missing oidc token");
     let decoded;
     try {
       decoded = decodeJwt(token);
@@ -150,11 +119,21 @@ export class OidcAuthProvider {
     const valid = verifier.verify(key, Buffer.from(decoded.signature, "base64url"));
     if (!valid) throw unauthorized("invalid token signature");
     try {
-      verifyClaims(decoded.payload, this.config);
+      verifyClaims(decoded.payload, { issuer: this.config.issuer, audience: this.config.audience });
     } catch (error) {
       throw unauthorized(error.message || "invalid token claims");
     }
-    return { subject: decoded.payload.sub, provider: this.config.providerName || "oidc", claims: decoded.payload };
+    if (options.requireNonce && decoded.payload.nonce !== options.nonce) throw unauthorized("nonce mismatch");
+    return decoded.payload;
+  }
+
+  userFromClaims(claims) {
+    const normalized = normalizeKeycloakClaims(claims, this.config.clientId);
+    return {
+      subject: normalized.sub,
+      provider: this.config.providerName || this.config.provider || "oidc",
+      claims: normalized
+    };
   }
 
   async keyFor(kid) {
@@ -164,10 +143,27 @@ export class OidcAuthProvider {
     return crypto.createPublicKey({ key: jwk, format: "jwk" });
   }
 
+  async loadDiscovery() {
+    const now = Date.now();
+    if (this.discovery && now - this.discoveryLoadedAt < 10 * 60 * 1000) return this.discovery;
+    const response = await fetch(this.config.discoveryUrl);
+    if (!response.ok) throw new Error(`OIDC discovery failed: ${response.status}`);
+    const discovery = await response.json();
+    if (discovery.issuer && discovery.issuer.replace(/\/+$/, "") !== this.config.issuer.replace(/\/+$/, "")) {
+      throw new Error(`OIDC issuer mismatch: ${discovery.issuer}`);
+    }
+    this.discovery = discovery;
+    this.discoveryLoadedAt = now;
+    return discovery;
+  }
+
   async loadJwks() {
     const now = Date.now();
     if (this.jwks && now - this.jwksLoadedAt < 10 * 60 * 1000) return this.jwks;
-    const response = await fetch(this.config.jwksUri);
+    const discovery = await this.loadDiscovery();
+    const jwksUri = this.config.jwksUri || discovery.jwks_uri;
+    if (!jwksUri) throw new Error("OIDC JWKS URI is not configured");
+    const response = await fetch(jwksUri);
     if (!response.ok) throw unauthorized(`jwks fetch failed: ${response.status}`);
     this.jwks = await response.json();
     this.jwksLoadedAt = now;
@@ -186,4 +182,35 @@ export function unauthorized(message) {
   const error = new Error(message);
   error.statusCode = 401;
   return error;
+}
+
+function normalizeScope(value) {
+  if (!value) return "openid profile email";
+  if (Array.isArray(value)) return value.join(" ");
+  return String(value);
+}
+
+function normalizeKeycloakClaims(claims, clientId) {
+  const roles = new Set(arrayClaim(claims.roles));
+  for (const role of arrayClaim(claims.realm_access?.roles)) roles.add(role);
+  for (const role of arrayClaim(claims.resource_access?.[clientId]?.roles)) roles.add(role);
+  for (const group of arrayClaim(claims.groups)) roles.add(group);
+  return { ...claims, roles: [...roles] };
+}
+
+function arrayClaim(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.flatMap(arrayClaim);
+  return String(value)
+    .split(/[,\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function redactTokenSet(tokenSet) {
+  return {
+    tokenType: tokenSet.token_type || null,
+    expiresIn: tokenSet.expires_in || null,
+    scope: tokenSet.scope || null
+  };
 }

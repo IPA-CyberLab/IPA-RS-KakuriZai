@@ -1,0 +1,28 @@
+{
+  "auth": {
+    "provider": "keycloak",
+    "serverUrl": "https://keycloak.example.com",
+    "realm": "kakurizai",
+    "clientId": "kakurizai-studio",
+    "clientSecret": "replace-with-confidential-client-secret",
+    "audience": "kakurizai-studio",
+    "mfa": {
+      "required": true
+    },
+    "rbac": {
+      "enabled": true,
+      "defaultRole": "viewer",
+      "roles": {
+        "kakurizai-admin": [
+          "admin"
+        ],
+        "kakurizai-operator": [
+          "operator"
+        ],
+        "kakurizai-viewer": [
+          "viewer"
+        ]
+      }
+    }
+  }
+}

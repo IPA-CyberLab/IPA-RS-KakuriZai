@@ -251,7 +251,7 @@ async function mockApi(page) {
   await page.route("**/api/auth/config", (route) => json(route, {
     provider: "none",
     label: "Local development",
-    requiresToken: false
+    requiresRedirect: false
   }));
   await page.route("**/api/session", (route) => json(route, { user: { subject: "responsive-test" } }));
   await page.route("**/api/cube/inspect", (route) => json(route, cube));

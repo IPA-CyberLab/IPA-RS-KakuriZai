@@ -1,8 +1,0 @@
-{
-  "auth": {
-    "provider": "cognito",
-    "region": "us-east-1",
-    "userPoolId": "us-east-1_Example",
-    "clientId": "exampleclientid"
-  }
-}
