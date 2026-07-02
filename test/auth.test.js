@@ -14,12 +14,14 @@ test("keycloak config normalizes to oidc discovery", () => {
     provider: "keycloak",
     serverUrl: "https://id.example.com/",
     realm: "kakurizai",
-    clientId: "studio"
+    clientId: "studio",
+    authorizationParams: { acr_values: "mfa" }
   });
   assert.equal(auth.provider, "keycloak");
   assert.equal(auth.issuer, "https://id.example.com/realms/kakurizai");
   assert.equal(auth.discoveryUrl, "https://id.example.com/realms/kakurizai/.well-known/openid-configuration");
   assert.equal(auth.audience, "studio");
+  assert.equal(auth.authorizationParams.acr_values, "mfa");
 });
 
 test("keycloak provider verifies bearer tokens and maps keycloak roles", async () => {

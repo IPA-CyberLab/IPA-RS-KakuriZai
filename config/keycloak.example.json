@@ -6,6 +6,9 @@
     "clientId": "kakurizai-studio",
     "clientSecret": "replace-with-confidential-client-secret",
     "audience": "kakurizai-studio",
+    "authorizationParams": {
+      "acr_values": "mfa"
+    },
     "mfa": {
       "required": true
     },

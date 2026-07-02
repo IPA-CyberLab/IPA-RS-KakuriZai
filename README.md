@@ -62,6 +62,9 @@ KakuriZai does not keep a local password database or TOTP seed store. Users, pas
     "clientId": "kakurizai-studio",
     "clientSecret": "replace-with-confidential-client-secret",
     "audience": "kakurizai-studio",
+    "authorizationParams": {
+      "acr_values": "mfa"
+    },
     "mfa": {
       "required": true
     },
@@ -85,6 +88,8 @@ https://studio.example.com/api/auth/callback
 ```
 
 Enable Keycloak MFA for the realm or required user groups, then keep `"mfa": { "required": true }` so KakuriZai rejects sessions without an `amr`/`acr` MFA claim. RBAC can come from Keycloak realm roles, client roles, groups, scope, or explicit `auth.rbac.users` bindings.
+
+For Keycloak, map `mfa` to the desired ACR/LoA level and add the AMR protocol mapper to the Studio client. KakuriZai can request that level with `authorizationParams.acr_values` or `KAKURIZAI_KEYCLOAK_ACR_VALUES`.
 
 Built-in KakuriZai roles are:
 
