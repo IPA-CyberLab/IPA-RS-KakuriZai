@@ -1,6 +1,4 @@
 // @ts-nocheck
-import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { defaultHome, ensureDir, pathExists, readJson, writeJsonAtomic } from "./fs.js";
@@ -40,10 +38,14 @@ export function defaultConfig(home = defaultHome()) {
       }
     },
     auth: {
-      provider: process.env.KAKURIZAI_AUTH_PROVIDER || "self",
-      issuer: "kakurizai",
-      audience: "kakurizai-studio",
-      secretFile: path.join(home, "auth", "self-secret"),
+      provider: process.env.KAKURIZAI_AUTH_PROVIDER || "keycloak",
+      issuer: process.env.KAKURIZAI_KEYCLOAK_ISSUER || null,
+      serverUrl: process.env.KAKURIZAI_KEYCLOAK_URL || "http://127.0.0.1:8080",
+      realm: process.env.KAKURIZAI_KEYCLOAK_REALM || "kakurizai",
+      clientId: process.env.KAKURIZAI_KEYCLOAK_CLIENT_ID || "kakurizai-studio",
+      clientSecret: process.env.KAKURIZAI_KEYCLOAK_CLIENT_SECRET || null,
+      audience: process.env.KAKURIZAI_KEYCLOAK_AUDIENCE || process.env.KAKURIZAI_KEYCLOAK_CLIENT_ID || "kakurizai-studio",
+      scopes: ["openid", "profile", "email"],
       sessionTtlSeconds: 8 * 60 * 60,
       maxLoginAttempts: 12,
       persistSessions: true,
@@ -54,13 +56,8 @@ export function defaultConfig(home = defaultHome()) {
         users: {},
         roles: {}
       },
-      totp: {
-        enabled: false,
-        issuer: "KakuriZai",
-        users: {}
-      },
       mfa: {
-        required: false
+        required: process.env.KAKURIZAI_MFA_REQUIRED !== "false"
       }
     },
     audit: {
@@ -137,10 +134,7 @@ export function mergeConfig(base, override) {
   result.auth.rbac = { ...base.auth?.rbac, ...(override?.auth?.rbac || {}) };
   result.auth.rbac.users = { ...base.auth?.rbac?.users, ...(override?.auth?.rbac?.users || {}) };
   result.auth.rbac.roles = { ...base.auth?.rbac?.roles, ...(override?.auth?.rbac?.roles || {}) };
-  result.auth.totp = { ...base.auth?.totp, ...(override?.auth?.totp || {}) };
-  result.auth.totp.users = { ...base.auth?.totp?.users, ...(override?.auth?.totp?.users || {}) };
   result.auth.mfa = { ...base.auth?.mfa, ...(override?.auth?.mfa || {}) };
-  result.auth.users = { ...base.auth?.users, ...(override?.auth?.users || {}) };
   result.audit = { ...base.audit, ...(override?.audit || {}) };
   result.security = { ...base.security, ...(override?.security || {}) };
   result.observability = { ...base.observability, ...(override?.observability || {}) };
@@ -161,30 +155,7 @@ export async function loadConfig(options = {}) {
   config.configPath = configPath;
   config.storeDir = path.resolve(config.storeDir || path.join(home, "store"));
   await ensureDir(config.storeDir);
-  await resolveAuthSecret(config, options);
   return config;
-}
-
-async function resolveAuthSecret(config, options) {
-  if (config.auth.provider !== "self") return;
-  if (process.env.KAKURIZAI_AUTH_SECRET) {
-    config.auth.secret = process.env.KAKURIZAI_AUTH_SECRET;
-    return;
-  }
-  if (config.auth.secret) return;
-  const secretFile = config.auth.secretFile || path.join(config.home, "auth", "self-secret");
-  if (await pathExists(secretFile)) {
-    config.auth.secret = (await fs.readFile(secretFile, "utf8")).trim();
-    return;
-  }
-  if (options.createSecrets === false) {
-    config.auth.secret = "test-only-secret";
-    return;
-  }
-  await ensureDir(path.dirname(secretFile));
-  const secret = crypto.randomBytes(32).toString("base64url");
-  await fs.writeFile(secretFile, `${secret}\n`, { encoding: "utf8", mode: 0o600 });
-  config.auth.secret = secret;
 }
 
 export async function initConfigFile(options = {}) {
@@ -198,40 +169,53 @@ export async function initConfigFile(options = {}) {
 
 export function normalizeAuthConfig(auth) {
   if (!auth || auth.provider === "none") return { provider: "none" };
-  if (auth.provider === "local") return auth;
-  if (auth.provider === "self") return auth;
-  if (auth.provider === "auth0") {
-    const domain = required(auth.domain, "auth.domain");
-    const issuer = auth.issuer || `https://${domain.replace(/^https?:\/\//, "").replace(/\/$/, "")}/`;
-    return {
-      provider: "oidc",
-      providerName: "auth0",
-      label: "Auth0",
-      issuer,
-      audience: required(auth.audience, "auth.audience"),
-      jwksUri: auth.jwksUri || `${issuer}.well-known/jwks.json`
-    };
-  }
-  if (auth.provider === "cognito") {
-    const region = required(auth.region, "auth.region");
-    const userPoolId = required(auth.userPoolId, "auth.userPoolId");
-    const issuer = auth.issuer || `https://cognito-idp.${region}.amazonaws.com/${userPoolId}`;
-    return {
-      provider: "oidc",
-      providerName: "cognito",
-      label: "AWS Cognito",
-      issuer,
-      audience: auth.clientId || auth.audience,
-      jwksUri: auth.jwksUri || `${issuer}/.well-known/jwks.json`
-    };
-  }
-  if (auth.provider === "oidc") return auth;
+  if (auth.provider === "keycloak") return normalizeKeycloakAuth(auth);
+  if (auth.provider === "oidc") return normalizeOidcAuth(auth);
   throw new Error(`unsupported auth provider: ${auth.provider}`);
 }
 
 function required(value, name) {
   if (!value) throw new Error(`${name} is required`);
   return value;
+}
+
+function normalizeKeycloakAuth(auth) {
+  const realm = required(auth.realm || process.env.KAKURIZAI_KEYCLOAK_REALM, "auth.realm");
+  const serverUrl = trimTrailingSlash(auth.serverUrl || auth.baseUrl || auth.url || process.env.KAKURIZAI_KEYCLOAK_URL || "http://127.0.0.1:8080");
+  const issuer = trimTrailingSlash(auth.issuer || `${serverUrl}/realms/${realm}`);
+  const clientId = required(auth.clientId || process.env.KAKURIZAI_KEYCLOAK_CLIENT_ID, "auth.clientId");
+  return normalizeOidcAuth({
+    ...auth,
+    provider: "keycloak",
+    providerName: "keycloak",
+    label: auth.label || "Keycloak",
+    realm,
+    serverUrl,
+    issuer,
+    clientId,
+    audience: auth.audience || clientId,
+    discoveryUrl: auth.discoveryUrl || `${issuer}/.well-known/openid-configuration`
+  });
+}
+
+function normalizeOidcAuth(auth) {
+  const issuer = trimTrailingSlash(required(auth.issuer, "auth.issuer"));
+  const clientId = required(auth.clientId || auth.audience, "auth.clientId");
+  return {
+    ...auth,
+    provider: auth.provider || "oidc",
+    label: auth.label || auth.providerName || "OIDC",
+    issuer,
+    clientId,
+    audience: auth.audience || clientId,
+    clientSecret: auth.clientSecret || null,
+    scopes: auth.scopes || ["openid", "profile", "email"],
+    discoveryUrl: auth.discoveryUrl || `${issuer}/.well-known/openid-configuration`
+  };
+}
+
+function trimTrailingSlash(value) {
+  return String(value || "").replace(/\/+$/, "");
 }
 
 export function platformLabel(platform = os.platform()) {

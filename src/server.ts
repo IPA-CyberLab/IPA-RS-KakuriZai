@@ -9,7 +9,6 @@ import { fileURLToPath } from "node:url";
 import pty from "node-pty";
 import { WebSocket, WebSocketServer } from "ws";
 import { createAuthProvider } from "./auth/providers.js";
-import { verifyTotp } from "./auth/totp.js";
 import { checkpointFailoverReplicas, createJoinToken, joinNode, listClusterNodes, reconcileFailover, removeClusterNode, replicateWorld, startFailoverController } from "./core/cluster.js";
 import { collectMetrics, listTraces, prometheusText, recordTraceEvent, startTrace, stopTrace } from "./core/observability.js";
 import { applyWorld, changedPaths, createKubernetesLab, createWorld, execWorld, getWorld, listWorlds, openWorld, pauseWorld, removeWorld, resumeWorld, updateWorldConfig } from "./core/worlds.js";
@@ -19,6 +18,7 @@ import { CubeSandboxClient } from "./cube/client.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATIC_ROOT = path.join(__dirname, "studio");
 const SESSION_COOKIE = "kakurizai_session";
+const OIDC_STATE_COOKIE = "kakurizai_oidc_state";
 const CSRF_HEADER = "x-csrf-token";
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 const DEFAULT_ROLES = {
@@ -667,27 +667,10 @@ function assertOriginAllowed(config, request, options = {}) {
 
 function providerHasProductionMfa(config) {
   const provider = config.auth?.provider;
-  if (provider === "local") {
-    const users = localUsers(config).filter(([, user]) => !user.disabled);
-    return users.length > 0 && users.every(([name, user]) => hasUserTotp(user) || Boolean(totpUserConfig(config, name)));
-  }
-  if (provider === "self") {
-    const users = config.auth?.totp?.users || {};
-    return config.auth?.totp?.enabled === true && Object.keys(users).length > 0;
-  }
-  if (provider === "oidc" || provider === "auth0" || provider === "cognito") {
+  if (provider === "keycloak" || provider === "oidc") {
     return config.auth?.mfa?.required === true;
   }
   return false;
-}
-
-function localUsers(config) {
-  const users = config.auth?.users || config.auth?.local?.users || {};
-  return Object.entries(users);
-}
-
-function hasUserTotp(user) {
-  return Boolean(user?.totp || user?.totpSecret);
 }
 
 function httpsPublicUrl(config) {
@@ -763,8 +746,11 @@ async function route(config, auth, sessions, devAccess, request, response) {
       rbac: rbacPublicConfig(config)
     });
   }
-  if (request.method === "POST" && url.pathname === "/api/auth/login") {
-    return login(config, auth, sessions, request, response);
+  if (request.method === "GET" && url.pathname === "/api/auth/login") {
+    return beginOidcLogin(config, auth, sessions, request, response, url);
+  }
+  if (request.method === "GET" && url.pathname === "/api/auth/callback") {
+    return finishOidcLogin(config, auth, sessions, request, response, url);
   }
   if (request.method === "POST" && url.pathname === "/api/auth/logout") {
     const session = await authenticateRequest(config, auth, sessions, request, { requireCsrf: auth.type !== "none" });
@@ -791,39 +777,85 @@ async function route(config, auth, sessions, devAccess, request, response) {
   return staticFile(request, response, url);
 }
 
-async function login(config, auth, sessions, request, response) {
+async function beginOidcLogin(config, auth, sessions, request, response, url) {
   if (auth.type === "none") {
     const user = await auth.verifyRequest(request);
     return sendJson(request, response, { user, auth: user.provider, csrfToken: null });
   }
-  const body = await readBody(request);
-  const key = `${requestIp(request, config)}:${body.username || body.user || "token"}`;
+  if (typeof auth.authorizationUrl !== "function") {
+    const error = new Error("configured auth provider does not support browser login");
+    error.statusCode = 400;
+    throw error;
+  }
+  const key = `${requestIp(request, config)}:oidc`;
+  const state = crypto.randomBytes(32).toString("base64url");
+  const nonce = crypto.randomBytes(32).toString("base64url");
+  const returnTo = safeReturnTo(url.searchParams.get("returnTo") || "/");
   sessions.assertLoginAllowed(key);
-  const user = await verifyLoginUser(auth, body);
-  verifyMfa(config, user, body);
-  sessions.resetLoginAttempts(key);
-  const session = sessions.create(user);
-  request.user = user;
-  request.authSession = session;
-  return sendJson(request, response, {
-    user,
-    auth: user.provider,
-    permissions: [...permissionsForUser(config, user)],
-    csrfToken: session.csrfToken
-  }, 200, {
-    "set-cookie": sessionCookie(config, request, session)
+  const redirectUri = oidcRedirectUri(config, request);
+  const location = await auth.authorizationUrl({ redirectUri, state, nonce });
+  response.writeHead(302, {
+    ...securityHeaders(request, "text/plain; charset=utf-8"),
+    location,
+    "set-cookie": oidcStateCookie(config, request, { state, nonce, returnTo })
   });
+  response.end("redirecting to identity provider\n");
 }
 
-async function verifyLoginUser(auth, body) {
-  if (typeof auth.verifyLogin === "function") return auth.verifyLogin(body);
-  const token = body.token || body.bearerToken;
-  if (!token || typeof token !== "string") {
-    const error = new Error("missing bearer token");
+async function finishOidcLogin(config, auth, sessions, request, response, url) {
+  if (auth.type === "none") {
+    response.writeHead(302, {
+      ...securityHeaders(request, "text/plain; charset=utf-8"),
+      location: "/"
+    });
+    response.end();
+    return;
+  }
+  const pending = readOidcStateCookie(request);
+  if (!pending?.state || !pending?.nonce || pending.expiresAt <= Date.now()) {
+    const error = new Error("missing or expired oidc state");
     error.statusCode = 401;
     throw error;
   }
-  return auth.verifyRequest({ headers: { authorization: `Bearer ${token}` } });
+  if (url.searchParams.get("state") !== pending.state) {
+    const error = new Error("oidc state mismatch");
+    error.statusCode = 401;
+    throw error;
+  }
+  if (url.searchParams.get("error")) {
+    const error = new Error(url.searchParams.get("error_description") || url.searchParams.get("error"));
+    error.statusCode = 401;
+    throw error;
+  }
+  const code = url.searchParams.get("code");
+  if (!code) {
+    const error = new Error("missing oidc authorization code");
+    error.statusCode = 401;
+    throw error;
+  }
+  const result = await auth.exchangeCode({
+    code,
+    redirectUri: oidcRedirectUri(config, request),
+    nonce: pending.nonce
+  });
+  verifyMfa(config, result.user);
+  sessions.resetLoginAttempts(`${requestIp(request, config)}:oidc`);
+  const session = sessions.create(result.user);
+  request.user = result.user;
+  request.authSession = session;
+  const returnTo = safeReturnTo(pending.returnTo || "/");
+  response.writeHead(302, {
+    ...securityHeaders(request, "text/plain; charset=utf-8"),
+    location: returnTo,
+    "set-cookie": [
+      sessionCookie(config, request, session),
+      expiredOidcStateCookie()
+    ]
+  });
+  response.end("signed in\n");
+  const audit = auditRecord(request, 302, { action: "auth.login", provider: result.user.provider });
+  audit.readOnly = false;
+  void request.audit?.write(audit);
 }
 
 async function authenticateRequest(config, auth, sessions, request, options = {}) {
@@ -881,7 +913,44 @@ function sessionCookie(config, request, session) {
 }
 
 function expiredSessionCookie() {
-  return `${SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`;
+  return expiredCookie(SESSION_COOKIE);
+}
+
+function expiredCookie(name) {
+  return `${name}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`;
+}
+
+function expiredOidcStateCookie() {
+  return `${OIDC_STATE_COOKIE}=; HttpOnly; SameSite=Lax; Path=/api/auth/callback; Max-Age=0`;
+}
+
+function oidcStateCookie(config, request, pending) {
+  const secure = secureCookie(config, request) ? "; Secure" : "";
+  const payload = Buffer.from(JSON.stringify({
+    ...pending,
+    expiresAt: Date.now() + 10 * 60 * 1000
+  })).toString("base64url");
+  return `${OIDC_STATE_COOKIE}=${encodeURIComponent(payload)}; HttpOnly; SameSite=Lax; Path=/api/auth/callback; Max-Age=600${secure}`;
+}
+
+function readOidcStateCookie(request) {
+  const value = cookieValue(request, OIDC_STATE_COOKIE);
+  if (!value) return null;
+  try {
+    return JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function oidcRedirectUri(config, request) {
+  return `${normalizeOrigin(config.studio?.publicUrl) || publicOrigin(request, config)}/api/auth/callback`;
+}
+
+function safeReturnTo(value) {
+  const text = String(value || "/");
+  if (!text.startsWith("/") || text.startsWith("//")) return "/";
+  return text;
 }
 
 function secureCookie(config, request) {
@@ -909,7 +978,7 @@ function trustedHeader(config, request, name) {
 }
 
 function authConfigRequiresMfa(config) {
-  return Boolean(config.auth?.totp?.enabled || config.auth?.mfa?.required || localUsers(config).some(([, user]) => hasUserTotp(user)));
+  return Boolean(config.auth?.mfa?.required);
 }
 
 function rbacPublicConfig(config) {
@@ -919,26 +988,7 @@ function rbacPublicConfig(config) {
   };
 }
 
-function verifyMfa(config, user, body) {
-  const totp = totpUserConfig(config, user.subject);
-  if (totp) {
-    const token = body.totp || body.otp || body.mfaCode;
-    if (!verifyTotp(totp.secret, token, {
-      digits: totp.digits || config.auth?.totp?.digits || 6,
-      period: totp.period || config.auth?.totp?.period || 30,
-      window: totp.window == null ? config.auth?.totp?.window : totp.window
-    })) {
-      const error = new Error("invalid one-time code");
-      error.statusCode = 401;
-      throw error;
-    }
-    return;
-  }
-  if (config.auth?.totp?.enabled) {
-    const error = new Error("totp is required for this user");
-    error.statusCode = 401;
-    throw error;
-  }
+function verifyMfa(config, user) {
   if (config.auth?.mfa?.required && !claimHasMfa(user.claims || {})) {
     const error = new Error("identity provider mfa claim is required");
     error.statusCode = 401;
@@ -947,27 +997,11 @@ function verifyMfa(config, user, body) {
 }
 
 function verifyBearerMfaPolicy(config, user) {
-  if (totpUserConfig(config, user.subject) || config.auth?.totp?.enabled) {
-    const error = new Error("session login is required when totp is enabled");
-    error.statusCode = 401;
-    throw error;
-  }
   if (config.auth?.mfa?.required && !claimHasMfa(user.claims || {})) {
     const error = new Error("identity provider mfa claim is required");
     error.statusCode = 401;
     throw error;
   }
-}
-
-function totpUserConfig(config, subject) {
-  const users = config.auth?.totp?.users || {};
-  const value = users[subject] || users["*"];
-  if (value) return typeof value === "string" ? { secret: value } : value;
-  const local = localUsers(config).find(([name]) => name === subject)?.[1];
-  if (!local) return null;
-  if (local.totpSecret) return { secret: local.totpSecret };
-  if (local.totp) return typeof local.totp === "string" ? { secret: local.totp } : local.totp;
-  return null;
 }
 
 function claimHasMfa(claims) {
@@ -997,7 +1031,6 @@ function permissionsForUser(config, user) {
   addValues(roles, claims.roles);
   addValues(roles, claims.role);
   addValues(roles, claims.groups);
-  addValues(roles, claims["cognito:groups"]);
   addValues(permissions, claims.permissions);
   addValues(permissions, claims.permission);
   addValues(permissions, claims.scope);
@@ -1132,6 +1165,7 @@ function traceEventFromRequest(request, status) {
 
 function auditAction(url, request) {
   if (url.pathname === "/api/auth/login") return "auth.login";
+  if (url.pathname === "/api/auth/callback") return "auth.callback";
   if (url.pathname === "/api/auth/logout") return "auth.logout";
   if (request.method === "DELETE") return "delete";
   if (!SAFE_METHODS.has(request.method)) return "write";

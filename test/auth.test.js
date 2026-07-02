@@ -1,197 +1,77 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { normalizeAuthConfig } from "../dist/src/core/config.js";
 import { createAuthProvider } from "../dist/src/auth/providers.js";
 import { startStudio } from "../dist/src/server.js";
-import { decodeJwt } from "../dist/src/auth/jwt.js";
-import { generateTotpSecret, totpCode } from "../dist/src/auth/totp.js";
-import { hashPassword } from "../dist/src/auth/password.js";
 
-test("self auth issues and verifies a bearer token", async () => {
-  const provider = createAuthProvider({
-    provider: "self",
-    issuer: "kakurizai",
-    audience: "studio",
-    secret: "secret"
-  });
-  const token = provider.issueToken({ subject: "alice", expiresInSeconds: 60 });
-  const user = await provider.verifyRequest({ headers: { authorization: `Bearer ${token}` } });
-  assert.equal(user.subject, "alice");
-  assert.equal(user.provider, "self");
-});
-
-test("self auth token can carry rbac roles", () => {
-  const provider = createAuthProvider({
-    provider: "self",
-    issuer: "kakurizai",
-    audience: "studio",
-    secret: "secret"
-  });
-  const token = provider.issueToken({ subject: "alice", roles: ["operator"], expiresInSeconds: 60 });
-  const decoded = decodeJwt(token);
-  assert.deepEqual(decoded.payload.roles, ["operator"]);
-});
-
-test("auth0 config normalizes to oidc", () => {
+test("keycloak config normalizes to oidc discovery", () => {
   const auth = normalizeAuthConfig({
-    provider: "auth0",
-    domain: "tenant.us.auth0.com",
-    audience: "api"
+    provider: "keycloak",
+    serverUrl: "https://id.example.com/",
+    realm: "kakurizai",
+    clientId: "studio"
   });
-  assert.equal(auth.provider, "oidc");
-  assert.equal(auth.issuer, "https://tenant.us.auth0.com/");
-  assert.equal(auth.jwksUri, "https://tenant.us.auth0.com/.well-known/jwks.json");
+  assert.equal(auth.provider, "keycloak");
+  assert.equal(auth.issuer, "https://id.example.com/realms/kakurizai");
+  assert.equal(auth.discoveryUrl, "https://id.example.com/realms/kakurizai/.well-known/openid-configuration");
+  assert.equal(auth.audience, "studio");
 });
 
-test("cognito config normalizes to oidc", () => {
-  const auth = normalizeAuthConfig({
-    provider: "cognito",
-    region: "ap-northeast-1",
-    userPoolId: "ap-northeast-1_abc",
-    clientId: "client"
-  });
-  assert.equal(auth.provider, "oidc");
-  assert.equal(auth.issuer, "https://cognito-idp.ap-northeast-1.amazonaws.com/ap-northeast-1_abc");
-  assert.equal(auth.audience, "client");
-});
-
-test("studio self auth uses http-only session cookie and csrf", async () => {
-  const auth = {
-    provider: "self",
-    issuer: "kakurizai",
-    audience: "studio",
-    secret: "secret",
-    sessionTtlSeconds: 3600,
-    maxLoginAttempts: 4
-  };
-  const provider = createAuthProvider(auth);
-  const token = provider.issueToken({ subject: "alice", expiresInSeconds: 60 });
-  const studio = await startStudio({
-    studio: { host: "127.0.0.1", port: 0, tls: { certFile: null, keyFile: null } },
-    auth,
-    cube: { mode: "disabled" },
-    storeDir: "/tmp"
-  });
-  const address = studio.server.address();
-  const origin = `http://127.0.0.1:${address.port}`;
+test("keycloak provider verifies bearer tokens and maps keycloak roles", async () => {
+  const keycloak = await startMockKeycloak();
   try {
-    assert.equal(studio.url, `${origin}/`);
-    assert.doesNotMatch(studio.url, /token=/);
-
-    const login = await fetch(`${origin}/api/auth/login`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ token })
+    const provider = createAuthProvider({
+      provider: "keycloak",
+      issuer: keycloak.issuer,
+      discoveryUrl: keycloak.discoveryUrl,
+      realm: "kakurizai",
+      clientId: "studio",
+      audience: "studio",
+      mfa: { required: true }
     });
-    assert.equal(login.status, 200);
-    const cookie = login.headers.get("set-cookie");
-    assert.match(cookie, /kakurizai_session=/);
-    assert.match(cookie, /HttpOnly/);
-    assert.match(cookie, /SameSite=Strict/);
-    const loginBody = await login.json();
-    assert.equal(loginBody.user.subject, "alice");
-    assert.ok(loginBody.csrfToken);
-
-    const session = await fetch(`${origin}/api/session`, { headers: { cookie } });
-    assert.equal(session.status, 200);
-    assert.equal((await session.json()).user.subject, "alice");
-
-    const rejected = await fetch(`${origin}/api/network/probe`, {
-      method: "POST",
-      headers: { cookie, "content-type": "application/json" },
-      body: "{}"
+    const token = keycloak.signToken({
+      sub: "alice",
+      aud: "studio",
+      amr: ["pwd", "otp"],
+      realm_access: { roles: ["kakurizai-admin"] },
+      resource_access: { studio: { roles: ["operator"] } }
     });
-    assert.equal(rejected.status, 403);
+    const user = await provider.verifyRequest({ headers: { authorization: `Bearer ${token}` } });
+    assert.equal(user.subject, "alice");
+    assert.equal(user.provider, "keycloak");
+    assert.deepEqual(user.claims.roles.sort(), ["kakurizai-admin", "operator"]);
   } finally {
-    await new Promise((resolve) => studio.server.close(resolve));
+    await keycloak.close();
   }
 });
 
-test("studio self auth enforces totp, rbac, persistent session, and audit log", async () => {
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-sec-"));
-  const secret = generateTotpSecret();
-  const auth = {
-    provider: "self",
-    issuer: "kakurizai",
-    audience: "studio",
-    secret: "secret",
-    sessionTtlSeconds: 3600,
-    sessionFile: path.join(tmp, "auth", "sessions.json"),
-    rbac: { enabled: true },
-    totp: { enabled: true, users: { alice: { secret } } }
-  };
-  const provider = createAuthProvider(auth);
-  const viewerToken = provider.issueToken({ subject: "alice", roles: ["viewer"], expiresInSeconds: 60 });
+test("studio signs in through keycloak code flow with session cookie, csrf, rbac, and audit", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-keycloak-"));
+  const keycloak = await startMockKeycloak();
   const studio = await startStudio({
     home: tmp,
     studio: { host: "127.0.0.1", port: 0, tls: { certFile: null, keyFile: null } },
-    auth,
-    audit: { enabled: true, file: path.join(tmp, "audit", "studio.jsonl") },
-    cube: { mode: "disabled" },
-    storeDir: path.join(tmp, "store")
-  });
-  const origin = `http://127.0.0.1:${studio.server.address().port}`;
-  try {
-    const rejectedMfa = await fetch(`${origin}/api/auth/login`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ token: viewerToken })
-    });
-    assert.equal(rejectedMfa.status, 401);
-
-    const login = await fetch(`${origin}/api/auth/login`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ token: viewerToken, totp: totpCode(secret) })
-    });
-    assert.equal(login.status, 200);
-    const cookie = login.headers.get("set-cookie");
-    const body = await login.json();
-    assert.ok(body.csrfToken);
-    assert.deepEqual(body.permissions.sort(), ["studio:read", "worlds:read"]);
-
-    const forbidden = await fetch(`${origin}/api/network/probe`, {
-      method: "POST",
-      headers: { cookie, "content-type": "application/json", "x-csrf-token": body.csrfToken },
-      body: "{}"
-    });
-    assert.equal(forbidden.status, 403);
-
-    const sessionFile = JSON.parse(await waitForFile(auth.sessionFile));
-    assert.equal(sessionFile.sessions.length, 1);
-    assert.equal(sessionFile.sessions[0].user.subject, "alice");
-
-    const audit = await waitForFile(path.join(tmp, "audit", "studio.jsonl"), /"status":403/);
-    assert.match(audit, /"action":"auth.login"/);
-    assert.match(audit, /"status":403/);
-  } finally {
-    await new Promise((resolve) => studio.server.close(resolve));
-  }
-});
-
-test("studio local auth uses password hash, totp, csrf, and audit hash chain", async () => {
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-local-sec-"));
-  const secret = generateTotpSecret();
-  const auth = {
-    provider: "local",
-    sessionTtlSeconds: 3600,
-    sessionFile: path.join(tmp, "auth", "sessions.json"),
-    users: {
-      alice: {
-        passwordHash: hashPassword("correct horse battery staple"),
-        roles: ["admin"],
-        totp: { secret }
-      }
+    auth: {
+      provider: "keycloak",
+      issuer: keycloak.issuer,
+      discoveryUrl: keycloak.discoveryUrl,
+      realm: "kakurizai",
+      clientId: "studio",
+      audience: "studio",
+      sessionFile: path.join(tmp, "auth", "sessions.json"),
+      rbac: {
+        enabled: true,
+        roles: {
+          "kakurizai-admin": ["admin"]
+        }
+      },
+      mfa: { required: true }
     },
-    rbac: { enabled: true }
-  };
-  const studio = await startStudio({
-    home: tmp,
-    studio: { host: "127.0.0.1", port: 0, tls: { certFile: null, keyFile: null } },
-    auth,
     audit: { enabled: true, file: path.join(tmp, "audit", "studio.jsonl"), chain: true },
     cube: { mode: "disabled" },
     storeDir: path.join(tmp, "store")
@@ -199,46 +79,105 @@ test("studio local auth uses password hash, totp, csrf, and audit hash chain", a
   const origin = `http://127.0.0.1:${studio.server.address().port}`;
   try {
     const publicConfig = await (await fetch(`${origin}/api/auth/config`)).json();
-    assert.equal(publicConfig.requiresCredentials, true);
+    assert.equal(publicConfig.provider, "keycloak");
+    assert.equal(publicConfig.requiresRedirect, true);
     assert.equal(publicConfig.mfaRequired, true);
 
-    const rejected = await fetch(`${origin}/api/auth/login`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "alice", password: "wrong", totp: totpCode(secret) })
+    const loginStart = await fetch(`${origin}/api/auth/login?returnTo=/observability`, { redirect: "manual" });
+    assert.equal(loginStart.status, 302);
+    const oidcCookie = loginStart.headers.get("set-cookie");
+    assert.match(oidcCookie, /kakurizai_oidc_state=/);
+    const keycloakAuth = await fetch(loginStart.headers.get("location"), { redirect: "manual" });
+    assert.equal(keycloakAuth.status, 302);
+    const callback = await fetch(keycloakAuth.headers.get("location"), {
+      redirect: "manual",
+      headers: { cookie: oidcCookie }
     });
-    assert.equal(rejected.status, 401);
+    assert.equal(callback.status, 302);
+    assert.equal(callback.headers.get("location"), "/observability");
+    const cookie = callback.headers.get("set-cookie");
+    assert.match(cookie, /kakurizai_session=/);
+    assert.match(cookie, /HttpOnly/);
+    assert.match(cookie, /SameSite=Strict/);
+    const sessionCookie = /kakurizai_session=[^;]+/.exec(cookie)?.[0];
+    assert.ok(sessionCookie);
 
-    const login = await fetch(`${origin}/api/auth/login`, {
+    const session = await fetch(`${origin}/api/session`, { headers: { cookie: sessionCookie } });
+    assert.equal(session.status, 200);
+    const sessionBody = await session.json();
+    assert.equal(sessionBody.user.subject, "alice");
+    assert.ok(sessionBody.permissions.includes("admin"));
+    assert.ok(sessionBody.csrfToken);
+
+    const rejected = await fetch(`${origin}/api/network/probe`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username: "alice", password: "correct horse battery staple", totp: totpCode(secret) })
+      headers: { cookie: sessionCookie, "content-type": "application/json" },
+      body: "{}"
     });
-    assert.equal(login.status, 200);
-    const cookie = login.headers.get("set-cookie");
-    const body = await login.json();
-    assert.ok(body.csrfToken);
-    assert.ok(body.permissions.includes("admin"));
+    assert.equal(rejected.status, 403);
 
-    const logoutWithoutCsrf = await fetch(`${origin}/api/auth/logout`, {
-      method: "POST",
-      headers: { cookie }
-    });
-    assert.equal(logoutWithoutCsrf.status, 403);
+    const sessionFile = JSON.parse(await waitForFile(path.join(tmp, "auth", "sessions.json")));
+    assert.equal(sessionFile.sessions.length, 1);
+    assert.equal(sessionFile.sessions[0].user.subject, "alice");
 
-    const audit = await waitForFile(path.join(tmp, "audit", "studio.jsonl"), /"hash":"[a-f0-9]{64}"/);
-    assert.match(audit, /"seq":1/);
+    const audit = await waitForFile(path.join(tmp, "audit", "studio.jsonl"), /"action":"auth.login"/);
     assert.match(audit, /"hash":"[a-f0-9]{64}"/);
   } finally {
     await new Promise((resolve) => studio.server.close(resolve));
+    await keycloak.close();
   }
 });
 
-test("studio refuses remote exposure without production security", async () => {
+test("studio rejects keycloak sessions without mfa claim when required", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-keycloak-mfa-"));
+  const keycloak = await startMockKeycloak({
+    tokenClaims: { amr: ["pwd"] }
+  });
+  const studio = await startStudio({
+    home: tmp,
+    studio: { host: "127.0.0.1", port: 0, tls: { certFile: null, keyFile: null } },
+    auth: {
+      provider: "keycloak",
+      issuer: keycloak.issuer,
+      discoveryUrl: keycloak.discoveryUrl,
+      realm: "kakurizai",
+      clientId: "studio",
+      audience: "studio",
+      mfa: { required: true }
+    },
+    audit: { enabled: true, file: path.join(tmp, "audit", "studio.jsonl") },
+    cube: { mode: "disabled" },
+    storeDir: path.join(tmp, "store")
+  });
+  const origin = `http://127.0.0.1:${studio.server.address().port}`;
+  try {
+    const loginStart = await fetch(`${origin}/api/auth/login`, { redirect: "manual" });
+    const oidcCookie = loginStart.headers.get("set-cookie");
+    const keycloakAuth = await fetch(loginStart.headers.get("location"), { redirect: "manual" });
+    const callback = await fetch(keycloakAuth.headers.get("location"), {
+      redirect: "manual",
+      headers: { cookie: oidcCookie }
+    });
+    assert.equal(callback.status, 401);
+  } finally {
+    await new Promise((resolve) => studio.server.close(resolve));
+    await keycloak.close();
+  }
+});
+
+test("studio refuses remote exposure without keycloak production security", async () => {
   await assert.rejects(
     () => startStudio({
       studio: { host: "0.0.0.0", port: 0, tls: { certFile: null, keyFile: null } },
-      auth: { provider: "self", issuer: "kakurizai", audience: "studio", secret: "secret" },
+      auth: {
+        provider: "keycloak",
+        issuer: "https://keycloak.example.com/realms/kakurizai",
+        discoveryUrl: "https://keycloak.example.com/realms/kakurizai/.well-known/openid-configuration",
+        realm: "kakurizai",
+        clientId: "studio",
+        audience: "studio",
+        mfa: { required: false }
+      },
       audit: { enabled: true },
       cube: { mode: "disabled" },
       storeDir: "/tmp"
@@ -246,6 +185,127 @@ test("studio refuses remote exposure without production security", async () => {
     /refusing to expose Studio/
   );
 });
+
+async function startMockKeycloak(options = {}) {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const kid = "test-key";
+  const codes = new Map();
+  let origin = "";
+  let issuer = "";
+  const tokenClaims = options.tokenClaims || {};
+  const server = http.createServer(async (request, response) => {
+    const url = new URL(request.url, origin);
+    if (url.pathname === "/realms/kakurizai/.well-known/openid-configuration") {
+      return json(response, {
+        issuer,
+        authorization_endpoint: `${issuer}/protocol/openid-connect/auth`,
+        token_endpoint: `${issuer}/protocol/openid-connect/token`,
+        jwks_uri: `${issuer}/protocol/openid-connect/certs`,
+        end_session_endpoint: `${issuer}/protocol/openid-connect/logout`
+      });
+    }
+    if (url.pathname === "/realms/kakurizai/protocol/openid-connect/certs") {
+      const jwk = publicKey.export({ format: "jwk" });
+      return json(response, { keys: [{ ...jwk, kid, alg: "RS256", use: "sig" }] });
+    }
+    if (url.pathname === "/realms/kakurizai/protocol/openid-connect/auth") {
+      const code = crypto.randomBytes(12).toString("base64url");
+      codes.set(code, {
+        nonce: url.searchParams.get("nonce"),
+        clientId: url.searchParams.get("client_id")
+      });
+      const redirect = new URL(url.searchParams.get("redirect_uri"));
+      redirect.searchParams.set("code", code);
+      redirect.searchParams.set("state", url.searchParams.get("state"));
+      response.writeHead(302, { location: redirect.toString() });
+      response.end();
+      return;
+    }
+    if (url.pathname === "/realms/kakurizai/protocol/openid-connect/token") {
+      const body = new URLSearchParams(await readRequestBody(request));
+      const code = body.get("code");
+      const entry = codes.get(code);
+      if (!entry) return json(response, { error: "invalid_grant" }, 400);
+      const idToken = signJwt({
+        sub: "alice",
+        iss: issuer,
+        aud: body.get("client_id") || entry.clientId || "studio",
+        nonce: entry.nonce,
+        amr: ["pwd", "otp"],
+        realm_access: { roles: ["kakurizai-admin"] },
+        ...tokenClaims
+      }, { privateKey, kid });
+      return json(response, {
+        token_type: "Bearer",
+        expires_in: 300,
+        id_token: idToken,
+        access_token: idToken
+      });
+    }
+    json(response, { error: "not found" }, 404);
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  origin = `http://127.0.0.1:${server.address().port}`;
+  issuer = `${origin}/realms/kakurizai`;
+  return {
+    origin,
+    issuer,
+    discoveryUrl: `${issuer}/.well-known/openid-configuration`,
+    signToken(payload) {
+      return signJwt({
+        iss: issuer,
+        aud: "studio",
+        exp: Math.floor(Date.now() / 1000) + 300,
+        iat: Math.floor(Date.now() / 1000),
+        ...payload
+      }, { privateKey, kid });
+    },
+    close() {
+      return new Promise((resolve) => server.close(resolve));
+    }
+  };
+}
+
+function signJwt(payload, options) {
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: "RS256", typ: "JWT", kid: options.kid };
+  const fullPayload = {
+    iat: now,
+    exp: now + 300,
+    ...payload
+  };
+  const signingInput = `${base64urlJson(header)}.${base64urlJson(fullPayload)}`;
+  const signature = crypto.createSign("RSA-SHA256")
+    .update(signingInput)
+    .end()
+    .sign(options.privateKey)
+    .toString("base64url");
+  return `${signingInput}.${signature}`;
+}
+
+function base64urlJson(value) {
+  return Buffer.from(JSON.stringify(value)).toString("base64url");
+}
+
+function json(response, value, status = 200) {
+  response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+  response.end(`${JSON.stringify(value)}\n`);
+}
+
+function readRequestBody(request) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => {
+      body += chunk;
+    });
+    request.on("end", () => resolve(body));
+    request.on("error", reject);
+  });
+}
 
 async function waitForFile(filePath, pattern = null) {
   let lastError;

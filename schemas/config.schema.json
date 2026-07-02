@@ -78,125 +78,55 @@
         },
         {
           "type": "object",
-          "required": ["provider", "users"],
+          "required": ["provider", "realm", "clientId"],
           "properties": {
-            "provider": { "const": "local" },
-            "label": { "type": "string" },
-            "users": {
-              "type": "object",
-              "additionalProperties": {
-                "type": "object",
-                "required": ["passwordHash"],
-                "properties": {
-                  "passwordHash": { "type": "string" },
-                  "disabled": { "type": "boolean" },
-                  "displayName": { "type": "string" },
-                  "roles": {
-                    "oneOf": [
-                      { "type": "string" },
-                      { "type": "array", "items": { "type": "string" } }
-                    ]
-                  },
-                  "permissions": {
-                    "oneOf": [
-                      { "type": "string" },
-                      { "type": "array", "items": { "type": "string" } }
-                    ]
-                  },
-                  "totpSecret": { "type": "string" },
-                  "totp": {
-                    "oneOf": [
-                      { "type": "string" },
-                      { "type": "object", "additionalProperties": true }
-                    ]
-                  }
-                },
-                "additionalProperties": false
-              }
+            "provider": { "const": "keycloak" },
+            "serverUrl": { "type": "string" },
+            "realm": { "type": "string" },
+            "issuer": { "type": "string" },
+            "discoveryUrl": { "type": "string" },
+            "clientId": { "type": "string" },
+            "clientSecret": { "type": ["string", "null"] },
+            "audience": { "type": "string" },
+            "jwksUri": { "type": "string" },
+            "scopes": {
+              "oneOf": [
+                { "type": "string" },
+                { "type": "array", "items": { "type": "string" } }
+              ]
             },
             "sessionTtlSeconds": { "type": "integer", "minimum": 60 },
             "maxLoginAttempts": { "type": "integer", "minimum": 1 },
             "persistSessions": { "type": "boolean" },
             "sessionFile": { "type": "string" },
             "rbac": { "type": "object", "additionalProperties": true },
-            "totp": { "type": "object", "additionalProperties": true },
             "mfa": { "type": "object", "additionalProperties": true }
           },
           "additionalProperties": false
         },
         {
           "type": "object",
-          "required": ["provider"],
-          "properties": {
-            "provider": { "const": "self" },
-            "issuer": { "type": "string" },
-            "audience": { "type": "string" },
-            "secret": { "type": "string" },
-            "secretFile": { "type": "string" },
-            "sessionTtlSeconds": { "type": "integer", "minimum": 60 },
-            "maxLoginAttempts": { "type": "integer", "minimum": 1 },
-            "persistSessions": { "type": "boolean" },
-            "sessionFile": { "type": "string" },
-            "rbac": { "type": "object", "additionalProperties": true },
-            "totp": { "type": "object", "additionalProperties": true },
-            "mfa": { "type": "object", "additionalProperties": true }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": ["provider", "domain", "audience"],
-          "properties": {
-            "provider": { "const": "auth0" },
-            "domain": { "type": "string" },
-            "audience": { "type": "string" },
-            "issuer": { "type": "string" },
-            "jwksUri": { "type": "string" },
-            "sessionTtlSeconds": { "type": "integer", "minimum": 60 },
-            "maxLoginAttempts": { "type": "integer", "minimum": 1 },
-            "persistSessions": { "type": "boolean" },
-            "sessionFile": { "type": "string" },
-            "rbac": { "type": "object", "additionalProperties": true },
-            "totp": { "type": "object", "additionalProperties": true },
-            "mfa": { "type": "object", "additionalProperties": true }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": ["provider", "region", "userPoolId"],
-          "properties": {
-            "provider": { "const": "cognito" },
-            "region": { "type": "string" },
-            "userPoolId": { "type": "string" },
-            "clientId": { "type": "string" },
-            "audience": { "type": "string" },
-            "issuer": { "type": "string" },
-            "jwksUri": { "type": "string" },
-            "sessionTtlSeconds": { "type": "integer", "minimum": 60 },
-            "maxLoginAttempts": { "type": "integer", "minimum": 1 },
-            "persistSessions": { "type": "boolean" },
-            "sessionFile": { "type": "string" },
-            "rbac": { "type": "object", "additionalProperties": true },
-            "totp": { "type": "object", "additionalProperties": true },
-            "mfa": { "type": "object", "additionalProperties": true }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": ["provider", "issuer", "jwksUri"],
+          "required": ["provider", "issuer", "clientId"],
           "properties": {
             "provider": { "const": "oidc" },
+            "label": { "type": "string" },
             "issuer": { "type": "string" },
+            "discoveryUrl": { "type": "string" },
+            "clientId": { "type": "string" },
+            "clientSecret": { "type": ["string", "null"] },
             "audience": { "type": "string" },
             "jwksUri": { "type": "string" },
+            "scopes": {
+              "oneOf": [
+                { "type": "string" },
+                { "type": "array", "items": { "type": "string" } }
+              ]
+            },
             "sessionTtlSeconds": { "type": "integer", "minimum": 60 },
             "maxLoginAttempts": { "type": "integer", "minimum": 1 },
             "persistSessions": { "type": "boolean" },
             "sessionFile": { "type": "string" },
             "rbac": { "type": "object", "additionalProperties": true },
-            "totp": { "type": "object", "additionalProperties": true },
             "mfa": { "type": "object", "additionalProperties": true }
           },
           "additionalProperties": false

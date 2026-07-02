@@ -41,8 +41,10 @@ type AuthConfig = {
   label: string;
   issuer?: string;
   audience?: string;
-  requiresToken: boolean;
-  requiresCredentials?: boolean;
+  requiresRedirect?: boolean;
+  loginUrl?: string;
+  logoutUrl?: string;
+  supportsBearer?: boolean;
   mfaRequired?: boolean;
   csrfHeader?: string;
 };
@@ -482,10 +484,7 @@ function Root() {
 
 function App() {
   const [authConfig, setAuthConfig] = React.useState<AuthConfig | null>(null);
-  const [token, setToken] = React.useState("");
-  const [username, setUsername] = React.useState("");
-  const [password, setPassword] = React.useState("");
-  const [mfaCode, setMfaCode] = React.useState("");
+  const [token] = React.useState("");
   const [session, setSession] = React.useState<string | null>(null);
   const [, setCsrfToken] = React.useState(() => sessionStorage.getItem("kakurizai.csrf") || "");
   const [theme, setTheme] = React.useState<ThemeMode>(() => localStorage.getItem("kakurizai.theme") === "light" ? "light" : "dark");
@@ -633,7 +632,7 @@ function App() {
       setSelectedId((current) => nextInventory.some((row) => row.key === current) ? current : nextInventory[0]?.key || null);
       setStatus(`${nextInventory.length} Sandbox${nextInventory.length === 1 ? "" : "es"} / ${cubeResult.sandboxes.length} runtime`);
     } catch (error) {
-      if (authConfig?.requiresToken || authConfig?.requiresCredentials) {
+      if (authConfig?.requiresRedirect) {
         setSession(null);
         setCsrfToken("");
         sessionStorage.removeItem("kakurizai.csrf");
@@ -644,29 +643,9 @@ function App() {
     }
   }
 
-  async function signIn(event: React.FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    try {
-      const result = await api<{ user: { subject: string }; csrfToken?: string | null }>("/api/auth/login", {
-        method: "POST",
-        body: authConfig?.requiresCredentials
-          ? { username: username.trim(), password, totp: mfaCode.trim() || undefined }
-          : { token: token.trim(), totp: mfaCode.trim() || undefined }
-      });
-      setSession(result.user.subject);
-      const nextCsrfToken = result.csrfToken || "";
-      if (nextCsrfToken) sessionStorage.setItem("kakurizai.csrf", nextCsrfToken);
-      setCsrfToken(nextCsrfToken);
-      setToken("");
-      setPassword("");
-      setMfaCode("");
-      await refresh();
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
+  function signIn() {
+    const target = authConfig?.loginUrl || "/api/auth/login";
+    window.location.href = `${target}${target.includes("?") ? "&" : "?"}returnTo=${encodeURIComponent(window.location.pathname + window.location.search)}`;
   }
 
   async function signOut() {
@@ -1102,15 +1081,12 @@ function App() {
     }
   }
 
-  const authRequired = Boolean(authConfig?.requiresToken || authConfig?.requiresCredentials);
-  const canSubmitAuth = authConfig?.requiresCredentials
-    ? username.trim() && password && (!authConfig?.mfaRequired || mfaCode.trim())
-    : token.trim() && (!authConfig?.mfaRequired || mfaCode.trim());
+  const authRequired = Boolean(authConfig?.requiresRedirect);
 
   if (authRequired && !session) {
     return (
       <div className="loginPage">
-        <form className="loginPanel" onSubmit={signIn}>
+        <section className="loginPanel">
           <div className="mark"><Shield size={22} /></div>
           <h1>KakuriZai Console</h1>
           <p>{status === "Sign in required" ? authConfig.label : status}</p>
@@ -1119,38 +1095,8 @@ function App() {
             <span>Issuer</span><strong>{authConfig.issuer || "-"}</strong>
             <span>Audience</span><strong>{authConfig.audience || "-"}</strong>
           </div>
-          {authConfig.requiresCredentials ? (
-            <>
-              <label>
-                Username
-                <input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} />
-              </label>
-              <label>
-                Password
-                <input autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
-              </label>
-            </>
-          ) : (
-            <label>
-              Bearer token
-              <input value={token} onChange={(event) => setToken(event.target.value)} placeholder="eyJ..." />
-            </label>
-          )}
-          {authConfig.mfaRequired ? (
-            <label>
-              One-time code
-              <input
-                autoComplete="one-time-code"
-                inputMode="numeric"
-                pattern="[0-9]*"
-                value={mfaCode}
-                onChange={(event) => setMfaCode(event.target.value)}
-                placeholder="123456"
-              />
-            </label>
-          ) : null}
-          <button className="primary wide" type="submit" disabled={busy || !canSubmitAuth}><KeyRound size={16} /> Sign in</button>
-        </form>
+          <button className="primary wide" type="button" onClick={signIn} disabled={busy}><KeyRound size={16} /> Sign in with Keycloak</button>
+        </section>
       </div>
     );
   }
