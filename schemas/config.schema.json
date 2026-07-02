@@ -95,6 +95,12 @@
                 { "type": "array", "items": { "type": "string" } }
               ]
             },
+            "authorizationParams": {
+              "type": "object",
+              "additionalProperties": {
+                "type": ["string", "number", "boolean"]
+              }
+            },
             "sessionTtlSeconds": { "type": "integer", "minimum": 60 },
             "maxLoginAttempts": { "type": "integer", "minimum": 1 },
             "persistSessions": { "type": "boolean" },
@@ -121,6 +127,12 @@
                 { "type": "string" },
                 { "type": "array", "items": { "type": "string" } }
               ]
+            },
+            "authorizationParams": {
+              "type": "object",
+              "additionalProperties": {
+                "type": ["string", "number", "boolean"]
+              }
             },
             "sessionTtlSeconds": { "type": "integer", "minimum": 60 },
             "maxLoginAttempts": { "type": "integer", "minimum": 1 },
