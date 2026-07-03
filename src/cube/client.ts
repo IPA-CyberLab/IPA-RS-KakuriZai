@@ -568,6 +568,13 @@ export class CubeSandboxClient {
     };
   }
 
+  async listNodes() {
+    const mastercli = commandExists(this.config.mastercli || "cubemastercli");
+    if (!mastercli) return [];
+    const result = await commandSummary(mastercli, ["node", "list", "--json"], parseNodesJson);
+    return result.ok ? result.value : [];
+  }
+
   async inspectTemplate(template, mastercli) {
     const result = await commandSummary(
       mastercli,

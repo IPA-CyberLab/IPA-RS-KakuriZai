@@ -81,6 +81,7 @@ export function defaultConfig(home = defaultHome()) {
     cluster: {
       failover: {
         enabled: process.env.KAKURIZAI_FAILOVER_ENABLED !== "false",
+        activeProbe: process.env.KAKURIZAI_FAILOVER_ACTIVE_PROBE === "true",
         intervalMs: Number(process.env.KAKURIZAI_FAILOVER_INTERVAL_MS || 5000),
         checkpointIntervalMs: Number(process.env.KAKURIZAI_FAILOVER_CHECKPOINT_INTERVAL_MS || 60000),
         probeTimeoutMs: Number(process.env.KAKURIZAI_FAILOVER_PROBE_TIMEOUT_MS || 5000)
