@@ -81,12 +81,17 @@ export async function createKubernetesLab(config, input = {}) {
   const apiServerPort = Number(input.apiServerPort || input.kubernetes?.apiServerPort || 6443);
   const nodePorts = input.nodePorts || input.kubernetes?.nodePorts || [30000, 30001];
   const firstControlPlaneIp = cleanOptionalString(input.controlPlaneIp || input.controlPlaneNetwork?.sandboxIp || input.controlPlane?.network?.sandboxIp || input.network?.controlPlane?.sandboxIp || input.network?.controlPlanes?.sandboxIp);
-  const joinEndpoint = input.joinEndpoint || `https://${firstControlPlaneIp || `${labName}-cp-1`}:${apiServerPort}`;
+  let joinEndpoint = input.joinEndpoint || `https://${firstControlPlaneIp || `${labName}-cp-1`}:${apiServerPort}`;
+  const inputNetwork = input.network || {};
   const sharedNetwork = {
     type: "tap",
     mode: "tap",
     exposedPorts: [apiServerPort, ...nodePorts],
-    ...(input.network || {})
+    nat: { enabled: true, masquerade: true },
+    ...inputNetwork,
+    nat: inputNetwork.nat === false
+      ? { enabled: false }
+      : { enabled: true, masquerade: true, ...(inputNetwork.nat || {}) }
   };
   const controlPlaneNetwork = mergeNetworkConfig(
     sharedNetwork,
@@ -113,7 +118,7 @@ export async function createKubernetesLab(config, input = {}) {
     const network = mergeNetworkConfig(controlPlaneNetwork, {
       sandboxIp: index === 1 ? firstControlPlaneIp : null
     });
-    created.push(await createWorld(config, {
+    const world = await createWorld(config, {
       ...baseInput,
       name: `${labName}-cp-${index}`,
       network,
@@ -128,7 +133,12 @@ export async function createKubernetesLab(config, input = {}) {
         joinEndpoint: index === 1 ? input.joinEndpoint || "" : joinEndpoint
       }),
       labels: labLabels(input.labels, labName, "control-plane", index)
-    }));
+    });
+    created.push(world);
+    if (index === 1 && !input.joinEndpoint) {
+      const runtimeIp = cleanOptionalString(world.sandbox?.runtimeSandboxIp || world.sandbox?.sandboxIp || firstControlPlaneIp);
+      if (runtimeIp) joinEndpoint = `https://${runtimeIp}:${apiServerPort}`;
+    }
   }
   for (let index = 1; index <= workers; index += 1) {
     created.push(await createWorld(config, {

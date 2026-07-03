@@ -57,11 +57,13 @@ test("creates a multi-node Kubernetes lab with shared cluster metadata", async (
   assert.equal(controlPlane.backendConfig.kubernetes.joinEndpoint, "");
   assert.equal(controlPlane.backendConfig.network.sandboxIp, "192.168.0.20");
   assert.equal(controlPlane.backendConfig.network.allowInternetAccess, false);
+  assert.equal(controlPlane.backendConfig.network.nat.enabled, true);
   assert.deepEqual(controlPlane.backendConfig.network.exposedPorts, [6443, 30080]);
   assert.equal(worker.backendConfig.kubernetes.nodeRole, "worker");
   assert.equal(worker.backendConfig.kubernetes.joinEndpoint, "https://192.168.0.20:6443");
   assert.equal(worker.backendConfig.kubernetes.joinToken, "token-123");
   assert.equal(worker.backendConfig.kubernetes.sysctls["net.ipv4.conf.all.route_localnet"], "1");
+  assert.equal(worker.backendConfig.network.nat.enabled, true);
   assert.equal(worker.backendConfig.network.inbound.defaultPolicy, "deny");
   assert.equal(worker.labels["kakurizai.lab"], "demo-lab");
   assert.equal(worker.labels["kakurizai.kubernetes.nodeRole"], "worker");
