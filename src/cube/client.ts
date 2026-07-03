@@ -730,22 +730,24 @@ export class CubeSandboxClient {
     const tag = `kakurizai:${world.id}`;
     const commands = [
       `${shellQuote(iptables)} -N ${chain} 2>/dev/null || true`,
-      `${shellQuote(iptables)} -C FORWARD -j ${chain} 2>/dev/null || ${shellQuote(iptables)} -I FORWARD 1 -j ${chain}`,
+      `while line=$(${shellQuote(iptables)} -L FORWARD --line-numbers -n | awk '$0 ~ " ${chain}( |$)" { print $1 }' | sort -rn | head -n 1); [ -n "$line" ]; do ${shellQuote(iptables)} -D FORWARD "$line"; done`,
+      `egress_line=$(${shellQuote(iptables)} -L FORWARD --line-numbers -n | awk '$0 ~ " KAKURIZAI-EGRESS( |$)" { print $1; exit }')`,
+      `if [ -n "$egress_line" ]; then ${shellQuote(iptables)} -I FORWARD "$((egress_line + 1))" -j ${chain}; else ${shellQuote(iptables)} -I FORWARD 1 -j ${chain}; fi`,
       `while line=$(${shellQuote(iptables)} -L ${chain} --line-numbers -n | awk -v tag=${shellQuote(tag)} '$0 ~ tag { print $1 }' | sort -rn | head -n 1); [ -n "$line" ]; do ${shellQuote(iptables)} -D ${chain} "$line"; done`
     ];
     const cidrRules = [];
     for (const ip of sandboxIps) {
-      if (defaultPolicy === "deny" || allowFrom.length || denyFrom.length) {
-        cidrRules.push(`${shellQuote(iptables)} -A ${chain} -d ${shellQuote(`${ip}/32`)} -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment ${shellQuote(tag)} -j RETURN`);
-      }
+      cidrRules.push(`${shellQuote(iptables)} -A ${chain} -d ${shellQuote(`${ip}/32`)} -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment ${shellQuote(tag)} -j ACCEPT`);
       for (const cidr of allowFrom) {
-        cidrRules.push(`${shellQuote(iptables)} -A ${chain} -d ${shellQuote(`${ip}/32`)} -s ${shellQuote(cidr)} -m comment --comment ${shellQuote(tag)} -j RETURN`);
+        cidrRules.push(`${shellQuote(iptables)} -A ${chain} -d ${shellQuote(`${ip}/32`)} -s ${shellQuote(cidr)} -m comment --comment ${shellQuote(tag)} -j ACCEPT`);
       }
       for (const cidr of denyFrom) {
         cidrRules.push(`${shellQuote(iptables)} -A ${chain} -d ${shellQuote(`${ip}/32`)} -s ${shellQuote(cidr)} -m comment --comment ${shellQuote(tag)} -j DROP`);
       }
       if (defaultPolicy === "deny") {
         cidrRules.push(`${shellQuote(iptables)} -A ${chain} -d ${shellQuote(`${ip}/32`)} -m comment --comment ${shellQuote(tag)} -j DROP`);
+      } else {
+        cidrRules.push(`${shellQuote(iptables)} -A ${chain} -d ${shellQuote(`${ip}/32`)} -m comment --comment ${shellQuote(tag)} -j ACCEPT`);
       }
     }
     commands.push(...cidrRules);
