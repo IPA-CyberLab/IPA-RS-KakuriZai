@@ -448,6 +448,57 @@ type EgressRuleDraft = {
   injects: EgressInjectDraft[];
 };
 
+type KubernetesLabDraft = {
+  name: string;
+  controlPlanes: string;
+  workers: string;
+  cpu: string;
+  memory: string;
+  writableLayerSize: string;
+  profile: string;
+  cni: string;
+  apiServerPort: string;
+  nodePorts: string;
+  controlPlaneIp: string;
+  allowInternetAccess: boolean;
+  workerOutboundOnly: boolean;
+};
+
+type KubernetesLabCreateInput = {
+  name: string;
+  controlPlanes: number;
+  workers: number;
+  cpu?: string;
+  memory?: string;
+  writableLayerSize?: string;
+  profile?: string;
+  cni?: string;
+  apiServerPort?: number;
+  nodePorts?: number[];
+  network: NetworkConfig;
+  controlPlaneNetwork?: NetworkConfig;
+  workerNetwork?: NetworkConfig;
+};
+
+type KubernetesLabCreateResult = {
+  lab: {
+    name: string;
+    clusterName: string;
+    controlPlanes: number;
+    workers: number;
+    joinEndpoint?: string;
+    networkTopology?: Record<string, unknown>;
+  };
+  worlds: World[];
+};
+
+type LabClusterSummary = {
+  name: string;
+  nodes: number;
+  controlPlanes: number;
+  workers: number;
+};
+
 type InventoryRow = {
   key: string;
   name: string;
@@ -495,6 +546,24 @@ const dnsPresets: Array<{ id: DnsPresetKey; label: string; servers: string[]; su
   { id: "quad9", label: "Quad9", servers: ["9.9.9.9", "149.112.112.112"], summary: "9.9.9.9, 149.112.112.112" },
   { id: "custom", label: "Custom", servers: [], summary: "Set DNS servers, searches, and options." }
 ];
+
+function defaultKubernetesLabDraft(): KubernetesLabDraft {
+  return {
+    name: "kz-k8s-cube-net",
+    controlPlanes: "1",
+    workers: "2",
+    cpu: "2000m",
+    memory: "2000Mi",
+    writableLayerSize: "4G",
+    profile: "k3s",
+    cni: "flannel",
+    apiServerPort: "6443",
+    nodePorts: "30000,30001",
+    controlPlaneIp: "",
+    allowInternetAccess: true,
+    workerOutboundOnly: true
+  };
+}
 
 function Root() {
   const shellWorldId = shellWorldIdFromLocation();
@@ -924,6 +993,28 @@ function App() {
       setStatus(error instanceof Error ? error.message : String(error));
     } finally {
       setProbeBusy(false);
+    }
+  }
+
+  async function createKubernetesLabFromStudio(input: KubernetesLabCreateInput) {
+    setBusy(true);
+    try {
+      const result = await api<KubernetesLabCreateResult>("/api/labs/kubernetes", {
+        method: "POST",
+        token,
+        body: input
+      });
+      setStatus(`Created Kubernetes lab ${result.lab.name}: ${result.worlds.length} nodes`);
+      await refresh();
+      const firstWorld = result.worlds[0];
+      if (firstWorld?.id) setSelectedId(`world:${firstWorld.id}`);
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus(message);
+      throw error;
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -1564,6 +1655,7 @@ function App() {
               selectedTemplate={selectedTemplate}
               onProbe={runNetworkProbe}
               onSaveNetwork={saveNetworkSettings}
+              onCreateKubernetesLab={createKubernetesLabFromStudio}
               onSelectSandbox={setSelectedId}
             />
           ) : selected ? (
@@ -2049,6 +2141,7 @@ function NetworkWorkspace({
   selectedTemplate,
   onProbe,
   onSaveNetwork,
+  onCreateKubernetesLab,
   onSelectSandbox
 }: {
   selected: InventoryRow | null;
@@ -2060,15 +2153,27 @@ function NetworkWorkspace({
   selectedTemplate?: CubeTemplate | null;
   onProbe: (live?: boolean) => Promise<void>;
   onSaveNetwork: (world: World, network: NetworkConfig, kubernetes: KubernetesConfig) => Promise<void>;
+  onCreateKubernetesLab: (input: KubernetesLabCreateInput) => Promise<KubernetesLabCreateResult>;
   onSelectSandbox: (key: string) => void;
 }) {
-  if (!selected) {
-    return (
-      <div className="emptyState">
-        <Network size={24} />
-        <span>No sandbox network metadata.</span>
-      </div>
-    );
+  const labClusters = React.useMemo(() => labClusterSummaries(rows), [rows]);
+  const selectedClusterFromRow = selected ? clusterNameForRow(selected) : "";
+  const [selectedLabCluster, setSelectedLabCluster] = React.useState("");
+
+  React.useEffect(() => {
+    setSelectedLabCluster((current) => {
+      const names = labClusters.map((cluster) => cluster.name);
+      if (!names.length) return "";
+      if (selectedClusterFromRow && names.includes(selectedClusterFromRow) && selectedClusterFromRow !== current) return selectedClusterFromRow;
+      if (current && names.includes(current)) return current;
+      return names[0];
+    });
+  }, [labClusters, selectedClusterFromRow]);
+
+  function chooseLabCluster(clusterName: string) {
+    setSelectedLabCluster(clusterName);
+    const row = firstRowForCluster(rows, clusterName);
+    if (row) onSelectSandbox(row.key);
   }
 
   return (
@@ -2078,7 +2183,7 @@ function NetworkWorkspace({
           <span><Route size={18} /></span>
           <div>
             <strong>Network</strong>
-            <small>{selected.name} / {selected.runtime?.sandboxIp || selected.sandboxId || "planned"}</small>
+            <small>{selected ? `${selected.name} / ${selected.runtime?.sandboxIp || selected.sandboxId || "planned"}` : "No sandbox selected"}</small>
           </div>
           <div className="probeToolbar">
             <button className="primary" onClick={() => void onProbe(true)} type="button" disabled={probeBusy || busy}>
@@ -2092,29 +2197,178 @@ function NetworkWorkspace({
             <span>{networkProbe ? `Updated ${formatDate(networkProbe.generatedAt)}` : "No live probe yet"}</span>
           </div>
         </header>
-        <SwitchNetworkPanel
-          selected={selected}
-          rows={rows}
-          cube={cube}
-          probe={networkProbe}
-          onSelect={onSelectSandbox}
-        />
+        <KubernetesLabCreator busy={busy} existingClusters={labClusters.map((cluster) => cluster.name)} onCreate={onCreateKubernetesLab} />
+        {selected ? (
+          <SwitchNetworkPanel
+            selected={selected}
+            rows={rows}
+            cube={cube}
+            probe={networkProbe}
+            onSelect={onSelectSandbox}
+          />
+        ) : (
+          <div className="sectionEmpty">No sandbox network metadata.</div>
+        )}
       </section>
 
       <DetailSection icon={<Network size={16} />} title="Settings">
-        <NetworkEditor
-          world={selected.world}
-          runtimeNetworkType={selectedTemplate?.networkType || cube?.config?.networkType || "tap"}
-          runtimeSandboxIp={selected.runtime?.sandboxIp || selected.world?.sandbox?.sandboxIp || ""}
-          busy={busy}
-          onSave={onSaveNetwork}
-        />
+        {selected ? (
+          <NetworkEditor
+            world={selected.world}
+            runtimeNetworkType={selectedTemplate?.networkType || cube?.config?.networkType || "tap"}
+            runtimeSandboxIp={selected.runtime?.sandboxIp || selected.world?.sandbox?.sandboxIp || ""}
+            busy={busy}
+            onSave={onSaveNetwork}
+          />
+        ) : (
+          <div className="sectionEmpty">Select a sandbox to edit network settings.</div>
+        )}
       </DetailSection>
 
       <DetailSection icon={<Layers size={16} />} title="Reachability">
-        <LabReachabilityMatrix rows={rows} selected={selected} probe={networkProbe} />
+        <LabClusterSelector clusters={labClusters} selected={selectedLabCluster} onChange={chooseLabCluster} />
+        <LabReachabilityMatrix rows={rows} clusterName={selectedLabCluster} probe={networkProbe} />
         <ConnectivityMatrix rows={rows} probe={networkProbe} />
       </DetailSection>
+    </div>
+  );
+}
+
+function KubernetesLabCreator({
+  busy,
+  existingClusters,
+  onCreate
+}: {
+  busy: boolean;
+  existingClusters: string[];
+  onCreate: (input: KubernetesLabCreateInput) => Promise<KubernetesLabCreateResult>;
+}) {
+  const [draft, setDraft] = React.useState<KubernetesLabDraft>(() => defaultKubernetesLabDraft());
+  const [message, setMessage] = React.useState("");
+  const existingCluster = existingClusters.includes(draft.name.trim());
+
+  function update(patch: Partial<KubernetesLabDraft>) {
+    setDraft((current) => ({ ...current, ...patch }));
+    setMessage("");
+  }
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    try {
+      if (existingCluster) throw new Error(`Cluster already exists: ${draft.name.trim()}`);
+      const result = await onCreate(kubernetesLabInputFromDraft(draft));
+      setMessage(`Created ${result.lab.name}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  return (
+    <form className="labCreator" onSubmit={(event) => void submit(event)}>
+      <div className="labCreatorHeader">
+        <strong>Kubernetes Lab</strong>
+        <button className="primary" type="submit" disabled={busy || existingCluster || !draft.name.trim()}>
+          <Plus size={15} />
+          Create Lab
+        </button>
+      </div>
+      <div className="labCreatorGrid">
+        <label>
+          <span>Name</span>
+          <input value={draft.name} onChange={(event) => update({ name: event.target.value })} />
+        </label>
+        <label>
+          <span>Control planes</span>
+          <input min={1} type="number" value={draft.controlPlanes} onChange={(event) => update({ controlPlanes: event.target.value })} />
+        </label>
+        <label>
+          <span>Workers</span>
+          <input min={0} type="number" value={draft.workers} onChange={(event) => update({ workers: event.target.value })} />
+        </label>
+        <label>
+          <span>Control-plane IP</span>
+          <input value={draft.controlPlaneIp} onChange={(event) => update({ controlPlaneIp: event.target.value })} placeholder="auto" />
+        </label>
+        <label>
+          <span>CPU</span>
+          <input value={draft.cpu} onChange={(event) => update({ cpu: event.target.value })} />
+        </label>
+        <label>
+          <span>Memory</span>
+          <input value={draft.memory} onChange={(event) => update({ memory: event.target.value })} />
+        </label>
+        <label>
+          <span>Disk</span>
+          <input value={draft.writableLayerSize} onChange={(event) => update({ writableLayerSize: event.target.value })} />
+        </label>
+        <label>
+          <span>API port</span>
+          <input inputMode="numeric" value={draft.apiServerPort} onChange={(event) => update({ apiServerPort: event.target.value })} />
+        </label>
+        <label>
+          <span>Node ports</span>
+          <input value={draft.nodePorts} onChange={(event) => update({ nodePorts: event.target.value })} />
+        </label>
+        <label>
+          <span>Profile</span>
+          <select value={draft.profile} onChange={(event) => update({ profile: event.target.value })}>
+            <option value="k3s">k3s</option>
+          </select>
+        </label>
+        <label>
+          <span>CNI</span>
+          <select value={draft.cni} onChange={(event) => update({ cni: event.target.value })}>
+            <option value="flannel">flannel</option>
+            <option value="none">none</option>
+          </select>
+        </label>
+        <label className="checkRow compactCheck labCreatorCheck">
+          <input type="checkbox" checked={draft.workerOutboundOnly} onChange={(event) => update({ workerOutboundOnly: event.target.checked })} />
+          <span>
+            <strong>Worker outbound only</strong>
+            <small>deny inbound to workers</small>
+          </span>
+        </label>
+        <label className="checkRow compactCheck labCreatorCheck">
+          <input type="checkbox" checked={draft.allowInternetAccess} onChange={(event) => update({ allowInternetAccess: event.target.checked })} />
+          <span>
+            <strong>Outbound internet</strong>
+            <small>enable SNAT</small>
+          </span>
+        </label>
+      </div>
+      {message ? <div className={message.startsWith("Created ") ? "fieldOk" : "fieldError"}>{message}</div> : null}
+      {existingCluster ? <div className="fieldError">Cluster already exists: {draft.name.trim()}</div> : null}
+    </form>
+  );
+}
+
+function LabClusterSelector({
+  clusters,
+  selected,
+  onChange
+}: {
+  clusters: LabClusterSummary[];
+  selected: string;
+  onChange: (clusterName: string) => void;
+}) {
+  if (!clusters.length) return null;
+  const active = clusters.find((cluster) => cluster.name === selected) || clusters[0];
+  return (
+    <div className="labClusterBar">
+      <label>
+        <span>Cluster</span>
+        <select value={active.name} onChange={(event) => onChange(event.target.value)}>
+          {clusters.map((cluster) => (
+            <option key={cluster.name} value={cluster.name}>{cluster.name}</option>
+          ))}
+        </select>
+      </label>
+      <div className="labClusterStats">
+        <span>{active.nodes} nodes</span>
+        <span>{active.controlPlanes} control-plane</span>
+        <span>{active.workers} worker</span>
+      </div>
     </div>
   );
 }
@@ -3127,10 +3381,10 @@ function ConnectivityMatrix({ rows, probe }: { rows: InventoryRow[]; probe?: Net
   return <div className="sectionEmpty">Run Probe to show reachability results.</div>;
 }
 
-function LabReachabilityMatrix({ rows, selected, probe }: { rows: InventoryRow[]; selected: InventoryRow | null; probe?: NetworkProbePlan | null }) {
-  const nodes = labReachabilityNodes(rows, selected);
+function LabReachabilityMatrix({ rows, clusterName, probe }: { rows: InventoryRow[]; clusterName: string; probe?: NetworkProbePlan | null }) {
+  const nodes = labReachabilityNodes(rows, clusterName);
   if (!nodes.length) return <div className="sectionEmpty">No Kubernetes lab topology metadata.</div>;
-  const clusterName = nodes[0]?.clusterName || "cluster";
+  const activeClusterName = nodes[0]?.clusterName || "cluster";
   const liveEdges = new Map((probe?.edges || []).map((edge) => [`${edge.fromWorldId}->${edge.toWorldId}`, edge]));
   const gridTemplateColumns = `minmax(180px, 1.15fr) repeat(${nodes.length}, minmax(150px, 1fr))`;
   const cells = nodes.flatMap((source) => nodes.map((target) => {
@@ -3146,7 +3400,7 @@ function LabReachabilityMatrix({ rows, selected, probe }: { rows: InventoryRow[]
     <div className="labReachability">
       <div className="labReachabilityHeader">
         <div>
-          <strong>{clusterName}</strong>
+          <strong>{activeClusterName}</strong>
           <span>{nodes.length} nodes / {reachable} reachable / {blocked} blocked / {planned} planned</span>
         </div>
         <div className="switchLegend">
@@ -3437,6 +3691,37 @@ function filterInventory(rows: InventoryRow[], search: string, stateFilter: Stat
   });
 }
 
+function clusterNameForRow(row: InventoryRow | null) {
+  if (!row) return "";
+  const kubernetes = kubernetesForRow(row);
+  return kubernetes.enabled ? kubernetes.clusterName || "" : "";
+}
+
+function labClusterSummaries(rows: InventoryRow[]): LabClusterSummary[] {
+  const clusters = new Map<string, LabClusterSummary>();
+  for (const row of rows) {
+    const kubernetes = kubernetesForRow(row);
+    if (!kubernetes.enabled || !kubernetes.clusterName) continue;
+    const cluster = clusters.get(kubernetes.clusterName) || {
+      name: kubernetes.clusterName,
+      nodes: 0,
+      controlPlanes: 0,
+      workers: 0
+    };
+    cluster.nodes += 1;
+    if (/control/i.test(kubernetes.nodeRole || "")) cluster.controlPlanes += 1;
+    else if (/worker/i.test(kubernetes.nodeRole || "")) cluster.workers += 1;
+    clusters.set(cluster.name, cluster);
+  }
+  return [...clusters.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function firstRowForCluster(rows: InventoryRow[], clusterName: string) {
+  return rows
+    .filter((row) => clusterNameForRow(row) === clusterName)
+    .sort((a, b) => roleSort(kubernetesForRow(a).nodeRole || "") - roleSort(kubernetesForRow(b).nodeRole || "") || a.name.localeCompare(b.name))[0] || null;
+}
+
 function findTemplateForSandbox(cube: CubeInspect | null, selected: InventoryRow | null) {
   if (!cube || !selected) return null;
   return cube.templates.find((template) => template.id === selected.templateId || template.id === selected.world?.sandbox?.baseId) || null;
@@ -3657,15 +3942,13 @@ type LabReachabilityNode = {
   topology?: SandboxNetworkTopology | null;
 };
 
-function labReachabilityNodes(rows: InventoryRow[], selected: InventoryRow | null): LabReachabilityNode[] {
-  const selectedKubernetes = selected ? kubernetesForRow(selected) : null;
-  const selectedCluster = selectedKubernetes?.enabled ? selectedKubernetes.clusterName || "" : "";
+function labReachabilityNodes(rows: InventoryRow[], clusterName = ""): LabReachabilityNode[] {
   const nodes = rows
     .map((row) => {
       if (!row.world?.id) return null;
       const kubernetes = kubernetesForRow(row);
       if (!kubernetes.enabled || !kubernetes.clusterName) return null;
-      if (selectedCluster && kubernetes.clusterName !== selectedCluster) return null;
+      if (clusterName && kubernetes.clusterName !== clusterName) return null;
       const network = networkForRow(row);
       const topology = row.world.sandbox?.network?.topology || null;
       return {
@@ -3680,7 +3963,7 @@ function labReachabilityNodes(rows: InventoryRow[], selected: InventoryRow | nul
       };
     })
     .filter(Boolean) as LabReachabilityNode[];
-  const cluster = selectedCluster || nodes[0]?.clusterName || "";
+  const cluster = clusterName || nodes[0]?.clusterName || "";
   return nodes
     .filter((node) => !cluster || node.clusterName === cluster)
     .sort((a, b) => roleSort(a.role) - roleSort(b.role) || a.name.localeCompare(b.name));
@@ -3976,6 +4259,51 @@ function parsePortList(value: string) {
     }
     return port;
   });
+}
+
+function kubernetesLabInputFromDraft(draft: KubernetesLabDraft): KubernetesLabCreateInput {
+  const name = draft.name.trim();
+  if (!name) throw new Error("Enter a lab name.");
+  const apiServerPort = parsePortNumber(draft.apiServerPort, "API port");
+  const nodePorts = parsePortList(draft.nodePorts);
+  return {
+    name,
+    controlPlanes: parseIntegerInput(draft.controlPlanes, "control planes", 1),
+    workers: parseIntegerInput(draft.workers, "workers", 0),
+    cpu: draft.cpu.trim() || undefined,
+    memory: draft.memory.trim() || undefined,
+    writableLayerSize: draft.writableLayerSize.trim() || undefined,
+    profile: draft.profile.trim() || undefined,
+    cni: draft.cni.trim() || undefined,
+    apiServerPort,
+    nodePorts: nodePorts.length ? nodePorts : undefined,
+    network: {
+      type: "tap",
+      mode: "tap",
+      allowInternetAccess: draft.allowInternetAccess,
+      nat: { enabled: true, masquerade: true }
+    },
+    controlPlaneNetwork: draft.controlPlaneIp.trim() ? { sandboxIp: draft.controlPlaneIp.trim() } : undefined,
+    workerNetwork: {
+      inbound: {
+        defaultPolicy: draft.workerOutboundOnly ? "deny" : "allow",
+        allowFrom: [],
+        denyFrom: []
+      }
+    }
+  };
+}
+
+function parseIntegerInput(value: string, label: string, minimum: number) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < minimum) throw new Error(`Invalid ${label}: ${value}`);
+  return parsed;
+}
+
+function parsePortNumber(value: string, label: string) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) throw new Error(`Invalid ${label}: ${value}`);
+  return parsed;
 }
 
 function parsePortAnnotation(value?: string | null) {
