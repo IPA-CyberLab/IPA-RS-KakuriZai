@@ -1698,6 +1698,72 @@ label {
   color: var(--muted);
 }
 
+.mermaidPanel {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--surface-2);
+  padding: 10px;
+}
+
+.mermaidToolbar {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mermaidToolbar strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mermaidToolbar > div {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.mermaidCanvas {
+  min-width: 0;
+  overflow: auto;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--raised);
+  padding: 14px;
+}
+
+.mermaidCanvas svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.mermaidSource,
+.mermaidError {
+  max-height: 280px;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--ink-soft);
+  padding: 10px;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre;
+}
+
+.mermaidError {
+  color: var(--danger-text);
+}
+
 .switchPanel {
   display: grid;
   gap: 14px;
