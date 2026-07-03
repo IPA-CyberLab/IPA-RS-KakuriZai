@@ -424,6 +424,7 @@ class StudioSessionStore {
     this.config = config;
     this.sessions = new Map();
     this.loginAttempts = new Map();
+    this.oidcStates = new Map();
     this.ttlMs = Number(config.auth.sessionTtlSeconds || 8 * 60 * 60) * 1000;
     this.maxLoginAttempts = Number(config.auth.maxLoginAttempts || 12);
     this.persist = config.auth.persistSessions !== false;
@@ -506,6 +507,43 @@ class StudioSessionStore {
 
   resetLoginAttempts(key) {
     this.loginAttempts.delete(key);
+  }
+
+  createOidcState(pending, request) {
+    this.pruneOidcStates();
+    const record = {
+      ...pending,
+      expiresAt: Date.now() + 10 * 60 * 1000,
+      ip: requestIp(request, this.config),
+      userAgent: request.headers["user-agent"] || ""
+    };
+    this.oidcStates.set(record.state, record);
+    return record;
+  }
+
+  consumeOidcState(state, request) {
+    if (!state) return null;
+    const record = this.oidcStates.get(state);
+    if (!record) return null;
+    if (record.expiresAt <= Date.now()) {
+      this.oidcStates.delete(state);
+      return null;
+    }
+    if (record.ip !== requestIp(request, this.config)) return null;
+    if (record.userAgent !== (request.headers["user-agent"] || "")) return null;
+    this.oidcStates.delete(state);
+    return record;
+  }
+
+  deleteOidcState(state) {
+    if (state) this.oidcStates.delete(state);
+  }
+
+  pruneOidcStates() {
+    const now = Date.now();
+    for (const [state, record] of this.oidcStates.entries()) {
+      if (record.expiresAt <= now) this.oidcStates.delete(state);
+    }
   }
 }
 
@@ -793,11 +831,12 @@ async function beginOidcLogin(config, auth, sessions, request, response, url) {
   const returnTo = safeReturnTo(url.searchParams.get("returnTo") || "/");
   sessions.assertLoginAllowed(key);
   const redirectUri = oidcRedirectUri(config, request);
+  const pending = sessions.createOidcState({ state, nonce, returnTo }, request);
   const location = await auth.authorizationUrl({ redirectUri, state, nonce });
   response.writeHead(302, {
     ...securityHeaders(request, "text/plain; charset=utf-8"),
     location,
-    "set-cookie": oidcStateCookie(config, request, { state, nonce, returnTo })
+    "set-cookie": oidcStateCookie(config, request, pending)
   });
   response.end("redirecting to identity provider\n");
 }
@@ -811,17 +850,22 @@ async function finishOidcLogin(config, auth, sessions, request, response, url) {
     response.end();
     return;
   }
-  const pending = readOidcStateCookie(request);
+  const callbackState = url.searchParams.get("state");
+  let pending = readOidcStateCookie(request);
+  if (!pending?.state || !pending?.nonce || pending.expiresAt <= Date.now()) {
+    pending = sessions.consumeOidcState(callbackState, request);
+  }
   if (!pending?.state || !pending?.nonce || pending.expiresAt <= Date.now()) {
     const error = new Error("missing or expired oidc state");
     error.statusCode = 401;
     throw error;
   }
-  if (url.searchParams.get("state") !== pending.state) {
+  if (callbackState !== pending.state) {
     const error = new Error("oidc state mismatch");
     error.statusCode = 401;
     throw error;
   }
+  sessions.deleteOidcState(pending.state);
   if (url.searchParams.get("error")) {
     const error = new Error(url.searchParams.get("error_description") || url.searchParams.get("error"));
     error.statusCode = 401;

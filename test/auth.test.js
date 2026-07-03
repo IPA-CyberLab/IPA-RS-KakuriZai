@@ -130,6 +130,81 @@ test("studio signs in through keycloak code flow with session cookie, csrf, rbac
   }
 });
 
+test("studio finishes keycloak callback without state cookie for the same client", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-keycloak-state-"));
+  const keycloak = await startMockKeycloak();
+  const studio = await startStudio({
+    home: tmp,
+    studio: { host: "127.0.0.1", port: 0, tls: { certFile: null, keyFile: null } },
+    auth: {
+      provider: "keycloak",
+      issuer: keycloak.issuer,
+      discoveryUrl: keycloak.discoveryUrl,
+      realm: "kakurizai",
+      clientId: "studio",
+      audience: "studio",
+      rbac: { enabled: true, roles: { "kakurizai-admin": ["admin"] } },
+      mfa: { required: true }
+    },
+    audit: { enabled: true, file: path.join(tmp, "audit", "studio.jsonl") },
+    cube: { mode: "disabled" },
+    storeDir: path.join(tmp, "store")
+  });
+  const origin = `http://127.0.0.1:${studio.server.address().port}`;
+  const headers = { "user-agent": "kakurizai-state-test" };
+  try {
+    const loginStart = await fetch(`${origin}/api/auth/login?returnTo=/observability`, { redirect: "manual", headers });
+    assert.equal(loginStart.status, 302);
+    const keycloakAuth = await fetch(loginStart.headers.get("location"), { redirect: "manual", headers });
+    assert.equal(keycloakAuth.status, 302);
+    const callback = await fetch(keycloakAuth.headers.get("location"), { redirect: "manual", headers });
+    assert.equal(callback.status, 302);
+    assert.equal(callback.headers.get("location"), "/observability");
+    assert.match(callback.headers.get("set-cookie"), /kakurizai_session=/);
+  } finally {
+    await new Promise((resolve) => studio.server.close(resolve));
+    await keycloak.close();
+  }
+});
+
+test("studio rejects keycloak callback without state cookie from a different client", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-keycloak-state-mismatch-"));
+  const keycloak = await startMockKeycloak();
+  const studio = await startStudio({
+    home: tmp,
+    studio: { host: "127.0.0.1", port: 0, tls: { certFile: null, keyFile: null } },
+    auth: {
+      provider: "keycloak",
+      issuer: keycloak.issuer,
+      discoveryUrl: keycloak.discoveryUrl,
+      realm: "kakurizai",
+      clientId: "studio",
+      audience: "studio",
+      mfa: { required: true }
+    },
+    audit: { enabled: true, file: path.join(tmp, "audit", "studio.jsonl") },
+    cube: { mode: "disabled" },
+    storeDir: path.join(tmp, "store")
+  });
+  const origin = `http://127.0.0.1:${studio.server.address().port}`;
+  try {
+    const loginStart = await fetch(`${origin}/api/auth/login`, {
+      redirect: "manual",
+      headers: { "user-agent": "kakurizai-state-test-a" }
+    });
+    const keycloakAuth = await fetch(loginStart.headers.get("location"), { redirect: "manual" });
+    const callback = await fetch(keycloakAuth.headers.get("location"), {
+      redirect: "manual",
+      headers: { "user-agent": "kakurizai-state-test-b" }
+    });
+    assert.equal(callback.status, 401);
+    assert.match(await callback.text(), /missing or expired oidc state/);
+  } finally {
+    await new Promise((resolve) => studio.server.close(resolve));
+    await keycloak.close();
+  }
+});
+
 test("studio rejects keycloak sessions without mfa claim when required", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-keycloak-mfa-"));
   const keycloak = await startMockKeycloak({
