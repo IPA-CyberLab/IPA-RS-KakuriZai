@@ -285,6 +285,17 @@ async function kubernetesLab(config, args) {
     ...splitOptionValues(takeRepeatedOption(args, "--node-ports"))
   ];
   const allowInternet = takeOption(args, "--allow-internet-access");
+  const controlPlaneIp = takeOption(args, "--control-plane-ip") || takeOption(args, "--control-plane-sandbox-ip");
+  const workerOutboundOnly = takeFlag(args, "--worker-outbound-only");
+  const workerInboundPolicy = takeOption(args, "--worker-inbound-policy") || (workerOutboundOnly ? "deny" : null);
+  const workerAllowInbound = [
+    ...splitOptionValues(takeRepeatedOption(args, "--worker-allow-inbound-cidr")),
+    ...splitOptionValues(takeRepeatedOption(args, "--worker-allow-inbound-cidrs"))
+  ];
+  const workerDenyInbound = [
+    ...splitOptionValues(takeRepeatedOption(args, "--worker-deny-inbound-cidr")),
+    ...splitOptionValues(takeRepeatedOption(args, "--worker-deny-inbound-cidrs"))
+  ];
   const result = await createKubernetesLab(config, {
     name,
     controlPlanes: controlPlanes == null ? undefined : Number(controlPlanes),
@@ -311,7 +322,17 @@ async function kubernetesLab(config, args) {
       ...(allowInternet == null ? {} : { allowInternetAccess: parseBooleanOption(allowInternet) }),
       allowOut: splitOptionValues(takeRepeatedOption(args, "--allow-out-cidr")),
       denyOut: splitOptionValues(takeRepeatedOption(args, "--deny-out-cidr"))
-    }
+    },
+    controlPlaneNetwork: controlPlaneIp ? { sandboxIp: controlPlaneIp } : undefined,
+    workerNetwork: workerInboundPolicy || workerAllowInbound.length || workerDenyInbound.length
+      ? {
+          inbound: {
+            defaultPolicy: workerInboundPolicy || "allow",
+            allowFrom: workerAllowInbound,
+            denyFrom: workerDenyInbound
+          }
+        }
+      : undefined
   });
   if (args.includes("--json")) {
     console.log(JSON.stringify(result, null, 2));

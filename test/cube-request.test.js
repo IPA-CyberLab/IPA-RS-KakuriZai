@@ -384,6 +384,10 @@ test("cube request carries TAP NAT, VLAN, forward, and L7 egress settings", asyn
         allowInternetAccess: true,
         allowOut: ["0.0.0.0/0"],
         denyOut: ["10.0.0.0/8"],
+        inbound: {
+          defaultPolicy: "deny",
+          allowFrom: ["192.168.0.10/32"]
+        },
         rules: [
           {
             name: "allow-api",
@@ -433,6 +437,11 @@ test("cube request carries TAP NAT, VLAN, forward, and L7 egress settings", asyn
       targetAddress: null
     }
   ]);
+  assert.deepEqual(JSON.parse(request.annotations["kakurizai.network.inbound"]), {
+    defaultPolicy: "deny",
+    allowFrom: ["192.168.0.10/32"],
+    denyFrom: []
+  });
   assert.deepEqual(request.cube_network_config, {
     allowInternetAccess: true,
     allowOut: ["0.0.0.0/0"],
@@ -528,6 +537,30 @@ test("network config validates NAT forward ports", () => {
     }),
     /hostPort/
   );
+});
+
+test("network config validates inbound policy", () => {
+  assert.throws(
+    () => normalizeNetworkConfig({
+      type: "tap",
+      inbound: { defaultPolicy: "block" }
+    }),
+    /inbound\.defaultPolicy/
+  );
+
+  const network = normalizeNetworkConfig({
+    type: "tap",
+    inbound: {
+      defaultPolicy: "deny",
+      allowFrom: ["192.168.0.10/32"],
+      denyFrom: ["10.0.0.0/8"]
+    }
+  });
+  assert.deepEqual(network.inbound, {
+    defaultPolicy: "deny",
+    allowFrom: ["192.168.0.10/32"],
+    denyFrom: ["10.0.0.0/8"]
+  });
 });
 
 test("network config validates host VLAN bridge settings", () => {

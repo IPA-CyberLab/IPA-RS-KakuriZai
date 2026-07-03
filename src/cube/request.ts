@@ -199,6 +199,13 @@ function applyNetworkAnnotations(annotations, network) {
   setJsonAnnotation(annotations, "kakurizai.network.vlan", vlan.enabled ? vlan : null);
   setJsonAnnotation(annotations, "kakurizai.network.nat", nat.enabled ? nat : null);
   setJsonAnnotation(annotations, "kakurizai.network.portForwards", nat.portForwards?.length ? nat.portForwards : null);
+  setJsonAnnotation(
+    annotations,
+    "kakurizai.network.inbound",
+    network.inbound?.defaultPolicy === "deny" || network.inbound?.allowFrom?.length || network.inbound?.denyFrom?.length
+      ? network.inbound
+      : null
+  );
 }
 
 function kubernetesAnnotations(kubernetes) {

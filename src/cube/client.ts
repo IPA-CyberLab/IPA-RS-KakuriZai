@@ -660,6 +660,7 @@ export class CubeSandboxClient {
       return { skipped: true, reason: "sandbox IP is not available", requestedIp, runtimeIp };
     }
     const firewall = await this.syncHostEgressRules(world, sandboxIps, network);
+    const ingress = await this.syncHostIngressRules(world, sandboxIps, network);
     const vlan = await this.syncHostVlanBridge(world, sandboxIps, network);
     const datapath = network.vlan?.enabled
       ? { skipped: true, reason: "VLAN bridge mode bypasses the CubeSandbox from_cube datapath" }
@@ -671,6 +672,7 @@ export class CubeSandboxClient {
       sandboxIp: requestedIp || runtimeIp,
       sandboxIps,
       firewall,
+      ingress,
       vlan,
       datapath
     };
@@ -713,6 +715,48 @@ export class CubeSandboxClient {
       code: result.code,
       sudo: result.sudo || false,
       ruleCount: cidrRules.length,
+      reason: result.code === 0 ? null : result.stderr || result.stdout || `iptables exited with ${result.code}`
+    };
+  }
+
+  async syncHostIngressRules(world, sandboxIps, network = {}) {
+    const iptables = resolveIptables(this.config.iptables);
+    if (!iptables) return { skipped: true, reason: "iptables not found" };
+    const inbound = network.inbound || {};
+    const defaultPolicy = inbound.defaultPolicy === "deny" ? "deny" : "allow";
+    const allowFrom = inbound.allowFrom || [];
+    const denyFrom = inbound.denyFrom || [];
+    const chain = "KAKURIZAI-INGRESS";
+    const tag = `kakurizai:${world.id}`;
+    const commands = [
+      `${shellQuote(iptables)} -N ${chain} 2>/dev/null || true`,
+      `${shellQuote(iptables)} -C FORWARD -j ${chain} 2>/dev/null || ${shellQuote(iptables)} -I FORWARD 1 -j ${chain}`,
+      `while line=$(${shellQuote(iptables)} -L ${chain} --line-numbers -n | awk -v tag=${shellQuote(tag)} '$0 ~ tag { print $1 }' | sort -rn | head -n 1); [ -n "$line" ]; do ${shellQuote(iptables)} -D ${chain} "$line"; done`
+    ];
+    const cidrRules = [];
+    for (const ip of sandboxIps) {
+      if (defaultPolicy === "deny" || allowFrom.length || denyFrom.length) {
+        cidrRules.push(`${shellQuote(iptables)} -A ${chain} -d ${shellQuote(`${ip}/32`)} -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment ${shellQuote(tag)} -j RETURN`);
+      }
+      for (const cidr of allowFrom) {
+        cidrRules.push(`${shellQuote(iptables)} -A ${chain} -d ${shellQuote(`${ip}/32`)} -s ${shellQuote(cidr)} -m comment --comment ${shellQuote(tag)} -j RETURN`);
+      }
+      for (const cidr of denyFrom) {
+        cidrRules.push(`${shellQuote(iptables)} -A ${chain} -d ${shellQuote(`${ip}/32`)} -s ${shellQuote(cidr)} -m comment --comment ${shellQuote(tag)} -j DROP`);
+      }
+      if (defaultPolicy === "deny") {
+        cidrRules.push(`${shellQuote(iptables)} -A ${chain} -d ${shellQuote(`${ip}/32`)} -m comment --comment ${shellQuote(tag)} -j DROP`);
+      }
+    }
+    commands.push(...cidrRules);
+    const result = await runHostNetworkCommand(commands.join("\n"));
+    return {
+      skipped: false,
+      applied: result.code === 0,
+      code: result.code,
+      sudo: result.sudo || false,
+      ruleCount: cidrRules.length,
+      defaultPolicy,
       reason: result.code === 0 ? null : result.stderr || result.stdout || `iptables exited with ${result.code}`
     };
   }
