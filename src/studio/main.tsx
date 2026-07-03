@@ -7,6 +7,7 @@ import {
   Activity,
   Box,
   Code2,
+  Copy,
   Cpu,
   Database,
   ExternalLink,
@@ -3140,6 +3141,7 @@ function LabReachabilityMatrix({ rows, selected, probe }: { rows: InventoryRow[]
   const reachable = cells.filter((cell) => cell.status.kind === "reachable").length;
   const blocked = cells.filter((cell) => cell.status.kind === "blocked").length;
   const planned = cells.filter((cell) => cell.status.kind === "planned").length;
+  const diagram = buildLabMermaidDiagram(nodes, liveEdges);
   return (
     <div className="labReachability">
       <div className="labReachabilityHeader">
@@ -3153,6 +3155,7 @@ function LabReachabilityMatrix({ rows, selected, probe }: { rows: InventoryRow[]
           <span><i className="legendDot muted" /> Planned</span>
         </div>
       </div>
+      <MermaidNetworkDiagram source={diagram} />
       <div className="reachabilityGrid" style={{ gridTemplateColumns }}>
         <div className="reachabilityCorner">Source / target</div>
         {nodes.map((node) => (
@@ -3187,6 +3190,84 @@ function LabReachabilityMatrix({ rows, selected, probe }: { rows: InventoryRow[]
           </React.Fragment>
         ))}
       </div>
+    </div>
+  );
+}
+
+function MermaidNetworkDiagram({ source }: { source: string }) {
+  const baseRenderId = React.useId().replaceAll(":", "");
+  const renderSequence = React.useRef(0);
+  const [svg, setSvg] = React.useState("");
+  const [error, setError] = React.useState("");
+  const [showSource, setShowSource] = React.useState(false);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const renderId = `kz-mermaid-${baseRenderId}-${renderSequence.current++}`;
+    import("mermaid")
+      .then((module) => {
+        const renderer = module.default;
+        renderer.initialize({
+          startOnLoad: false,
+          securityLevel: "strict",
+          theme: "base",
+          flowchart: {
+            curve: "basis",
+            htmlLabels: true,
+            padding: 12
+          },
+          themeVariables: {
+            background: "transparent",
+            mainBkg: "#111217",
+            primaryColor: "#111217",
+            primaryTextColor: "#f1f1f3",
+            primaryBorderColor: "#27282e",
+            lineColor: "#8c8d95",
+            secondaryColor: "#15161b",
+            tertiaryColor: "#0d0e12",
+            clusterBkg: "#0d0e12",
+            clusterBorder: "#27282e",
+            fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif"
+          }
+        });
+        return renderer.render(renderId, source);
+      })
+      .then((result) => {
+        if (cancelled) return;
+        setSvg(result.svg);
+        setError("");
+      })
+      .catch((nextError) => {
+        if (cancelled) return;
+        setSvg("");
+        setError(nextError instanceof Error ? nextError.message : String(nextError));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [baseRenderId, source]);
+
+  async function copySource() {
+    await navigator.clipboard?.writeText(source);
+  }
+
+  return (
+    <div className="mermaidPanel">
+      <div className="mermaidToolbar">
+        <strong>Topology diagram</strong>
+        <div>
+          <button className="compactButton" type="button" onClick={() => setShowSource((current) => !current)}>
+            <Code2 size={14} />
+            Mermaid
+          </button>
+          <button className="compactButton" type="button" onClick={() => void copySource()}>
+            <Copy size={14} />
+            Copy
+          </button>
+        </div>
+      </div>
+      {error ? <pre className="mermaidError">{error}</pre> : <div className="mermaidCanvas" dangerouslySetInnerHTML={{ __html: svg }} />}
+      {showSource ? <pre className="mermaidSource">{source}</pre> : null}
     </div>
   );
 }
@@ -3627,9 +3708,71 @@ function reachabilityStatus(source: LabReachabilityNode, target: LabReachability
   const allowedByTopology = source.topology?.allowedDestinations?.includes(target.ip);
   const allowedByPolicy = inboundAllowsSourceIp(target.inbound, source.ip);
   if (allowedByTopology || allowedByPolicy) {
-    return { kind: "planned", tone: "muted", label: "Planned", detail: `${source.role} -> ${target.role}`, path: target.ip };
+    return { kind: "reachable", tone: "ok", label: "Reachable", detail: allowedByTopology ? "topology allowed" : "policy allowed", path: target.ip };
   }
   return { kind: "blocked", tone: "warn", label: "Blocked", detail: `inbound ${target.inbound.defaultPolicy || "allow"}`, path: target.ip };
+}
+
+function buildLabMermaidDiagram(nodes: LabReachabilityNode[], liveEdges: Map<string, ProbeEdge>) {
+  const lines = [
+    "flowchart LR",
+    `  subgraph cluster["${mermaidText(nodes[0]?.clusterName || "cluster")}"]`,
+    "    direction LR"
+  ];
+  nodes.forEach((node, index) => {
+    lines.push(`    ${mermaidNodeId(index)}["${mermaidText(node.name)}<br/>${mermaidText(node.role)}<br/>${mermaidText(node.ip || "planned")}"]:::${nodeClass(node)}`);
+  });
+  lines.push("  end");
+
+  const linkStyles: string[] = [];
+  let linkIndex = 0;
+  nodes.forEach((source, sourceIndex) => {
+    nodes.forEach((target, targetIndex) => {
+      if (source.worldId === target.worldId) return;
+      const edge = liveEdges.get(`${source.worldId}->${target.worldId}`) || null;
+      const status = reachabilityStatus(source, target, edge);
+      const label = status.label;
+      if (status.kind === "blocked") {
+        lines.push(`  ${mermaidNodeId(sourceIndex)} -. ${mermaidText(label)} .-> ${mermaidNodeId(targetIndex)}`);
+        linkStyles.push(`  linkStyle ${linkIndex} stroke:#b7df22,stroke-width:2px,stroke-dasharray:6 4,color:#e6c56f`);
+      } else if (status.kind === "reachable") {
+        lines.push(`  ${mermaidNodeId(sourceIndex)} -->|${mermaidText(label)}| ${mermaidNodeId(targetIndex)}`);
+        linkStyles.push(`  linkStyle ${linkIndex} stroke:#31d06b,stroke-width:3px,color:#63d58c`);
+      } else {
+        lines.push(`  ${mermaidNodeId(sourceIndex)} -->|${mermaidText(label)}| ${mermaidNodeId(targetIndex)}`);
+        linkStyles.push(`  linkStyle ${linkIndex} stroke:#5e6570,stroke-width:2px,color:#8c8d95`);
+      }
+      linkIndex += 1;
+    });
+  });
+
+  lines.push(
+    "  classDef control fill:#102033,stroke:#1493ff,color:#f1f1f3,stroke-width:2px",
+    "  classDef worker fill:#112116,stroke:#31d06b,color:#f1f1f3,stroke-width:2px",
+    "  classDef node fill:#15161b,stroke:#8c8d95,color:#f1f1f3,stroke-width:1px",
+    ...linkStyles
+  );
+  return `${lines.join("\n")}\n`;
+}
+
+function mermaidNodeId(index: number) {
+  return `n${index}`;
+}
+
+function nodeClass(node: LabReachabilityNode) {
+  if (/control/i.test(node.role)) return "control";
+  if (/worker/i.test(node.role)) return "worker";
+  return "node";
+}
+
+function mermaidText(value: string) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("[", "(")
+    .replaceAll("]", ")");
 }
 
 function inboundAllowsSourceIp(inbound: InboundConfig, sourceIp: string) {
