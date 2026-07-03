@@ -93,6 +93,9 @@ test("cli creates Kubernetes lab batches", async () => {
     "1",
     "--node-ports",
     "30080,30081",
+    "--control-plane-ip",
+    "192.168.0.30",
+    "--worker-outbound-only",
     "--deny-out-cidr",
     "10.0.0.0/8",
     "--sysctl",
@@ -103,11 +106,14 @@ test("cli creates Kubernetes lab batches", async () => {
   assert.equal(created.lab.name, "cli-lab");
   assert.deepEqual(created.worlds.map((world) => world.name), ["cli-lab-cp-1", "cli-lab-worker-1"]);
   const worker = created.worlds.find((world) => world.name === "cli-lab-worker-1");
+  const controlPlane = created.worlds.find((world) => world.name === "cli-lab-cp-1");
+  assert.equal(controlPlane.backendConfig.network.sandboxIp, "192.168.0.30");
   assert.equal(worker.backendConfig.kubernetes.nodeRole, "worker");
-  assert.equal(worker.backendConfig.kubernetes.joinEndpoint, "https://cli-lab-cp-1:6443");
+  assert.equal(worker.backendConfig.kubernetes.joinEndpoint, "https://192.168.0.30:6443");
   assert.deepEqual(worker.backendConfig.kubernetes.nodePorts, [30080, 30081]);
   assert.equal(worker.backendConfig.kubernetes.sysctls["net.ipv4.conf.all.route_localnet"], "1");
   assert.deepEqual(worker.backendConfig.network.denyOut, ["10.0.0.0/8"]);
+  assert.equal(worker.backendConfig.network.inbound.defaultPolicy, "deny");
 });
 
 test("cli joins nodes and replicates a sandbox to a target node", async () => {

@@ -9,6 +9,11 @@ export function normalizeNetworkConfig(input = {}) {
   const dns = normalizeDnsConfig(source.dns || source.dnsConfig || {});
   const allowInternetAccess = source.allowInternetAccess;
   const sandboxIp = cleanString(source.sandboxIp || source.sandboxIP || source.sandbox_ip || source.ip || "");
+  const inbound = normalizeInboundConfig(source.inbound || source.inboundConfig || {
+    defaultPolicy: source.inboundPolicy || source.inboundDefaultPolicy,
+    allowFrom: source.allowIn || source.allowInbound || source.allowInboundFrom,
+    denyFrom: source.denyIn || source.denyInbound || source.denyInboundFrom
+  });
   const network = {
     type,
     mode: cleanString(source.mode || type),
@@ -19,12 +24,28 @@ export function normalizeNetworkConfig(input = {}) {
     dns,
     allowOut: normalizeStringList(source.allowOut),
     denyOut: normalizeStringList(source.denyOut),
+    inbound,
     rules: normalizeEgressRules(source.rules)
   };
   if (allowInternetAccess !== undefined && allowInternetAccess !== null && allowInternetAccess !== "") {
     network.allowInternetAccess = Boolean(allowInternetAccess);
   }
   return network;
+}
+
+export function normalizeInboundConfig(input = {}) {
+  if (input === true) input = { defaultPolicy: "allow" };
+  if (input === false) input = { defaultPolicy: "deny" };
+  if (typeof input === "string") input = { defaultPolicy: input };
+  const policy = cleanString(input?.defaultPolicy || input?.policy || "allow").toLowerCase();
+  if (!["allow", "deny"].includes(policy)) {
+    throw new Error("network.inbound.defaultPolicy must be allow or deny");
+  }
+  return {
+    defaultPolicy: policy,
+    allowFrom: normalizeStringList(input?.allowFrom || input?.allow || input?.allowCidrs || input?.allowCIDRs),
+    denyFrom: normalizeStringList(input?.denyFrom || input?.deny || input?.denyCidrs || input?.denyCIDRs)
+  };
 }
 
 export function normalizeVlanConfig(input = {}) {

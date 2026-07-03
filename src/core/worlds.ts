@@ -80,13 +80,22 @@ export async function createKubernetesLab(config, input = {}) {
   const profile = input.profile || input.kubernetes?.profile || "k3s";
   const apiServerPort = Number(input.apiServerPort || input.kubernetes?.apiServerPort || 6443);
   const nodePorts = input.nodePorts || input.kubernetes?.nodePorts || [30000, 30001];
-  const joinEndpoint = input.joinEndpoint || `https://${labName}-cp-1:${apiServerPort}`;
+  const firstControlPlaneIp = cleanOptionalString(input.controlPlaneIp || input.controlPlaneNetwork?.sandboxIp || input.controlPlane?.network?.sandboxIp || input.network?.controlPlane?.sandboxIp || input.network?.controlPlanes?.sandboxIp);
+  const joinEndpoint = input.joinEndpoint || `https://${firstControlPlaneIp || `${labName}-cp-1`}:${apiServerPort}`;
   const sharedNetwork = {
     type: "tap",
     mode: "tap",
     exposedPorts: [apiServerPort, ...nodePorts],
     ...(input.network || {})
   };
+  const controlPlaneNetwork = mergeNetworkConfig(
+    sharedNetwork,
+    input.controlPlaneNetwork || input.controlPlane?.network || input.network?.controlPlane || input.network?.controlPlanes
+  );
+  const workerNetwork = mergeNetworkConfig(
+    sharedNetwork,
+    input.workerNetwork || input.worker?.network || input.network?.worker || input.network?.workers
+  );
   const baseInput = {
     backend: input.backend || "cube-sandbox-overlay",
     hostMount: input.hostMount === true,
@@ -101,9 +110,13 @@ export async function createKubernetesLab(config, input = {}) {
   };
   const created = [];
   for (let index = 1; index <= controlPlanes; index += 1) {
+    const network = mergeNetworkConfig(controlPlaneNetwork, {
+      sandboxIp: index === 1 ? firstControlPlaneIp : null
+    });
     created.push(await createWorld(config, {
       ...baseInput,
       name: `${labName}-cp-${index}`,
+      network,
       kubernetes: kubernetesNodeConfig(input, {
         enabled: true,
         profile,
@@ -121,6 +134,7 @@ export async function createKubernetesLab(config, input = {}) {
     created.push(await createWorld(config, {
       ...baseInput,
       name: `${labName}-worker-${index}`,
+      network: workerNetwork,
       kubernetes: kubernetesNodeConfig(input, {
         enabled: true,
         profile,
@@ -144,6 +158,19 @@ export async function createKubernetesLab(config, input = {}) {
     },
     worlds: created
   };
+}
+
+function mergeNetworkConfig(base = {}, override = {}) {
+  const next = {
+    ...(base || {}),
+    ...(override || {})
+  };
+  if (base?.dns || override?.dns) next.dns = { ...(base?.dns || {}), ...(override?.dns || {}) };
+  if (base?.vlan || override?.vlan) next.vlan = { ...(base?.vlan || {}), ...(override?.vlan || {}) };
+  if (base?.nat || override?.nat) next.nat = { ...(base?.nat || {}), ...(override?.nat || {}) };
+  if (base?.inbound || override?.inbound) next.inbound = { ...(base?.inbound || {}), ...(override?.inbound || {}) };
+  if (next.sandboxIp == null || next.sandboxIp === "") delete next.sandboxIp;
+  return next;
 }
 
 export async function updateWorldConfig(config, ref, input = {}) {
@@ -290,6 +317,10 @@ function cleanLabName(value) {
   const name = String(value || "").trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
   if (!name) throw new Error("lab name is required");
   return name;
+}
+
+function cleanOptionalString(value) {
+  return String(value || "").trim();
 }
 
 function clampCount(value, name, options = {}) {

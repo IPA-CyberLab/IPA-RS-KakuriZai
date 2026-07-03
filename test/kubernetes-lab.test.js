@@ -31,6 +31,14 @@ test("creates a multi-node Kubernetes lab with shared cluster metadata", async (
     network: {
       allowInternetAccess: false,
       denyOut: ["10.0.0.0/8"]
+    },
+    controlPlaneNetwork: {
+      sandboxIp: "192.168.0.20"
+    },
+    workerNetwork: {
+      inbound: {
+        defaultPolicy: "deny"
+      }
     }
   });
 
@@ -47,12 +55,14 @@ test("creates a multi-node Kubernetes lab with shared cluster metadata", async (
   assert.equal(controlPlane.backendConfig.kubernetes.clusterName, "demo-lab");
   assert.equal(controlPlane.backendConfig.kubernetes.nodeRole, "control-plane");
   assert.equal(controlPlane.backendConfig.kubernetes.joinEndpoint, "");
+  assert.equal(controlPlane.backendConfig.network.sandboxIp, "192.168.0.20");
   assert.equal(controlPlane.backendConfig.network.allowInternetAccess, false);
   assert.deepEqual(controlPlane.backendConfig.network.exposedPorts, [6443, 30080]);
   assert.equal(worker.backendConfig.kubernetes.nodeRole, "worker");
-  assert.equal(worker.backendConfig.kubernetes.joinEndpoint, "https://demo-lab-cp-1:6443");
+  assert.equal(worker.backendConfig.kubernetes.joinEndpoint, "https://192.168.0.20:6443");
   assert.equal(worker.backendConfig.kubernetes.joinToken, "token-123");
   assert.equal(worker.backendConfig.kubernetes.sysctls["net.ipv4.conf.all.route_localnet"], "1");
+  assert.equal(worker.backendConfig.network.inbound.defaultPolicy, "deny");
   assert.equal(worker.labels["kakurizai.lab"], "demo-lab");
   assert.equal(worker.labels["kakurizai.kubernetes.nodeRole"], "worker");
 });

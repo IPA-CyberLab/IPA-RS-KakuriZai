@@ -399,6 +399,44 @@ test("cube client starts sandbox dev access services", async () => {
   assert.match(sshArgsText, /Port \$\{ssh_port\}/);
 });
 
+test("cube client builds host inbound firewall rules", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-ingress-firewall-"));
+  const iptables = path.join(tmp, "iptables");
+  const sudo = path.join(tmp, "sudo");
+  const scriptFile = path.join(tmp, "host-script.sh");
+  await fakeBinary(iptables);
+  await fs.writeFile(sudo, `#!/bin/sh\nprintf '%s' "$4" > "${scriptFile}"\nexit 0\n`, "utf8");
+  await fs.chmod(sudo, 0o755);
+
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${tmp}${path.delimiter}${originalPath || ""}`;
+  try {
+    const client = new CubeSandboxClient({ iptables });
+    const result = await client.syncHostIngressRules(
+      { id: "world-ingress" },
+      ["192.168.0.60"],
+      {
+        inbound: {
+          defaultPolicy: "deny",
+          allowFrom: ["192.168.0.10/32"],
+          denyFrom: ["10.0.0.0/8"]
+        }
+      }
+    );
+    const script = await fs.readFile(scriptFile, "utf8");
+
+    assert.equal(result.applied, true);
+    assert.equal(result.ruleCount, 4);
+    assert.match(script, /KAKURIZAI-INGRESS/);
+    assert.match(script, /-m conntrack --ctstate ESTABLISHED,RELATED/);
+    assert.match(script, new RegExp(`${escapeRegExp(iptables)}' -A KAKURIZAI-INGRESS -d '192\\.168\\.0\\.60/32' -s '192\\.168\\.0\\.10/32'.*-j RETURN`));
+    assert.match(script, new RegExp(`${escapeRegExp(iptables)}' -A KAKURIZAI-INGRESS -d '192\\.168\\.0\\.60/32' -s '10\\.0\\.0\\.0/8'.*-j DROP`));
+    assert.match(script, new RegExp(`${escapeRegExp(iptables)}' -A KAKURIZAI-INGRESS -d '192\\.168\\.0\\.60/32'.*-j DROP`));
+  } finally {
+    process.env.PATH = originalPath;
+  }
+});
+
 test("cube client builds host VLAN access bridge setup", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-vlan-bridge-"));
   const ip = path.join(tmp, "ip");

@@ -213,12 +213,19 @@ type NetworkConfig = {
   allowInternetAccess?: boolean;
   allowOut?: string[];
   denyOut?: string[];
+  inbound?: InboundConfig | null;
   rules?: EgressRule[];
   dns?: {
     servers?: string[];
     searches?: string[];
     options?: string[];
   };
+};
+
+type InboundConfig = {
+  defaultPolicy?: "allow" | "deny" | string;
+  allowFrom?: string[];
+  denyFrom?: string[];
 };
 
 type VlanConfig = {
@@ -526,6 +533,9 @@ function App() {
     allowInternetAccess: true,
     allowOut: "",
     denyOut: "10.0.0.0/8,100.64.0.0/10,172.16.0.0/12,192.168.0.0/18",
+    inboundDefaultPolicy: "allow",
+    inboundAllowFrom: "",
+    inboundDenyFrom: "",
     egressRules: [] as EgressRuleDraft[],
     vlanEnabled: false,
     vlanId: "",
@@ -759,6 +769,11 @@ function App() {
             allowInternetAccess: launch.allowInternetAccess,
             allowOut: parseCsv(launch.allowOut),
             denyOut: parseCsv(launch.denyOut),
+            inbound: {
+              defaultPolicy: launch.inboundDefaultPolicy,
+              allowFrom: parseCsv(launch.inboundAllowFrom),
+              denyFrom: parseCsv(launch.inboundDenyFrom)
+            },
             rules: egressRuleDraftsToRules(launch.egressRules),
             vlan: {
               enabled: launch.vlanEnabled,
@@ -1325,6 +1340,23 @@ function App() {
                   </div>
                 </div>
               ) : null}
+            </div>
+            <div className="networkOptionCard">
+              <label>Inbound policy</label>
+              <select value={launch.inboundDefaultPolicy} onChange={(event) => setLaunch({ ...launch, inboundDefaultPolicy: event.target.value })}>
+                <option value="allow">allow</option>
+                <option value="deny">deny</option>
+              </select>
+              <div className="networkOptionFields">
+                <div>
+                  <label>Allow from</label>
+                  <input value={launch.inboundAllowFrom} onChange={(event) => setLaunch({ ...launch, inboundAllowFrom: event.target.value })} placeholder="192.168.0.10/32" />
+                </div>
+                <div>
+                  <label>Deny from</label>
+                  <input value={launch.inboundDenyFrom} onChange={(event) => setLaunch({ ...launch, inboundDenyFrom: event.target.value })} placeholder="10.0.0.0/8" />
+                </div>
+              </div>
             </div>
             {!launch.vlanEnabled ? <div className="networkOptionCard">
               <label className="checkRow compactCheck">
@@ -2524,6 +2556,9 @@ function NetworkEditor({
     allowInternetAccess: configuredNetwork.allowInternetAccess ?? true,
     allowOut: formatList(configuredNetwork.allowOut),
     denyOut: formatList(configuredNetwork.denyOut),
+    inboundDefaultPolicy: configuredNetwork.inbound?.defaultPolicy || "allow",
+    inboundAllowFrom: formatList(configuredNetwork.inbound?.allowFrom),
+    inboundDenyFrom: formatList(configuredNetwork.inbound?.denyFrom),
     egressRules: rulesToEgressRuleDrafts(configuredNetwork.rules),
     vlanEnabled: Boolean(configuredNetwork.vlan?.enabled),
     vlanId: configuredNetwork.vlan?.vlanId ? String(configuredNetwork.vlan.vlanId) : "",
@@ -2560,6 +2595,9 @@ function NetworkEditor({
       allowInternetAccess: configuredNetwork.allowInternetAccess ?? true,
       allowOut: formatList(configuredNetwork.allowOut),
       denyOut: formatList(configuredNetwork.denyOut),
+      inboundDefaultPolicy: configuredNetwork.inbound?.defaultPolicy || "allow",
+      inboundAllowFrom: formatList(configuredNetwork.inbound?.allowFrom),
+      inboundDenyFrom: formatList(configuredNetwork.inbound?.denyFrom),
       egressRules: rulesToEgressRuleDrafts(configuredNetwork.rules),
       vlanEnabled: Boolean(configuredNetwork.vlan?.enabled),
       vlanId: configuredNetwork.vlan?.vlanId ? String(configuredNetwork.vlan.vlanId) : "",
@@ -2612,6 +2650,11 @@ function NetworkEditor({
               allowInternetAccess: form.allowInternetAccess,
               allowOut: parseCsv(form.allowOut),
               denyOut: parseCsv(form.denyOut),
+              inbound: {
+                defaultPolicy: form.inboundDefaultPolicy,
+                allowFrom: parseCsv(form.inboundAllowFrom),
+                denyFrom: parseCsv(form.inboundDenyFrom)
+              },
               rules: egressRuleDraftsToRules(form.egressRules),
               vlan: {
                 enabled: form.vlanEnabled,
@@ -2687,6 +2730,23 @@ function NetworkEditor({
               </div>
             </div>
           ) : null}
+        </div>
+        <div className="networkOptionCard">
+          <label>Inbound policy</label>
+          <select value={form.inboundDefaultPolicy} onChange={(event) => setForm({ ...form, inboundDefaultPolicy: event.target.value })}>
+            <option value="allow">allow</option>
+            <option value="deny">deny</option>
+          </select>
+          <div className="networkOptionFields">
+            <div>
+              <label>Allow from</label>
+              <input value={form.inboundAllowFrom} onChange={(event) => setForm({ ...form, inboundAllowFrom: event.target.value })} placeholder="192.168.0.10/32" />
+            </div>
+            <div>
+              <label>Deny from</label>
+              <input value={form.inboundDenyFrom} onChange={(event) => setForm({ ...form, inboundDenyFrom: event.target.value })} placeholder="10.0.0.0/8" />
+            </div>
+          </div>
         </div>
         {!form.vlanEnabled ? <div className="networkOptionCard">
           <label className="checkRow compactCheck">
@@ -3748,6 +3808,7 @@ function networkForRow(row: InventoryRow, fallbackType = "tap"): NetworkConfig {
   const annotations = row.runtime?.annotations || {};
   if (row.world) return effectiveNetworkForWorld(row.world, annotations["kakurizai.network.type"] || fallbackType);
   const natAnnotation = parseAnnotationJson<NatConfig>(annotations["kakurizai.network.nat"]);
+  const inboundAnnotation = parseAnnotationJson<InboundConfig>(annotations["kakurizai.network.inbound"]);
   const portForwards = parseAnnotationJson<PortForwardConfig[]>(annotations["kakurizai.network.portForwards"]) || natAnnotation?.portForwards || [];
   return {
     type: annotations["kakurizai.network.type"] || fallbackType,
@@ -3756,6 +3817,7 @@ function networkForRow(row: InventoryRow, fallbackType = "tap"): NetworkConfig {
     exposedPorts: parsePortAnnotation(annotations["com.exposed_ports"]),
     allowOut: [],
     denyOut: [],
+    inbound: inboundAnnotation || { defaultPolicy: "allow", allowFrom: [], denyFrom: [] },
     rules: [],
     vlan: parseAnnotationJson<VlanConfig>(annotations["kakurizai.network.vlan"]) || { enabled: false },
     nat: { ...(natAnnotation || { enabled: annotations["kakurizai.network.nat.enabled"] === "true" }), portForwards },
@@ -3816,6 +3878,7 @@ function effectiveNetworkForWorld(world?: World, fallbackType = "tap"): NetworkC
     allowInternetAccess: world?.backendConfig?.network?.allowInternetAccess,
     allowOut: world?.backendConfig?.network?.allowOut || [],
     denyOut: world?.backendConfig?.network?.denyOut || [],
+    inbound: world?.backendConfig?.network?.inbound || { defaultPolicy: "allow", allowFrom: [], denyFrom: [] },
     rules: world?.backendConfig?.network?.rules || [],
     vlan: world?.backendConfig?.network?.vlan || { enabled: false },
     nat: world?.backendConfig?.network?.nat || { enabled: false, portForwards: [] },
