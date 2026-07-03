@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getBackend } from "../backends/index.js";
+import { CubeSandboxClient } from "../cube/client.js";
 import { applyNetworkToCubeRequest, writableLayerAnnotations } from "../cube/request.js";
 import { normalizeHostMounts, primaryMount } from "./mounts.js";
 import { normalizeKubernetesConfig, normalizeNetworkConfig } from "./network.js";
@@ -158,16 +159,41 @@ export async function createKubernetesLab(config, input = {}) {
       labels: labLabels(input.labels, labName, "worker", index)
     }));
   }
+  const networkTopology = await syncKubernetesLabNetworkTopology(config, created);
   return {
     lab: {
       name: labName,
       clusterName: labName,
       controlPlanes,
       workers,
-      joinEndpoint
+      joinEndpoint,
+      networkTopology
     },
     worlds: created
   };
+}
+
+async function syncKubernetesLabNetworkTopology(config, worlds) {
+  const cubeWorlds = worlds.filter((world) => (
+    world.backend === "cube-sandbox-overlay" &&
+    world.sandbox?.status !== "failed" &&
+    (world.sandbox?.runtimeSandboxIp || world.sandbox?.sandboxIp || world.backendConfig?.network?.sandboxIp)
+  ));
+  if (!cubeWorlds.length) return { skipped: true, reason: "no running CubeSandbox lab nodes with sandbox IPs" };
+  const client = new CubeSandboxClient(config.cube || {});
+  const topology = await client.syncCubeSandboxHairpinTopology(cubeWorlds);
+  const store = new WorldStore(config);
+  await Promise.all(cubeWorlds.map(async (world) => {
+    world.sandbox = {
+      ...(world.sandbox || {}),
+      network: {
+        ...(world.sandbox?.network || {}),
+        topology: topology.byWorld?.[world.id] || topology
+      }
+    };
+    await store.save(world);
+  }));
+  return topology;
 }
 
 function mergeNetworkConfig(base = {}, override = {}) {

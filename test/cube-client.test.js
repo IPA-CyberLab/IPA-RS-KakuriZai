@@ -437,6 +437,60 @@ test("cube client builds host inbound firewall rules", async () => {
   }
 });
 
+test("cube client builds CubeSandbox hairpin topology rules", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-hairpin-"));
+  const ip = path.join(tmp, "ip");
+  const tc = path.join(tmp, "tc");
+  const bpftool = path.join(tmp, "bpftool");
+  const sudo = path.join(tmp, "sudo");
+  const scriptFile = path.join(tmp, "host-script.sh");
+  await fakeBinary(ip);
+  await fakeBinary(tc);
+  await fakeBinary(bpftool);
+  await fs.writeFile(sudo, `#!/bin/sh\nprintf '%s' "$4" > "${scriptFile}"\nexit 0\n`, "utf8");
+  await fs.chmod(sudo, 0o755);
+
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${tmp}${path.delimiter}${originalPath || ""}`;
+  try {
+    const client = new CubeSandboxClient({ ip, tc, bpftool });
+    const result = await client.syncCubeSandboxHairpinTopology([
+      {
+        id: "cp",
+        name: "cp",
+        backendConfig: {
+          network: {},
+          kubernetes: { nodeRole: "control-plane" }
+        },
+        sandbox: { sandboxIp: "192.168.0.73" }
+      },
+      {
+        id: "worker",
+        name: "worker",
+        backendConfig: {
+          network: { inbound: { defaultPolicy: "deny" } },
+          kubernetes: { nodeRole: "worker" }
+        },
+        sandbox: { sandboxIp: "192.168.0.168" }
+      }
+    ]);
+    const script = await fs.readFile(scriptFile, "utf8");
+
+    assert.equal(result.applied, true);
+    assert.equal(result.nodeCount, 2);
+    assert.equal(result.pairCount, 2);
+    assert.equal(result.ruleCount, 8);
+    assert.match(script, /for pref in \$\(seq 250 899\)/);
+    assert.match(script, new RegExp(`${escapeRegExp(tc)}' filter add dev 'z192\\.168\\.0\\.168' ingress pref 253 protocol ip flower dst_ip '192\\.168\\.0\\.73/32' ip_proto icmp type 8`));
+    assert.match(script, /action pedit ex munge eth src set '20:90:6f:cf:cf:cf' munge eth dst set '20:90:6f:fc:fc:fc'/);
+    assert.match(script, /munge ip src set '192\.168\.0\.168' munge ip dst set '169\.254\.68\.6'/);
+    assert.match(script, new RegExp(`${escapeRegExp(tc)}' filter add dev 'z192\\.168\\.0\\.73' ingress pref 256 protocol ip flower dst_ip '192\\.168\\.0\\.168/32' ip_proto tcp tcp_flags 0x02/0x12 action drop`));
+    assert.match(script, new RegExp(`${escapeRegExp(tc)}' filter add dev 'z192\\.168\\.0\\.73' ingress pref 257 protocol ip flower dst_ip '192\\.168\\.0\\.168/32' ip_proto tcp .*redirect dev 'z192\\.168\\.0\\.168'`));
+  } finally {
+    process.env.PATH = originalPath;
+  }
+});
+
 test("cube client builds host VLAN access bridge setup", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-vlan-bridge-"));
   const ip = path.join(tmp, "ip");
