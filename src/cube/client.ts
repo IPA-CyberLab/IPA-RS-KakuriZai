@@ -669,7 +669,7 @@ export class CubeSandboxClient {
       skipped: false,
       requestedIp,
       runtimeIp,
-      sandboxIp: requestedIp || runtimeIp,
+      sandboxIp: runtimeIp || requestedIp,
       sandboxIps,
       firewall,
       ingress,

@@ -108,10 +108,12 @@ test("cli creates Kubernetes lab batches", async () => {
   const worker = created.worlds.find((world) => world.name === "cli-lab-worker-1");
   const controlPlane = created.worlds.find((world) => world.name === "cli-lab-cp-1");
   assert.equal(controlPlane.backendConfig.network.sandboxIp, "192.168.0.30");
+  assert.equal(controlPlane.backendConfig.network.nat.enabled, true);
   assert.equal(worker.backendConfig.kubernetes.nodeRole, "worker");
   assert.equal(worker.backendConfig.kubernetes.joinEndpoint, "https://192.168.0.30:6443");
   assert.deepEqual(worker.backendConfig.kubernetes.nodePorts, [30080, 30081]);
   assert.equal(worker.backendConfig.kubernetes.sysctls["net.ipv4.conf.all.route_localnet"], "1");
+  assert.equal(worker.backendConfig.network.nat.enabled, true);
   assert.deepEqual(worker.backendConfig.network.denyOut, ["10.0.0.0/8"]);
   assert.equal(worker.backendConfig.network.inbound.defaultPolicy, "deny");
 });
