@@ -1575,6 +1575,129 @@ label {
   grid-template-columns: 160px 130px minmax(230px, 1fr) 90px 160px 180px 90px;
 }
 
+.labReachability {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--raised);
+  padding: 10px;
+}
+
+.labReachabilityHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.labReachabilityHeader > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.labReachabilityHeader strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.labReachabilityHeader span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reachabilityGrid {
+  min-width: 0;
+  overflow-x: auto;
+  display: grid;
+  gap: 1px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--line-soft);
+}
+
+.reachabilityCorner,
+.reachabilityTarget,
+.reachabilitySource,
+.reachabilityCell {
+  min-width: 0;
+  min-height: 72px;
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  background: var(--surface-2);
+  padding: 9px;
+}
+
+.reachabilityCorner,
+.reachabilityTarget,
+.reachabilitySource {
+  color: var(--ink-soft);
+}
+
+.reachabilityTarget strong,
+.reachabilitySource strong,
+.reachabilityCell strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-strong);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reachabilityTarget span,
+.reachabilitySource span,
+.reachabilityCell span,
+.reachabilityTarget small,
+.reachabilitySource small,
+.reachabilityCell small,
+.reachabilityCorner {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reachabilityCell {
+  border-left: 3px solid var(--switch-port-muted);
+}
+
+.reachabilityCell.ok {
+  border-left-color: var(--switch-port-ok);
+}
+
+.reachabilityCell.warn {
+  border-left-color: var(--switch-port-warn);
+}
+
+.reachabilityCell.muted {
+  border-left-color: var(--switch-port-muted);
+}
+
+.reachabilityCell.ok strong {
+  color: var(--success-text);
+}
+
+.reachabilityCell.warn strong {
+  color: var(--warning);
+}
+
+.reachabilityCell.muted strong {
+  color: var(--muted);
+}
+
 .switchPanel {
   display: grid;
   gap: 14px;

@@ -66,6 +66,10 @@ type World = {
     runtimeSandboxIp?: string | null;
     mountMode?: string;
     pausedAt?: string | null;
+    network?: {
+      topology?: SandboxNetworkTopology | null;
+      [key: string]: unknown;
+    } | null;
     bootstrap?: {
       pending?: boolean;
       applied?: boolean;
@@ -91,6 +95,13 @@ type World = {
     upperBytes: number;
     logsBytes: number;
   };
+};
+
+type SandboxNetworkTopology = {
+  sandboxIp?: string | null;
+  device?: string | null;
+  inboundDefaultPolicy?: string | null;
+  allowedDestinations?: string[];
 };
 
 type CubeTemplate = {
@@ -2100,6 +2111,7 @@ function NetworkWorkspace({
       </DetailSection>
 
       <DetailSection icon={<Layers size={16} />} title="Reachability">
+        <LabReachabilityMatrix rows={rows} selected={selected} probe={networkProbe} />
         <ConnectivityMatrix rows={rows} probe={networkProbe} />
       </DetailSection>
     </div>
@@ -3114,6 +3126,71 @@ function ConnectivityMatrix({ rows, probe }: { rows: InventoryRow[]; probe?: Net
   return <div className="sectionEmpty">Run Probe to show reachability results.</div>;
 }
 
+function LabReachabilityMatrix({ rows, selected, probe }: { rows: InventoryRow[]; selected: InventoryRow | null; probe?: NetworkProbePlan | null }) {
+  const nodes = labReachabilityNodes(rows, selected);
+  if (!nodes.length) return <div className="sectionEmpty">No Kubernetes lab topology metadata.</div>;
+  const clusterName = nodes[0]?.clusterName || "cluster";
+  const liveEdges = new Map((probe?.edges || []).map((edge) => [`${edge.fromWorldId}->${edge.toWorldId}`, edge]));
+  const gridTemplateColumns = `minmax(180px, 1.15fr) repeat(${nodes.length}, minmax(150px, 1fr))`;
+  const cells = nodes.flatMap((source) => nodes.map((target) => {
+    const edge = liveEdges.get(`${source.worldId}->${target.worldId}`) || null;
+    const status = reachabilityStatus(source, target, edge);
+    return { source, target, edge, status };
+  }));
+  const reachable = cells.filter((cell) => cell.status.kind === "reachable").length;
+  const blocked = cells.filter((cell) => cell.status.kind === "blocked").length;
+  const planned = cells.filter((cell) => cell.status.kind === "planned").length;
+  return (
+    <div className="labReachability">
+      <div className="labReachabilityHeader">
+        <div>
+          <strong>{clusterName}</strong>
+          <span>{nodes.length} nodes / {reachable} reachable / {blocked} blocked / {planned} planned</span>
+        </div>
+        <div className="switchLegend">
+          <span><i className="legendDot ok" /> Reachable</span>
+          <span><i className="legendDot warn" /> Blocked</span>
+          <span><i className="legendDot muted" /> Planned</span>
+        </div>
+      </div>
+      <div className="reachabilityGrid" style={{ gridTemplateColumns }}>
+        <div className="reachabilityCorner">Source / target</div>
+        {nodes.map((node) => (
+          <div className="reachabilityTarget" key={`target-${node.worldId}`}>
+            <strong>{node.name}</strong>
+            <span>{node.role}</span>
+            <small>{node.ip || "planned"}</small>
+          </div>
+        ))}
+        {nodes.map((source) => (
+          <React.Fragment key={`row-${source.worldId}`}>
+            <div className="reachabilitySource">
+              <strong>{source.name}</strong>
+              <span>{source.role}</span>
+              <small>{source.ip || "planned"}</small>
+            </div>
+            {nodes.map((target) => {
+              const edge = liveEdges.get(`${source.worldId}->${target.worldId}`) || null;
+              const status = reachabilityStatus(source, target, edge);
+              return (
+                <div
+                  className={`reachabilityCell ${status.tone}`}
+                  key={`${source.worldId}-${target.worldId}`}
+                  title={`${source.name} -> ${target.name}: ${status.detail}`}
+                >
+                  <strong>{status.label}</strong>
+                  <span>{status.detail}</span>
+                  <small>{edge ? formatProbeChecks(edge.checks) : status.path}</small>
+                </div>
+              );
+            })}
+          </React.Fragment>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Kpi({ icon, label, value, tone = "muted" }: { icon: React.ReactNode; label: string; value: string; tone?: "ok" | "warn" | "muted" }) {
   return (
     <div className={`kpi ${tone}`}>
@@ -3486,6 +3563,110 @@ function buildSwitchPorts(rows: InventoryRow[], selected: InventoryRow, fallback
       probe: row.key === selected.key ? "selected" : edge ? probeLabel(edge) : "not probed"
     };
   });
+}
+
+type LabReachabilityNode = {
+  row: InventoryRow;
+  worldId: string;
+  name: string;
+  role: string;
+  clusterName: string;
+  ip: string;
+  inbound: InboundConfig;
+  topology?: SandboxNetworkTopology | null;
+};
+
+function labReachabilityNodes(rows: InventoryRow[], selected: InventoryRow | null): LabReachabilityNode[] {
+  const selectedKubernetes = selected ? kubernetesForRow(selected) : null;
+  const selectedCluster = selectedKubernetes?.enabled ? selectedKubernetes.clusterName || "" : "";
+  const nodes = rows
+    .map((row) => {
+      if (!row.world?.id) return null;
+      const kubernetes = kubernetesForRow(row);
+      if (!kubernetes.enabled || !kubernetes.clusterName) return null;
+      if (selectedCluster && kubernetes.clusterName !== selectedCluster) return null;
+      const network = networkForRow(row);
+      const topology = row.world.sandbox?.network?.topology || null;
+      return {
+        row,
+        worldId: row.world.id,
+        name: kubernetes.nodeName || row.name,
+        role: kubernetes.nodeRole || "node",
+        clusterName: kubernetes.clusterName,
+        ip: row.world.sandbox?.runtimeSandboxIp || row.world.sandbox?.sandboxIp || row.runtime?.sandboxIp || network.sandboxIp || topology?.sandboxIp || "",
+        inbound: network.inbound || { defaultPolicy: "allow", allowFrom: [], denyFrom: [] },
+        topology
+      };
+    })
+    .filter(Boolean) as LabReachabilityNode[];
+  const cluster = selectedCluster || nodes[0]?.clusterName || "";
+  return nodes
+    .filter((node) => !cluster || node.clusterName === cluster)
+    .sort((a, b) => roleSort(a.role) - roleSort(b.role) || a.name.localeCompare(b.name));
+}
+
+function roleSort(role: string) {
+  if (/control/i.test(role)) return 0;
+  if (/worker/i.test(role)) return 1;
+  return 2;
+}
+
+function reachabilityStatus(source: LabReachabilityNode, target: LabReachabilityNode, edge?: ProbeEdge | null) {
+  if (edge?.reachable === true) {
+    return { kind: "reachable", tone: "ok", label: "Reachable", detail: "live probe passed", path: edge.hostPath || target.ip || "-" };
+  }
+  if (edge?.reachable === false) {
+    return { kind: "blocked", tone: "warn", label: "Blocked", detail: edge.reason || "live probe failed", path: edge.hostPath || target.ip || "-" };
+  }
+  if (!source.ip || !target.ip) {
+    return { kind: "planned", tone: "muted", label: "Planned", detail: "sandbox IP pending", path: "-" };
+  }
+  if (source.worldId === target.worldId) {
+    return { kind: "planned", tone: "muted", label: "Planned", detail: "same node", path: target.ip };
+  }
+  const allowedByTopology = source.topology?.allowedDestinations?.includes(target.ip);
+  const allowedByPolicy = inboundAllowsSourceIp(target.inbound, source.ip);
+  if (allowedByTopology || allowedByPolicy) {
+    return { kind: "planned", tone: "muted", label: "Planned", detail: `${source.role} -> ${target.role}`, path: target.ip };
+  }
+  return { kind: "blocked", tone: "warn", label: "Blocked", detail: `inbound ${target.inbound.defaultPolicy || "allow"}`, path: target.ip };
+}
+
+function inboundAllowsSourceIp(inbound: InboundConfig, sourceIp: string) {
+  const allowFrom = inbound.allowFrom || [];
+  const denyFrom = inbound.denyFrom || [];
+  if (denyFrom.some((cidr) => cidrContainsIp(cidr, sourceIp))) return false;
+  if (allowFrom.some((cidr) => cidrContainsIp(cidr, sourceIp))) return true;
+  return inbound.defaultPolicy !== "deny";
+}
+
+function cidrContainsIp(cidr: string, ip: string) {
+  const range = cidrToRange(cidr);
+  const value = ipv4ToInt(ip);
+  return Boolean(range && value !== null && value >= range.start && value <= range.end);
+}
+
+function cidrToRange(cidr: string) {
+  const [ip, prefixText = "32"] = String(cidr || "").trim().split("/");
+  const base = ipv4ToInt(ip);
+  const prefix = Number(prefixText);
+  if (base === null || !Number.isInteger(prefix) || prefix < 0 || prefix > 32) return null;
+  const size = 2 ** (32 - prefix);
+  const start = Math.floor(base / size) * size;
+  return { start, end: start + size - 1 };
+}
+
+function ipv4ToInt(ip: string) {
+  const parts = String(ip || "").trim().split(".");
+  if (parts.length !== 4) return null;
+  let value = 0;
+  for (const part of parts) {
+    if (!/^\d+$/.test(part)) return null;
+    const octet = Number(part);
+    if (!Number.isInteger(octet) || octet < 0 || octet > 255) return null;
+    value = value * 256 + octet;
+  }
+  return value;
 }
 
 function switchPortTone(row: InventoryRow, edge?: ProbeEdge | null, hasRuntime = false) {
