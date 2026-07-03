@@ -429,7 +429,7 @@ test("cube client builds host inbound firewall rules", async () => {
     assert.equal(result.ruleCount, 4);
     assert.match(script, /KAKURIZAI-INGRESS/);
     assert.match(script, /-m conntrack --ctstate ESTABLISHED,RELATED/);
-    assert.match(script, new RegExp(`${escapeRegExp(iptables)}' -A KAKURIZAI-INGRESS -d '192\\.168\\.0\\.60/32' -s '192\\.168\\.0\\.10/32'.*-j RETURN`));
+    assert.match(script, new RegExp(`${escapeRegExp(iptables)}' -A KAKURIZAI-INGRESS -d '192\\.168\\.0\\.60/32' -s '192\\.168\\.0\\.10/32'.*-j ACCEPT`));
     assert.match(script, new RegExp(`${escapeRegExp(iptables)}' -A KAKURIZAI-INGRESS -d '192\\.168\\.0\\.60/32' -s '10\\.0\\.0\\.0/8'.*-j DROP`));
     assert.match(script, new RegExp(`${escapeRegExp(iptables)}' -A KAKURIZAI-INGRESS -d '192\\.168\\.0\\.60/32'.*-j DROP`));
   } finally {
