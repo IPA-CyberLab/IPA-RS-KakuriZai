@@ -61,6 +61,12 @@ const PUBLIC_IPV4_CIDRS = [
   "208.0.0.0/4"
 ];
 
+const CUBE_MVM_INNER_IP = "169.254.68.6";
+const CUBE_MVM_MAC = "20:90:6f:fc:fc:fc";
+const CUBE_GATEWAY_MAC = "20:90:6f:cf:cf:cf";
+const HAIRPIN_PREF_START = 250;
+const HAIRPIN_PREF_END = 899;
+
 function datapathDropCidrsForNetwork(network = {}) {
   const dropCidrs = new Set(network.denyOut || []);
   if (network.allowInternetAccess === false || network.nat?.enabled === false) {
@@ -150,6 +156,122 @@ function intToIpv4(value) {
 function vlanInterfaceName(hostInterface, vlanId) {
   const candidate = `${hostInterface}.${vlanId}`;
   return candidate.length <= 15 ? candidate : `kzv${vlanId}`;
+}
+
+function hairpinNodeForWorld(world) {
+  const network = world.backendConfig?.network || {};
+  if (network.vlan?.enabled) return null;
+  const ip = [
+    world.sandbox?.runtimeSandboxIp,
+    world.sandbox?.sandboxIp,
+    network.sandboxIp
+  ].find((candidate) => ipv4ToInt(candidate) !== null);
+  if (!ip) return null;
+  const inbound = normalizeInboundForHairpin(network.inbound || {});
+  return {
+    id: world.id,
+    name: world.name,
+    role: world.backendConfig?.kubernetes?.nodeRole || world.labels?.["kakurizai.kubernetes.nodeRole"] || null,
+    ip,
+    dev: `z${ip}`,
+    inbound
+  };
+}
+
+function normalizeInboundForHairpin(inbound = {}) {
+  return {
+    defaultPolicy: inbound.defaultPolicy === "deny" ? "deny" : "allow",
+    allowFrom: Array.isArray(inbound.allowFrom) ? inbound.allowFrom.filter(Boolean) : [],
+    denyFrom: Array.isArray(inbound.denyFrom) ? inbound.denyFrom.filter(Boolean) : []
+  };
+}
+
+function inboundAllowsSource(inbound, sourceIp) {
+  if (inbound.denyFrom.some((cidr) => cidrContainsIp(cidr, sourceIp))) return false;
+  if (inbound.allowFrom.some((cidr) => cidrContainsIp(cidr, sourceIp))) return true;
+  return inbound.defaultPolicy !== "deny";
+}
+
+function cidrContainsIp(cidr, ip) {
+  const range = cidrToRange(cidr);
+  const value = ipv4ToInt(ip);
+  return Boolean(range && value !== null && value >= range.start && value <= range.end);
+}
+
+function buildHairpinRules(pairs, tc) {
+  const rules = [];
+  const add = (rule) => {
+    const key = `${rule.dev}\n${rule.command}`;
+    if (rules.some((existing) => `${existing.dev}\n${existing.command}` === key)) return;
+    rules.push(rule);
+  };
+  for (const { source, destination } of pairs) {
+    const reverseAllowed = pairs.some((pair) => pair.source.id === destination.id && pair.destination.id === source.id);
+    add(hairpinRedirectRule({
+      tc,
+      dev: source.dev,
+      matchDestination: destination.ip,
+      protocol: "icmp",
+      extraMatch: "type 8",
+      rewriteSource: source.ip,
+      targetDev: destination.dev,
+      checksum: "icmp"
+    }));
+    add(hairpinRedirectRule({
+      tc,
+      dev: source.dev,
+      matchDestination: destination.ip,
+      protocol: "tcp",
+      rewriteSource: source.ip,
+      targetDev: destination.dev,
+      checksum: "tcp"
+    }));
+    add(hairpinRedirectRule({
+      tc,
+      dev: destination.dev,
+      matchDestination: source.ip,
+      protocol: "icmp",
+      extraMatch: "type 0",
+      rewriteSource: destination.ip,
+      targetDev: source.dev,
+      checksum: "icmp"
+    }));
+    if (source.id !== destination.id) {
+      if (!reverseAllowed) {
+        add({
+          dev: destination.dev,
+          command: [
+            `${shellQuote(tc)} filter add dev ${shellQuote(destination.dev)} ingress pref __PREF__ protocol ip flower`,
+            `dst_ip ${shellQuote(`${source.ip}/32`)} ip_proto tcp tcp_flags 0x02/0x12 action drop`
+          ].join(" ")
+        });
+      }
+      add(hairpinRedirectRule({
+        tc,
+        dev: destination.dev,
+        matchDestination: source.ip,
+        protocol: "tcp",
+        rewriteSource: destination.ip,
+        targetDev: source.dev,
+        checksum: "tcp"
+      }));
+    }
+  }
+  return rules;
+}
+
+function hairpinRedirectRule({ tc, dev, matchDestination, protocol, extraMatch = "", rewriteSource, targetDev, checksum }) {
+  return {
+    dev,
+    command: [
+      `${shellQuote(tc)} filter add dev ${shellQuote(dev)} ingress pref __PREF__ protocol ip flower`,
+      `dst_ip ${shellQuote(`${matchDestination}/32`)} ip_proto ${protocol}`,
+      extraMatch,
+      `action pedit ex munge eth src set ${shellQuote(CUBE_GATEWAY_MAC)} munge eth dst set ${shellQuote(CUBE_MVM_MAC)}`,
+      `munge ip src set ${shellQuote(rewriteSource)} munge ip dst set ${shellQuote(CUBE_MVM_INNER_IP)}`,
+      `pipe action csum ip4h ${checksum} pipe action mirred egress redirect dev ${shellQuote(targetDev)}`
+    ].filter(Boolean).join(" ")
+  };
 }
 
 export class CubeSandboxClient {
@@ -829,6 +951,92 @@ export class CubeSandboxClient {
       sudo: result.sudo || false,
       ruleCount: cidrs.length * sandboxIps.length,
       reason: result.code === 0 ? null : result.stderr || result.stdout || `tc exited with ${result.code}`
+    };
+  }
+
+  async syncCubeSandboxHairpinTopology(worlds = [], options = {}) {
+    const ip = resolveSystemCommand(this.config.ip || "ip", ["/usr/sbin/ip", "/sbin/ip"]);
+    const tc = resolveSystemCommand(this.config.tc || "tc", ["/usr/sbin/tc", "/sbin/tc"]);
+    const bpftool = resolveSystemCommand(this.config.bpftool || "bpftool", ["/usr/sbin/bpftool", "/sbin/bpftool"]);
+    if (!ip || !tc || !bpftool) return { skipped: true, reason: "ip, tc, or bpftool not found" };
+
+    const nodes = worlds.map(hairpinNodeForWorld).filter(Boolean);
+    if (!nodes.length) return { skipped: true, reason: "no running CubeSandbox TAP nodes with sandbox IPs" };
+
+    const allowedPairs = [];
+    for (const source of nodes) {
+      for (const destination of nodes) {
+        if (inboundAllowsSource(destination.inbound, source.ip)) {
+          allowedPairs.push({ source, destination });
+        }
+      }
+    }
+
+    const rules = buildHairpinRules(allowedPairs, tc);
+    if (rules.length > HAIRPIN_PREF_END - HAIRPIN_PREF_START + 1) {
+      return {
+        skipped: true,
+        reason: `too many CubeSandbox hairpin tc rules: ${rules.length}`,
+        nodeCount: nodes.length,
+        pairCount: allowedPairs.length
+      };
+    }
+
+    const perDevRules = new Map(nodes.map((node) => [node.dev, []]));
+    rules.forEach((rule, index) => {
+      const pref = HAIRPIN_PREF_START + index;
+      perDevRules.get(rule.dev)?.push({
+        ...rule,
+        pref,
+        command: rule.command.replace("__PREF__", String(pref))
+      });
+    });
+
+    const blocks = [];
+    for (const node of nodes) {
+      const devRules = perDevRules.get(node.dev) || [];
+      blocks.push([
+        `if ${shellQuote(ip)} link show ${shellQuote(node.dev)} >/dev/null 2>&1; then`,
+        `  ${shellQuote(tc)} qdisc add dev ${shellQuote(node.dev)} clsact 2>/dev/null || true`,
+        `  from_cube_id=$(${shellQuote(tc)} filter show dev ${shellQuote(node.dev)} ingress 2>/dev/null | awk '/from_cube/ { for (i = 1; i <= NF; i++) if ($i == "id") { print $(i + 1); exit } }')`,
+        `  if [ -n "$from_cube_id" ]; then`,
+        `    pin=/sys/fs/bpf/kakurizai-from_cube-$from_cube_id`,
+        `    [ -e "$pin" ] || ${shellQuote(bpftool)} prog pin id "$from_cube_id" "$pin" 2>/dev/null || true`,
+        `    if ! ${shellQuote(tc)} filter show dev ${shellQuote(node.dev)} ingress 2>/dev/null | grep -q 'pref 1000 .*from_cube'; then`,
+        `      ${shellQuote(tc)} filter add dev ${shellQuote(node.dev)} ingress pref 1000 bpf object-pinned "$pin" direct-action 2>/dev/null || true`,
+        `    fi`,
+        `    ${shellQuote(tc)} filter del dev ${shellQuote(node.dev)} ingress pref 1 2>/dev/null || true`,
+        `  fi`,
+        `  for pref in $(seq ${HAIRPIN_PREF_START} ${HAIRPIN_PREF_END}); do ${shellQuote(tc)} filter del dev ${shellQuote(node.dev)} ingress pref "$pref" 2>/dev/null || true; done`,
+        ...devRules.map((rule) => `  ${rule.command}`),
+        `fi`
+      ].join("\n"));
+    }
+
+    const result = await runHostNetworkCommand(blocks.join("\n"));
+    const byWorld = Object.fromEntries(nodes.map((node) => [
+      node.id,
+      {
+        sandboxIp: node.ip,
+        device: node.dev,
+        inboundDefaultPolicy: node.inbound.defaultPolicy,
+        allowedDestinations: allowedPairs
+          .filter((pair) => pair.source.id === node.id)
+          .map((pair) => pair.destination.ip)
+      }
+    ]));
+    return {
+      skipped: false,
+      applied: result.code === 0,
+      code: result.code,
+      sudo: result.sudo || false,
+      nodeCount: nodes.length,
+      pairCount: allowedPairs.length,
+      ruleCount: rules.length,
+      prefStart: HAIRPIN_PREF_START,
+      prefEnd: HAIRPIN_PREF_END,
+      byWorld,
+      reason: result.code === 0 ? null : result.stderr || result.stdout || `tc hairpin setup exited with ${result.code}`
     };
   }
 
