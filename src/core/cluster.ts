@@ -181,14 +181,19 @@ export async function reconcileFailover(config, input = {}) {
       skipped.push({ source: source.name, reason: "already promoted" });
       continue;
     }
-    const unavailableByProbe = input.force === true ? true : await sourceProbeUnavailable(config, source, input);
+    const replicas = worlds.filter((world) => world.labels?.["kakurizai.replicaOf"] === source.id && world.status !== "removed");
+    if (!replicas.length && input.force !== true) {
+      skipped.push({ source: source.name, reason: "no failover replica" });
+      continue;
+    }
+    const activeProbe = input.activeProbe === true || config.cluster?.failover?.activeProbe === true;
+    const unavailableByProbe = input.force === true ? true : (activeProbe ? await sourceProbeUnavailable(config, source, input) : false);
     const unhealthy = input.force === true || sourceUnavailable(source, sourceNode, health) || unavailableByProbe;
     if (!unhealthy) {
       skipped.push({ source: source.name, reason: "source healthy" });
       continue;
     }
-    const candidates = worlds
-      .filter((world) => world.labels?.["kakurizai.replicaOf"] === source.id && world.status !== "removed")
+    const candidates = replicas
       .filter((world) => failoverReplicaReady(world, health))
       .sort(replicaPreference);
     const replica = candidates[0];
@@ -278,7 +283,7 @@ export async function replicateWorld(config, ref, input = {}) {
 }
 
 async function failoverHealth(config) {
-  const nodes = await new CubeSandboxClient(config.cube).inspect().then((cube) => cube.nodes || []).catch(() => []);
+  const nodes = await new CubeSandboxClient(config.cube).listNodes().catch(() => []);
   const nodeMap = new Map();
   for (const node of nodes) {
     const key = node.nodeId || node.id || node.ip;
