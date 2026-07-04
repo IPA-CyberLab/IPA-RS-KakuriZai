@@ -448,57 +448,6 @@ type EgressRuleDraft = {
   injects: EgressInjectDraft[];
 };
 
-type KubernetesLabDraft = {
-  name: string;
-  controlPlanes: string;
-  workers: string;
-  cpu: string;
-  memory: string;
-  writableLayerSize: string;
-  profile: string;
-  cni: string;
-  apiServerPort: string;
-  nodePorts: string;
-  controlPlaneIp: string;
-  allowInternetAccess: boolean;
-  workerOutboundOnly: boolean;
-};
-
-type KubernetesLabCreateInput = {
-  name: string;
-  controlPlanes: number;
-  workers: number;
-  cpu?: string;
-  memory?: string;
-  writableLayerSize?: string;
-  profile?: string;
-  cni?: string;
-  apiServerPort?: number;
-  nodePorts?: number[];
-  network: NetworkConfig;
-  controlPlaneNetwork?: NetworkConfig;
-  workerNetwork?: NetworkConfig;
-};
-
-type KubernetesLabCreateResult = {
-  lab: {
-    name: string;
-    clusterName: string;
-    controlPlanes: number;
-    workers: number;
-    joinEndpoint?: string;
-    networkTopology?: Record<string, unknown>;
-  };
-  worlds: World[];
-};
-
-type LabClusterSummary = {
-  name: string;
-  nodes: number;
-  controlPlanes: number;
-  workers: number;
-};
-
 type InventoryRow = {
   key: string;
   name: string;
@@ -546,24 +495,6 @@ const dnsPresets: Array<{ id: DnsPresetKey; label: string; servers: string[]; su
   { id: "quad9", label: "Quad9", servers: ["9.9.9.9", "149.112.112.112"], summary: "9.9.9.9, 149.112.112.112" },
   { id: "custom", label: "Custom", servers: [], summary: "Set DNS servers, searches, and options." }
 ];
-
-function defaultKubernetesLabDraft(): KubernetesLabDraft {
-  return {
-    name: "kz-k8s-cube-net",
-    controlPlanes: "1",
-    workers: "2",
-    cpu: "2000m",
-    memory: "2000Mi",
-    writableLayerSize: "4G",
-    profile: "k3s",
-    cni: "flannel",
-    apiServerPort: "6443",
-    nodePorts: "30000,30001",
-    controlPlaneIp: "",
-    allowInternetAccess: true,
-    workerOutboundOnly: true
-  };
-}
 
 function Root() {
   const shellWorldId = shellWorldIdFromLocation();
@@ -623,22 +554,7 @@ function App() {
     vlanHostInterface: "eth0",
     vlanBridgeName: "",
     natEnabled: true,
-    natPortForwards: [] as NatForwardDraft[],
-    kubernetesEnabled: false,
-    kubernetesProfile: "k3s",
-    kubernetesClusterName: "kakurizai",
-    kubernetesNodeRole: "control-plane",
-    kubernetesNodeName: "",
-    kubernetesCni: "flannel",
-    kubernetesPodCidr: "10.42.0.0/16",
-    kubernetesServiceCidr: "10.43.0.0/16",
-    kubernetesApiServerPort: "6443",
-    kubernetesNodePorts: "30000,30001",
-    kubernetesJoinEndpoint: "",
-    kubernetesJoinToken: "",
-    kubernetesAdvertiseAddress: "",
-    kubernetesExtraArgs: "",
-    kubernetesSysctls: defaultKubernetesSysctlsText()
+    natPortForwards: [] as NatForwardDraft[]
   });
   const [browser, setBrowser] = React.useState<BrowseResult | null>(null);
   const [browserMountIndex, setBrowserMountIndex] = React.useState(0);
@@ -867,23 +783,6 @@ function App() {
               masquerade: !launch.vlanEnabled && launch.natEnabled,
               portForwards: natForwardDraftsToForwards(launch.natPortForwards)
             }
-          },
-          kubernetes: {
-            enabled: launch.kubernetesEnabled,
-            profile: launch.kubernetesProfile,
-            clusterName: launch.kubernetesClusterName,
-            nodeRole: launch.kubernetesNodeRole,
-            nodeName: launch.kubernetesNodeName,
-            cni: launch.kubernetesCni,
-            podCidr: launch.kubernetesPodCidr,
-            serviceCidr: launch.kubernetesServiceCidr,
-            apiServerPort: Number(launch.kubernetesApiServerPort || 6443),
-            nodePorts: launch.kubernetesEnabled ? parsePortList(launch.kubernetesNodePorts) : [],
-            joinEndpoint: launch.kubernetesJoinEndpoint,
-            joinToken: launch.kubernetesJoinToken,
-            advertiseAddress: launch.kubernetesAdvertiseAddress,
-            extraArgs: parseLines(launch.kubernetesExtraArgs),
-            sysctls: parseKeyValueLines(launch.kubernetesSysctls)
           }
         }
       });
@@ -960,12 +859,12 @@ function App() {
     }
   }
 
-  async function saveNetworkSettings(world: World, network: NetworkConfig, kubernetes: KubernetesConfig) {
+  async function saveNetworkSettings(world: World, network: NetworkConfig) {
     setBusy(true);
     try {
       const result = await api<{ world: World; appliedToRunningSandbox: boolean; reason: string }>(
         `/api/worlds/${encodeURIComponent(world.id)}/config`,
-        { method: "PATCH", token, body: { network, networkType: network.type, kubernetes, recreate: true } }
+        { method: "PATCH", token, body: { network, networkType: network.type, recreate: true } }
       );
       setWorlds((current) => current.map((candidate) => candidate.id === result.world.id ? result.world : candidate));
       setStatus(result.appliedToRunningSandbox ? `Network applied by recreating ${result.world.name}` : `Network saved for next create/recreate: ${result.world.name}`);
@@ -993,28 +892,6 @@ function App() {
       setStatus(error instanceof Error ? error.message : String(error));
     } finally {
       setProbeBusy(false);
-    }
-  }
-
-  async function createKubernetesLabFromStudio(input: KubernetesLabCreateInput) {
-    setBusy(true);
-    try {
-      const result = await api<KubernetesLabCreateResult>("/api/labs/kubernetes", {
-        method: "POST",
-        token,
-        body: input
-      });
-      setStatus(`Created Kubernetes lab ${result.lab.name}: ${result.worlds.length} nodes`);
-      await refresh();
-      const firstWorld = result.worlds[0];
-      if (firstWorld?.id) setSelectedId(`world:${firstWorld.id}`);
-      return result;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setStatus(message);
-      throw error;
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -1655,7 +1532,6 @@ function App() {
               selectedTemplate={selectedTemplate}
               onProbe={runNetworkProbe}
               onSaveNetwork={saveNetworkSettings}
-              onCreateKubernetesLab={createKubernetesLabFromStudio}
               onSelectSandbox={setSelectedId}
             />
           ) : selected ? (
@@ -2141,7 +2017,6 @@ function NetworkWorkspace({
   selectedTemplate,
   onProbe,
   onSaveNetwork,
-  onCreateKubernetesLab,
   onSelectSandbox
 }: {
   selected: InventoryRow | null;
@@ -2152,30 +2027,9 @@ function NetworkWorkspace({
   busy: boolean;
   selectedTemplate?: CubeTemplate | null;
   onProbe: (live?: boolean) => Promise<void>;
-  onSaveNetwork: (world: World, network: NetworkConfig, kubernetes: KubernetesConfig) => Promise<void>;
-  onCreateKubernetesLab: (input: KubernetesLabCreateInput) => Promise<KubernetesLabCreateResult>;
+  onSaveNetwork: (world: World, network: NetworkConfig) => Promise<void>;
   onSelectSandbox: (key: string) => void;
 }) {
-  const labClusters = React.useMemo(() => labClusterSummaries(rows), [rows]);
-  const selectedClusterFromRow = selected ? clusterNameForRow(selected) : "";
-  const [selectedLabCluster, setSelectedLabCluster] = React.useState("");
-
-  React.useEffect(() => {
-    setSelectedLabCluster((current) => {
-      const names = labClusters.map((cluster) => cluster.name);
-      if (!names.length) return "";
-      if (selectedClusterFromRow && names.includes(selectedClusterFromRow) && selectedClusterFromRow !== current) return selectedClusterFromRow;
-      if (current && names.includes(current)) return current;
-      return names[0];
-    });
-  }, [labClusters, selectedClusterFromRow]);
-
-  function chooseLabCluster(clusterName: string) {
-    setSelectedLabCluster(clusterName);
-    const row = firstRowForCluster(rows, clusterName);
-    if (row) onSelectSandbox(row.key);
-  }
-
   return (
     <div className="networkWorkspace">
       <section className="networkWorkspaceTop">
@@ -2197,7 +2051,6 @@ function NetworkWorkspace({
             <span>{networkProbe ? `Updated ${formatDate(networkProbe.generatedAt)}` : "No live probe yet"}</span>
           </div>
         </header>
-        <KubernetesLabCreator busy={busy} existingClusters={labClusters.map((cluster) => cluster.name)} onCreate={onCreateKubernetesLab} />
         {selected ? (
           <SwitchNetworkPanel
             selected={selected}
@@ -2226,149 +2079,9 @@ function NetworkWorkspace({
       </DetailSection>
 
       <DetailSection icon={<Layers size={16} />} title="Reachability">
-        <LabClusterSelector clusters={labClusters} selected={selectedLabCluster} onChange={chooseLabCluster} />
-        <LabReachabilityMatrix rows={rows} clusterName={selectedLabCluster} probe={networkProbe} />
+        <NetworkTopologyDiagram rows={rows} probe={networkProbe} />
         <ConnectivityMatrix rows={rows} probe={networkProbe} />
       </DetailSection>
-    </div>
-  );
-}
-
-function KubernetesLabCreator({
-  busy,
-  existingClusters,
-  onCreate
-}: {
-  busy: boolean;
-  existingClusters: string[];
-  onCreate: (input: KubernetesLabCreateInput) => Promise<KubernetesLabCreateResult>;
-}) {
-  const [draft, setDraft] = React.useState<KubernetesLabDraft>(() => defaultKubernetesLabDraft());
-  const [message, setMessage] = React.useState("");
-  const existingCluster = existingClusters.includes(draft.name.trim());
-
-  function update(patch: Partial<KubernetesLabDraft>) {
-    setDraft((current) => ({ ...current, ...patch }));
-    setMessage("");
-  }
-
-  async function submit(event: React.FormEvent) {
-    event.preventDefault();
-    try {
-      if (existingCluster) throw new Error(`Cluster already exists: ${draft.name.trim()}`);
-      const result = await onCreate(kubernetesLabInputFromDraft(draft));
-      setMessage(`Created ${result.lab.name}`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  return (
-    <form className="labCreator" onSubmit={(event) => void submit(event)}>
-      <div className="labCreatorHeader">
-        <strong>Kubernetes Lab</strong>
-        <button className="primary" type="submit" disabled={busy || existingCluster || !draft.name.trim()}>
-          <Plus size={15} />
-          Create Lab
-        </button>
-      </div>
-      <div className="labCreatorGrid">
-        <label>
-          <span>Name</span>
-          <input value={draft.name} onChange={(event) => update({ name: event.target.value })} />
-        </label>
-        <label>
-          <span>Control planes</span>
-          <input min={1} type="number" value={draft.controlPlanes} onChange={(event) => update({ controlPlanes: event.target.value })} />
-        </label>
-        <label>
-          <span>Workers</span>
-          <input min={0} type="number" value={draft.workers} onChange={(event) => update({ workers: event.target.value })} />
-        </label>
-        <label>
-          <span>Control-plane IP</span>
-          <input value={draft.controlPlaneIp} onChange={(event) => update({ controlPlaneIp: event.target.value })} placeholder="auto" />
-        </label>
-        <label>
-          <span>CPU</span>
-          <input value={draft.cpu} onChange={(event) => update({ cpu: event.target.value })} />
-        </label>
-        <label>
-          <span>Memory</span>
-          <input value={draft.memory} onChange={(event) => update({ memory: event.target.value })} />
-        </label>
-        <label>
-          <span>Disk</span>
-          <input value={draft.writableLayerSize} onChange={(event) => update({ writableLayerSize: event.target.value })} />
-        </label>
-        <label>
-          <span>API port</span>
-          <input inputMode="numeric" value={draft.apiServerPort} onChange={(event) => update({ apiServerPort: event.target.value })} />
-        </label>
-        <label>
-          <span>Node ports</span>
-          <input value={draft.nodePorts} onChange={(event) => update({ nodePorts: event.target.value })} />
-        </label>
-        <label>
-          <span>Profile</span>
-          <select value={draft.profile} onChange={(event) => update({ profile: event.target.value })}>
-            <option value="k3s">k3s</option>
-          </select>
-        </label>
-        <label>
-          <span>CNI</span>
-          <select value={draft.cni} onChange={(event) => update({ cni: event.target.value })}>
-            <option value="flannel">flannel</option>
-            <option value="none">none</option>
-          </select>
-        </label>
-        <label className="checkRow compactCheck labCreatorCheck">
-          <input type="checkbox" checked={draft.workerOutboundOnly} onChange={(event) => update({ workerOutboundOnly: event.target.checked })} />
-          <span>
-            <strong>Worker outbound only</strong>
-            <small>deny inbound to workers</small>
-          </span>
-        </label>
-        <label className="checkRow compactCheck labCreatorCheck">
-          <input type="checkbox" checked={draft.allowInternetAccess} onChange={(event) => update({ allowInternetAccess: event.target.checked })} />
-          <span>
-            <strong>Outbound internet</strong>
-            <small>enable SNAT</small>
-          </span>
-        </label>
-      </div>
-      {message ? <div className={message.startsWith("Created ") ? "fieldOk" : "fieldError"}>{message}</div> : null}
-      {existingCluster ? <div className="fieldError">Cluster already exists: {draft.name.trim()}</div> : null}
-    </form>
-  );
-}
-
-function LabClusterSelector({
-  clusters,
-  selected,
-  onChange
-}: {
-  clusters: LabClusterSummary[];
-  selected: string;
-  onChange: (clusterName: string) => void;
-}) {
-  if (!clusters.length) return null;
-  const active = clusters.find((cluster) => cluster.name === selected) || clusters[0];
-  return (
-    <div className="labClusterBar">
-      <label>
-        <span>Cluster</span>
-        <select value={active.name} onChange={(event) => onChange(event.target.value)}>
-          {clusters.map((cluster) => (
-            <option key={cluster.name} value={cluster.name}>{cluster.name}</option>
-          ))}
-        </select>
-      </label>
-      <div className="labClusterStats">
-        <span>{active.nodes} nodes</span>
-        <span>{active.controlPlanes} control-plane</span>
-        <span>{active.workers} worker</span>
-      </div>
     </div>
   );
 }
@@ -2807,10 +2520,9 @@ function NetworkEditor({
   runtimeNetworkType: string;
   runtimeSandboxIp: string;
   busy: boolean;
-  onSave: (world: World, network: NetworkConfig, kubernetes: KubernetesConfig) => Promise<void>;
+  onSave: (world: World, network: NetworkConfig) => Promise<void>;
 }) {
   const configuredNetwork = effectiveNetworkForWorld(world, runtimeNetworkType);
-  const configuredKubernetes = world?.backendConfig?.kubernetes || { enabled: false, profile: "k3s", apiServerPort: 6443, nodePorts: [] };
   const [error, setError] = React.useState("");
   const [form, setForm] = React.useState({
     type: configuredNetwork.type || runtimeNetworkType || "tap",
@@ -2832,22 +2544,7 @@ function NetworkEditor({
     vlanHostInterface: configuredNetwork.vlan?.hostInterface || "eth0",
     vlanBridgeName: configuredNetwork.vlan?.bridgeName || "",
     natEnabled: configuredNetwork.nat?.enabled ?? false,
-    natPortForwards: forwardsToNatForwardDrafts(configuredNetwork.nat?.portForwards),
-    kubernetesEnabled: Boolean(configuredKubernetes.enabled),
-    kubernetesProfile: configuredKubernetes.profile || "k3s",
-    kubernetesClusterName: configuredKubernetes.clusterName || "kakurizai",
-    kubernetesNodeRole: configuredKubernetes.nodeRole || "control-plane",
-    kubernetesNodeName: configuredKubernetes.nodeName || "",
-    kubernetesCni: configuredKubernetes.cni || "flannel",
-    kubernetesPodCidr: configuredKubernetes.podCidr || "10.42.0.0/16",
-    kubernetesServiceCidr: configuredKubernetes.serviceCidr || "10.43.0.0/16",
-    kubernetesJoinEndpoint: configuredKubernetes.joinEndpoint || "",
-    kubernetesJoinToken: configuredKubernetes.joinToken || "",
-    kubernetesAdvertiseAddress: configuredKubernetes.advertiseAddress || "",
-    kubernetesExtraArgs: formatLines(configuredKubernetes.extraArgs),
-    kubernetesSysctls: formatKeyValueLines(configuredKubernetes.sysctls || defaultKubernetesSysctls()),
-    apiServerPort: String(configuredKubernetes.apiServerPort || 6443),
-    nodePorts: formatList(configuredKubernetes.nodePorts)
+    natPortForwards: forwardsToNatForwardDrafts(configuredNetwork.nat?.portForwards)
   });
 
   React.useEffect(() => {
@@ -2871,22 +2568,7 @@ function NetworkEditor({
       vlanHostInterface: configuredNetwork.vlan?.hostInterface || "eth0",
       vlanBridgeName: configuredNetwork.vlan?.bridgeName || "",
       natEnabled: configuredNetwork.nat?.enabled ?? false,
-      natPortForwards: forwardsToNatForwardDrafts(configuredNetwork.nat?.portForwards),
-      kubernetesEnabled: Boolean(configuredKubernetes.enabled),
-      kubernetesProfile: configuredKubernetes.profile || "k3s",
-      kubernetesClusterName: configuredKubernetes.clusterName || "kakurizai",
-      kubernetesNodeRole: configuredKubernetes.nodeRole || "control-plane",
-      kubernetesNodeName: configuredKubernetes.nodeName || "",
-      kubernetesCni: configuredKubernetes.cni || "flannel",
-      kubernetesPodCidr: configuredKubernetes.podCidr || "10.42.0.0/16",
-      kubernetesServiceCidr: configuredKubernetes.serviceCidr || "10.43.0.0/16",
-      kubernetesJoinEndpoint: configuredKubernetes.joinEndpoint || "",
-      kubernetesJoinToken: configuredKubernetes.joinToken || "",
-      kubernetesAdvertiseAddress: configuredKubernetes.advertiseAddress || "",
-      kubernetesExtraArgs: formatLines(configuredKubernetes.extraArgs),
-      kubernetesSysctls: formatKeyValueLines(configuredKubernetes.sysctls || defaultKubernetesSysctls()),
-      apiServerPort: String(configuredKubernetes.apiServerPort || 6443),
-      nodePorts: formatList(configuredKubernetes.nodePorts)
+      natPortForwards: forwardsToNatForwardDrafts(configuredNetwork.nat?.portForwards)
     });
     setError("");
   }, [world?.id, runtimeNetworkType]);
@@ -2934,23 +2616,6 @@ function NetworkEditor({
                 masquerade: !form.vlanEnabled && form.natEnabled,
                 portForwards: natForwardDraftsToForwards(form.natPortForwards)
               }
-            },
-            {
-              enabled: form.kubernetesEnabled,
-              profile: form.kubernetesProfile,
-              clusterName: form.kubernetesClusterName,
-              nodeRole: form.kubernetesNodeRole,
-              nodeName: form.kubernetesNodeName,
-              cni: form.kubernetesCni,
-              podCidr: form.kubernetesPodCidr,
-              serviceCidr: form.kubernetesServiceCidr,
-              joinEndpoint: form.kubernetesJoinEndpoint,
-              joinToken: form.kubernetesJoinToken,
-              advertiseAddress: form.kubernetesAdvertiseAddress,
-              extraArgs: parseLines(form.kubernetesExtraArgs),
-              apiServerPort: Number(form.apiServerPort || 6443),
-              nodePorts: parsePortList(form.nodePorts),
-              sysctls: parseKeyValueLines(form.kubernetesSysctls)
             }
           );
         } catch (nextError) {
@@ -3381,26 +3046,18 @@ function ConnectivityMatrix({ rows, probe }: { rows: InventoryRow[]; probe?: Net
   return <div className="sectionEmpty">Run Probe to show reachability results.</div>;
 }
 
-function LabReachabilityMatrix({ rows, clusterName, probe }: { rows: InventoryRow[]; clusterName: string; probe?: NetworkProbePlan | null }) {
-  const nodes = labReachabilityNodes(rows, clusterName);
-  if (!nodes.length) return <div className="sectionEmpty">No Kubernetes lab topology metadata.</div>;
-  const activeClusterName = nodes[0]?.clusterName || "cluster";
-  const liveEdges = new Map((probe?.edges || []).map((edge) => [`${edge.fromWorldId}->${edge.toWorldId}`, edge]));
-  const gridTemplateColumns = `minmax(180px, 1.15fr) repeat(${nodes.length}, minmax(150px, 1fr))`;
-  const cells = nodes.flatMap((source) => nodes.map((target) => {
-    const edge = liveEdges.get(`${source.worldId}->${target.worldId}`) || null;
-    const status = reachabilityStatus(source, target, edge);
-    return { source, target, edge, status };
-  }));
-  const reachable = cells.filter((cell) => cell.status.kind === "reachable").length;
-  const blocked = cells.filter((cell) => cell.status.kind === "blocked").length;
-  const planned = cells.filter((cell) => cell.status.kind === "planned").length;
-  const diagram = buildLabMermaidDiagram(nodes, liveEdges);
+function NetworkTopologyDiagram({ rows, probe }: { rows: InventoryRow[]; probe?: NetworkProbePlan | null }) {
+  const nodes = topologyNodes(rows);
+  if (!nodes.length) return <div className="sectionEmpty">No sandbox topology metadata.</div>;
+  const reachable = (probe?.edges || []).filter((edge) => edge.reachable === true).length;
+  const blocked = (probe?.edges || []).filter((edge) => edge.reachable === false).length;
+  const planned = probe?.edges?.length ? 0 : Math.max(0, nodes.length - 1);
+  const diagram = buildNetworkMermaidDiagram(nodes, probe?.edges || []);
   return (
-    <div className="labReachability">
-      <div className="labReachabilityHeader">
+    <div className="topologyPanel">
+      <div className="topologyPanelHeader">
         <div>
-          <strong>{activeClusterName}</strong>
+          <strong>Sandbox topology</strong>
           <span>{nodes.length} nodes / {reachable} reachable / {blocked} blocked / {planned} planned</span>
         </div>
         <div className="switchLegend">
@@ -3410,40 +3067,6 @@ function LabReachabilityMatrix({ rows, clusterName, probe }: { rows: InventoryRo
         </div>
       </div>
       <MermaidNetworkDiagram source={diagram} />
-      <div className="reachabilityGrid" style={{ gridTemplateColumns }}>
-        <div className="reachabilityCorner">Source / target</div>
-        {nodes.map((node) => (
-          <div className="reachabilityTarget" key={`target-${node.worldId}`}>
-            <strong>{node.name}</strong>
-            <span>{node.role}</span>
-            <small>{node.ip || "planned"}</small>
-          </div>
-        ))}
-        {nodes.map((source) => (
-          <React.Fragment key={`row-${source.worldId}`}>
-            <div className="reachabilitySource">
-              <strong>{source.name}</strong>
-              <span>{source.role}</span>
-              <small>{source.ip || "planned"}</small>
-            </div>
-            {nodes.map((target) => {
-              const edge = liveEdges.get(`${source.worldId}->${target.worldId}`) || null;
-              const status = reachabilityStatus(source, target, edge);
-              return (
-                <div
-                  className={`reachabilityCell ${status.tone}`}
-                  key={`${source.worldId}-${target.worldId}`}
-                  title={`${source.name} -> ${target.name}: ${status.detail}`}
-                >
-                  <strong>{status.label}</strong>
-                  <span>{status.detail}</span>
-                  <small>{edge ? formatProbeChecks(edge.checks) : status.path}</small>
-                </div>
-              );
-            })}
-          </React.Fragment>
-        ))}
-      </div>
     </div>
   );
 }
@@ -3691,37 +3314,6 @@ function filterInventory(rows: InventoryRow[], search: string, stateFilter: Stat
   });
 }
 
-function clusterNameForRow(row: InventoryRow | null) {
-  if (!row) return "";
-  const kubernetes = kubernetesForRow(row);
-  return kubernetes.enabled ? kubernetes.clusterName || "" : "";
-}
-
-function labClusterSummaries(rows: InventoryRow[]): LabClusterSummary[] {
-  const clusters = new Map<string, LabClusterSummary>();
-  for (const row of rows) {
-    const kubernetes = kubernetesForRow(row);
-    if (!kubernetes.enabled || !kubernetes.clusterName) continue;
-    const cluster = clusters.get(kubernetes.clusterName) || {
-      name: kubernetes.clusterName,
-      nodes: 0,
-      controlPlanes: 0,
-      workers: 0
-    };
-    cluster.nodes += 1;
-    if (/control/i.test(kubernetes.nodeRole || "")) cluster.controlPlanes += 1;
-    else if (/worker/i.test(kubernetes.nodeRole || "")) cluster.workers += 1;
-    clusters.set(cluster.name, cluster);
-  }
-  return [...clusters.values()].sort((a, b) => a.name.localeCompare(b.name));
-}
-
-function firstRowForCluster(rows: InventoryRow[], clusterName: string) {
-  return rows
-    .filter((row) => clusterNameForRow(row) === clusterName)
-    .sort((a, b) => roleSort(kubernetesForRow(a).nodeRole || "") - roleSort(kubernetesForRow(b).nodeRole || "") || a.name.localeCompare(b.name))[0] || null;
-}
-
 function findTemplateForSandbox(cube: CubeInspect | null, selected: InventoryRow | null) {
   if (!cube || !selected) return null;
   return cube.templates.find((template) => template.id === selected.templateId || template.id === selected.world?.sandbox?.baseId) || null;
@@ -3931,107 +3523,64 @@ function buildSwitchPorts(rows: InventoryRow[], selected: InventoryRow, fallback
   });
 }
 
-type LabReachabilityNode = {
+type TopologyNode = {
   row: InventoryRow;
-  worldId: string;
+  id: string;
   name: string;
-  role: string;
-  clusterName: string;
-  ip: string;
-  inbound: InboundConfig;
-  topology?: SandboxNetworkTopology | null;
+  address: string;
+  host: string;
+  state: string;
 };
 
-function labReachabilityNodes(rows: InventoryRow[], clusterName = ""): LabReachabilityNode[] {
-  const nodes = rows
-    .map((row) => {
-      if (!row.world?.id) return null;
-      const kubernetes = kubernetesForRow(row);
-      if (!kubernetes.enabled || !kubernetes.clusterName) return null;
-      if (clusterName && kubernetes.clusterName !== clusterName) return null;
-      const network = networkForRow(row);
-      const topology = row.world.sandbox?.network?.topology || null;
-      return {
-        row,
-        worldId: row.world.id,
-        name: kubernetes.nodeName || row.name,
-        role: kubernetes.nodeRole || "node",
-        clusterName: kubernetes.clusterName,
-        ip: row.world.sandbox?.runtimeSandboxIp || row.world.sandbox?.sandboxIp || row.runtime?.sandboxIp || network.sandboxIp || topology?.sandboxIp || "",
-        inbound: network.inbound || { defaultPolicy: "allow", allowFrom: [], denyFrom: [] },
-        topology
-      };
-    })
-    .filter(Boolean) as LabReachabilityNode[];
-  const cluster = clusterName || nodes[0]?.clusterName || "";
-  return nodes
-    .filter((node) => !cluster || node.clusterName === cluster)
-    .sort((a, b) => roleSort(a.role) - roleSort(b.role) || a.name.localeCompare(b.name));
+function topologyNodes(rows: InventoryRow[]): TopologyNode[] {
+  return rows.map((row) => {
+    const network = networkForRow(row);
+    return {
+      row,
+      id: row.world?.id || row.sandboxId || row.key,
+      name: row.name,
+      address: row.world?.sandbox?.runtimeSandboxIp || row.world?.sandbox?.sandboxIp || row.runtime?.sandboxIp || network.sandboxIp || shortId(row.sandboxId) || "planned",
+      host: row.host || "local",
+      state: row.status || "unknown"
+    };
+  });
 }
 
-function roleSort(role: string) {
-  if (/control/i.test(role)) return 0;
-  if (/worker/i.test(role)) return 1;
-  return 2;
-}
-
-function reachabilityStatus(source: LabReachabilityNode, target: LabReachabilityNode, edge?: ProbeEdge | null) {
-  if (edge?.reachable === true) {
-    return { kind: "reachable", tone: "ok", label: "Reachable", detail: "live probe passed", path: edge.hostPath || target.ip || "-" };
-  }
-  if (edge?.reachable === false) {
-    return { kind: "blocked", tone: "warn", label: "Blocked", detail: edge.reason || "live probe failed", path: edge.hostPath || target.ip || "-" };
-  }
-  if (!source.ip || !target.ip) {
-    return { kind: "planned", tone: "muted", label: "Planned", detail: "sandbox IP pending", path: "-" };
-  }
-  if (source.worldId === target.worldId) {
-    return { kind: "planned", tone: "muted", label: "Planned", detail: "same node", path: target.ip };
-  }
-  const allowedByTopology = source.topology?.allowedDestinations?.includes(target.ip);
-  const allowedByPolicy = inboundAllowsSourceIp(target.inbound, source.ip);
-  if (allowedByTopology || allowedByPolicy) {
-    return { kind: "reachable", tone: "ok", label: "Reachable", detail: allowedByTopology ? "topology allowed" : "policy allowed", path: target.ip };
-  }
-  return { kind: "blocked", tone: "warn", label: "Blocked", detail: `inbound ${target.inbound.defaultPolicy || "allow"}`, path: target.ip };
-}
-
-function buildLabMermaidDiagram(nodes: LabReachabilityNode[], liveEdges: Map<string, ProbeEdge>) {
+function buildNetworkMermaidDiagram(nodes: TopologyNode[], edges: ProbeEdge[]) {
   const lines = [
     "flowchart LR",
-    `  subgraph cluster["${mermaidText(nodes[0]?.clusterName || "cluster")}"]`,
+    `  subgraph cluster["Sandboxes"]`,
     "    direction LR"
   ];
   nodes.forEach((node, index) => {
-    lines.push(`    ${mermaidNodeId(index)}["${mermaidText(node.name)}<br/>${mermaidText(node.role)}<br/>${mermaidText(node.ip || "planned")}"]:::${nodeClass(node)}`);
+    lines.push(`    ${mermaidNodeId(index)}["${mermaidText(node.name)}<br/>${mermaidText(node.address)}<br/>${mermaidText(node.host)}"]:::${topologyNodeClass(node)}`);
   });
   lines.push("  end");
 
+  const idToIndex = new Map(nodes.map((node, index) => [node.id, index]));
   const linkStyles: string[] = [];
   let linkIndex = 0;
-  nodes.forEach((source, sourceIndex) => {
-    nodes.forEach((target, targetIndex) => {
-      if (source.worldId === target.worldId) return;
-      const edge = liveEdges.get(`${source.worldId}->${target.worldId}`) || null;
-      const status = reachabilityStatus(source, target, edge);
-      const label = status.label;
-      if (status.kind === "blocked") {
-        lines.push(`  ${mermaidNodeId(sourceIndex)} -. ${mermaidText(label)} .-> ${mermaidNodeId(targetIndex)}`);
-        linkStyles.push(`  linkStyle ${linkIndex} stroke:#b7df22,stroke-width:2px,stroke-dasharray:6 4,color:#e6c56f`);
-      } else if (status.kind === "reachable") {
-        lines.push(`  ${mermaidNodeId(sourceIndex)} -->|${mermaidText(label)}| ${mermaidNodeId(targetIndex)}`);
-        linkStyles.push(`  linkStyle ${linkIndex} stroke:#31d06b,stroke-width:3px,color:#63d58c`);
-      } else {
-        lines.push(`  ${mermaidNodeId(sourceIndex)} -->|${mermaidText(label)}| ${mermaidNodeId(targetIndex)}`);
-        linkStyles.push(`  linkStyle ${linkIndex} stroke:#5e6570,stroke-width:2px,color:#8c8d95`);
-      }
-      linkIndex += 1;
-    });
-  });
+  for (const edge of edges) {
+    const sourceIndex = idToIndex.get(edge.fromWorldId);
+    const targetIndex = idToIndex.get(edge.toWorldId);
+    if (sourceIndex == null || targetIndex == null || sourceIndex === targetIndex) continue;
+    const label = edge.reachable === true ? "Reachable" : edge.reachable === false ? "Blocked" : "Planned";
+    if (edge.reachable === false) {
+      lines.push(`  ${mermaidNodeId(sourceIndex)} -. ${mermaidText(label)} .-> ${mermaidNodeId(targetIndex)}`);
+      linkStyles.push(`  linkStyle ${linkIndex} stroke:#b7df22,stroke-width:2px,stroke-dasharray:6 4,color:#e6c56f`);
+    } else if (edge.reachable === true) {
+      lines.push(`  ${mermaidNodeId(sourceIndex)} -->|${mermaidText(label)}| ${mermaidNodeId(targetIndex)}`);
+      linkStyles.push(`  linkStyle ${linkIndex} stroke:#31d06b,stroke-width:3px,color:#63d58c`);
+    } else {
+      lines.push(`  ${mermaidNodeId(sourceIndex)} -->|${mermaidText(label)}| ${mermaidNodeId(targetIndex)}`);
+      linkStyles.push(`  linkStyle ${linkIndex} stroke:#5e6570,stroke-width:2px,color:#8c8d95`);
+    }
+    linkIndex += 1;
+  }
 
   lines.push(
-    "  classDef control fill:#102033,stroke:#1493ff,color:#f1f1f3,stroke-width:2px",
-    "  classDef worker fill:#112116,stroke:#31d06b,color:#f1f1f3,stroke-width:2px",
+    "  classDef running fill:#112116,stroke:#31d06b,color:#f1f1f3,stroke-width:2px",
+    "  classDef paused fill:#261f0a,stroke:#e6c56f,color:#f1f1f3,stroke-width:2px",
     "  classDef node fill:#15161b,stroke:#8c8d95,color:#f1f1f3,stroke-width:1px",
     ...linkStyles
   );
@@ -4042,9 +3591,9 @@ function mermaidNodeId(index: number) {
   return `n${index}`;
 }
 
-function nodeClass(node: LabReachabilityNode) {
-  if (/control/i.test(node.role)) return "control";
-  if (/worker/i.test(node.role)) return "worker";
+function topologyNodeClass(node: TopologyNode) {
+  if (/paused/i.test(node.state)) return "paused";
+  if (["running", "ready", "up", "active"].includes(String(node.state || "").toLowerCase())) return "running";
   return "node";
 }
 
@@ -4058,53 +3607,11 @@ function mermaidText(value: string) {
     .replaceAll("]", ")");
 }
 
-function inboundAllowsSourceIp(inbound: InboundConfig, sourceIp: string) {
-  const allowFrom = inbound.allowFrom || [];
-  const denyFrom = inbound.denyFrom || [];
-  if (denyFrom.some((cidr) => cidrContainsIp(cidr, sourceIp))) return false;
-  if (allowFrom.some((cidr) => cidrContainsIp(cidr, sourceIp))) return true;
-  return inbound.defaultPolicy !== "deny";
-}
-
-function cidrContainsIp(cidr: string, ip: string) {
-  const range = cidrToRange(cidr);
-  const value = ipv4ToInt(ip);
-  return Boolean(range && value !== null && value >= range.start && value <= range.end);
-}
-
-function cidrToRange(cidr: string) {
-  const [ip, prefixText = "32"] = String(cidr || "").trim().split("/");
-  const base = ipv4ToInt(ip);
-  const prefix = Number(prefixText);
-  if (base === null || !Number.isInteger(prefix) || prefix < 0 || prefix > 32) return null;
-  const size = 2 ** (32 - prefix);
-  const start = Math.floor(base / size) * size;
-  return { start, end: start + size - 1 };
-}
-
-function ipv4ToInt(ip: string) {
-  const parts = String(ip || "").trim().split(".");
-  if (parts.length !== 4) return null;
-  let value = 0;
-  for (const part of parts) {
-    if (!/^\d+$/.test(part)) return null;
-    const octet = Number(part);
-    if (!Number.isInteger(octet) || octet < 0 || octet > 255) return null;
-    value = value * 256 + octet;
-  }
-  return value;
-}
-
 function switchPortTone(row: InventoryRow, edge?: ProbeEdge | null, hasRuntime = false) {
   if (edge?.reachable === true) return "ok";
   if (edge?.reachable === false) return "warn";
   if (hasRuntime && /running|ready/i.test(row.status || "")) return "ok";
   return "muted";
-}
-
-function formatSysctls(value?: Record<string, string> | null) {
-  if (!value || !Object.keys(value).length) return "-";
-  return Object.entries(value).map(([key, sysctlValue]) => `${key}=${sysctlValue}`).join(",");
 }
 
 function probeLabel(edge: ProbeEdge) {
@@ -4140,12 +3647,6 @@ function formatList(value?: Array<string | number> | string | null) {
   return String(value);
 }
 
-function formatLines(value?: Array<string | number> | string | null) {
-  if (!value) return "";
-  if (Array.isArray(value)) return value.join("\n");
-  return String(value);
-}
-
 function dnsPresetForDraft(servers: string, searches: string, options: string): DnsPresetKey {
   const serverList = parseCsv(servers);
   if (parseCsv(searches).length || parseCsv(options).length) return "custom";
@@ -4168,23 +3669,6 @@ function customDnsSummary(servers: string, searches: string, options: string) {
 
 function sameStringList(left: string[], right: string[]) {
   return left.length === right.length && left.every((value, index) => value === right[index]);
-}
-
-function formatKeyValueLines(value?: Record<string, string> | null) {
-  if (!value) return "";
-  return Object.entries(value).map(([key, nextValue]) => `${key}=${nextValue}`).join("\n");
-}
-
-function defaultKubernetesSysctls() {
-  return {
-    "net.ipv4.ip_forward": "1",
-    "net.bridge.bridge-nf-call-iptables": "1",
-    "net.bridge.bridge-nf-call-ip6tables": "1"
-  };
-}
-
-function defaultKubernetesSysctlsText() {
-  return formatKeyValueLines(defaultKubernetesSysctls());
 }
 
 function maxSizeLabel(values: Array<string | null | undefined>) {
@@ -4229,28 +3713,6 @@ function parseCsv(value: string) {
     .filter(Boolean);
 }
 
-function parseLines(value: string) {
-  return String(value || "")
-    .split(/\r?\n/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function parseKeyValueLines(value: string) {
-  const result: Record<string, string> = {};
-  for (const rawLine of String(value || "").split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const separator = line.indexOf("=");
-    if (separator <= 0) throw new Error(`Invalid key=value line: ${line}`);
-    const key = line.slice(0, separator).trim();
-    const nextValue = line.slice(separator + 1).trim();
-    if (!key || !nextValue) throw new Error(`Invalid key=value line: ${line}`);
-    result[key] = nextValue;
-  }
-  return result;
-}
-
 function parsePortList(value: string) {
   return parseCsv(value).map((item) => {
     const port = Number(item);
@@ -4259,51 +3721,6 @@ function parsePortList(value: string) {
     }
     return port;
   });
-}
-
-function kubernetesLabInputFromDraft(draft: KubernetesLabDraft): KubernetesLabCreateInput {
-  const name = draft.name.trim();
-  if (!name) throw new Error("Enter a lab name.");
-  const apiServerPort = parsePortNumber(draft.apiServerPort, "API port");
-  const nodePorts = parsePortList(draft.nodePorts);
-  return {
-    name,
-    controlPlanes: parseIntegerInput(draft.controlPlanes, "control planes", 1),
-    workers: parseIntegerInput(draft.workers, "workers", 0),
-    cpu: draft.cpu.trim() || undefined,
-    memory: draft.memory.trim() || undefined,
-    writableLayerSize: draft.writableLayerSize.trim() || undefined,
-    profile: draft.profile.trim() || undefined,
-    cni: draft.cni.trim() || undefined,
-    apiServerPort,
-    nodePorts: nodePorts.length ? nodePorts : undefined,
-    network: {
-      type: "tap",
-      mode: "tap",
-      allowInternetAccess: draft.allowInternetAccess,
-      nat: { enabled: true, masquerade: true }
-    },
-    controlPlaneNetwork: draft.controlPlaneIp.trim() ? { sandboxIp: draft.controlPlaneIp.trim() } : undefined,
-    workerNetwork: {
-      inbound: {
-        defaultPolicy: draft.workerOutboundOnly ? "deny" : "allow",
-        allowFrom: [],
-        denyFrom: []
-      }
-    }
-  };
-}
-
-function parseIntegerInput(value: string, label: string, minimum: number) {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < minimum) throw new Error(`Invalid ${label}: ${value}`);
-  return parsed;
-}
-
-function parsePortNumber(value: string, label: string) {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) throw new Error(`Invalid ${label}: ${value}`);
-  return parsed;
 }
 
 function parsePortAnnotation(value?: string | null) {
@@ -4474,31 +3891,6 @@ function networkForRow(row: InventoryRow, fallbackType = "tap"): NetworkConfig {
     vlan: parseAnnotationJson<VlanConfig>(annotations["kakurizai.network.vlan"]) || { enabled: false },
     nat: { ...(natAnnotation || { enabled: annotations["kakurizai.network.nat.enabled"] === "true" }), portForwards },
     dns: { servers: [], searches: [], options: [] }
-  };
-}
-
-function kubernetesForRow(row: InventoryRow): KubernetesConfig {
-  if (row.world?.backendConfig?.kubernetes) return row.world.backendConfig.kubernetes;
-  const annotations = row.runtime?.annotations || {};
-  const hasKubernetes = annotations["kakurizai.kubernetes"] === "true" || Boolean(annotations["kakurizai.kubernetes.cluster"]);
-  if (!hasKubernetes) return { enabled: false };
-  const apiServerPort = Number(annotations["kakurizai.kubernetes.apiServerPort"] || 6443);
-  return {
-    enabled: annotations["kakurizai.kubernetes"] !== "false",
-    profile: annotations["kakurizai.kubernetes.profile"] || "k3s",
-    clusterName: annotations["kakurizai.kubernetes.cluster"] || "kakurizai",
-    nodeRole: annotations["kakurizai.kubernetes.nodeRole"] || "standalone",
-    nodeName: annotations["kakurizai.kubernetes.nodeName"] || row.name,
-    cni: annotations["kakurizai.kubernetes.cni"] || "flannel",
-    podCidr: annotations["kakurizai.kubernetes.podCidr"] || "10.42.0.0/16",
-    serviceCidr: annotations["kakurizai.kubernetes.serviceCidr"] || "10.43.0.0/16",
-    joinEndpoint: annotations["kakurizai.kubernetes.joinEndpoint"] || "",
-    joinToken: annotations["kakurizai.kubernetes.joinToken"] || "",
-    advertiseAddress: annotations["kakurizai.kubernetes.advertiseAddress"] || "",
-    extraArgs: parseLines(annotations["kakurizai.kubernetes.extraArgs"] || ""),
-    apiServerPort: Number.isInteger(apiServerPort) && apiServerPort > 0 ? apiServerPort : 6443,
-    nodePorts: parsePortAnnotation(annotations["kakurizai.kubernetes.nodePorts"]),
-    sysctls: parseAnnotationJson<Record<string, string>>(annotations["kakurizai.kubernetes.sysctls"]) || {}
   };
 }
 
