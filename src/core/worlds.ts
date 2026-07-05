@@ -271,7 +271,7 @@ async function setupHeteroNetworkNamespaces(config, worlds) {
 function heteroNatSetupScript() {
   return [
     "set -eu",
-    "if ! command -v iptables >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update >/dev/null; apt-get install -y --no-install-recommends iptables >/dev/null; fi",
+    heteroNamespaceToolBootstrapScript(),
     "ip netns del kzhn-node 2>/dev/null || true",
     "ip link del kzhn-h0 2>/dev/null || true",
     "ip netns add kzhn-node",
@@ -298,7 +298,7 @@ function heteroNatSetupScript() {
 function heteroDoubleNatSetupScript() {
   return [
     "set -eu",
-    "if ! command -v iptables >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update >/dev/null; apt-get install -y --no-install-recommends iptables >/dev/null; fi",
+    heteroNamespaceToolBootstrapScript(),
     "ip netns del kzhd-node 2>/dev/null || true",
     "ip netns del kzhd-cpe 2>/dev/null || true",
     "ip link del kzhd-h0 2>/dev/null || true",
@@ -332,6 +332,32 @@ function heteroDoubleNatSetupScript() {
     "KZ_HETERONETWORK_SHELL",
     "chmod +x /usr/local/bin/kz-hetero-shell",
     "printf 'kzhd-node 10.89.1.2/24 via kzhd-cpe 10.89.1.1 then host 10.89.0.1\\n' >/tmp/kz-hetero-double-nat.txt"
+  ].join("\n");
+}
+
+function heteroNamespaceToolBootstrapScript() {
+  return [
+    "need_pkg=0",
+    "command -v ip >/dev/null 2>&1 || need_pkg=1",
+    "command -v iptables >/dev/null 2>&1 || need_pkg=1",
+    "command -v ping >/dev/null 2>&1 || need_pkg=1",
+    "command -v sysctl >/dev/null 2>&1 || need_pkg=1",
+    "if [ \"$need_pkg\" -eq 1 ]; then",
+    "  if command -v apt-get >/dev/null 2>&1; then",
+    "    export DEBIAN_FRONTEND=noninteractive",
+    "    apt-get -o DPkg::Lock::Timeout=180 update >/dev/null",
+    "    apt-get -o DPkg::Lock::Timeout=180 install -y --no-install-recommends iproute2 iputils-ping iptables procps >/dev/null",
+    "  elif command -v apk >/dev/null 2>&1; then",
+    "    apk add --no-cache iproute2 iputils iptables procps >/dev/null",
+    "  else",
+    "    echo 'HeteroNetwork namespace setup requires iproute2, ping, iptables, and procps' >&2",
+    "    exit 127",
+    "  fi",
+    "fi",
+    "command -v ip >/dev/null 2>&1",
+    "command -v iptables >/dev/null 2>&1",
+    "command -v ping >/dev/null 2>&1",
+    "command -v sysctl >/dev/null 2>&1"
   ].join("\n");
 }
 
