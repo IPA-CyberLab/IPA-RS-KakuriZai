@@ -228,6 +228,15 @@ function buildHairpinRules(pairs, tc) {
     }));
     add(hairpinRedirectRule({
       tc,
+      dev: source.dev,
+      matchDestination: destination.ip,
+      protocol: "udp",
+      rewriteSource: source.ip,
+      targetDev: destination.dev,
+      checksum: "udp"
+    }));
+    add(hairpinRedirectRule({
+      tc,
       dev: destination.dev,
       matchDestination: source.ip,
       protocol: "icmp",
@@ -254,6 +263,15 @@ function buildHairpinRules(pairs, tc) {
         rewriteSource: destination.ip,
         targetDev: source.dev,
         checksum: "tcp"
+      }));
+      add(hairpinRedirectRule({
+        tc,
+        dev: destination.dev,
+        matchDestination: source.ip,
+        protocol: "udp",
+        rewriteSource: destination.ip,
+        targetDev: source.dev,
+        checksum: "udp"
       }));
     }
   }

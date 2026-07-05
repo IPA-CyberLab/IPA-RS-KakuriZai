@@ -479,13 +479,15 @@ test("cube client builds CubeSandbox hairpin topology rules", async () => {
     assert.equal(result.applied, true);
     assert.equal(result.nodeCount, 2);
     assert.equal(result.pairCount, 2);
-    assert.equal(result.ruleCount, 8);
+    assert.equal(result.ruleCount, 11);
     assert.match(script, /for pref in \$\(seq 250 899\)/);
-    assert.match(script, new RegExp(`${escapeRegExp(tc)}' filter add dev 'z192\\.168\\.0\\.168' ingress pref 253 protocol ip flower dst_ip '192\\.168\\.0\\.73/32' ip_proto icmp type 8`));
+    assert.match(script, new RegExp(`${escapeRegExp(tc)}' filter add dev 'z192\\.168\\.0\\.168' ingress pref 254 protocol ip flower dst_ip '192\\.168\\.0\\.73/32' ip_proto icmp type 8`));
+    assert.match(script, new RegExp(`${escapeRegExp(tc)}' filter add dev 'z192\\.168\\.0\\.168' ingress pref 256 protocol ip flower dst_ip '192\\.168\\.0\\.73/32' ip_proto udp .*redirect dev 'z192\\.168\\.0\\.73'`));
     assert.match(script, /action pedit ex munge eth src set '20:90:6f:cf:cf:cf' munge eth dst set '20:90:6f:fc:fc:fc'/);
     assert.match(script, /munge ip src set '192\.168\.0\.168' munge ip dst set '169\.254\.68\.6'/);
-    assert.match(script, new RegExp(`${escapeRegExp(tc)}' filter add dev 'z192\\.168\\.0\\.73' ingress pref 256 protocol ip flower dst_ip '192\\.168\\.0\\.168/32' ip_proto tcp tcp_flags 0x02/0x12 action drop`));
-    assert.match(script, new RegExp(`${escapeRegExp(tc)}' filter add dev 'z192\\.168\\.0\\.73' ingress pref 257 protocol ip flower dst_ip '192\\.168\\.0\\.168/32' ip_proto tcp .*redirect dev 'z192\\.168\\.0\\.168'`));
+    assert.match(script, new RegExp(`${escapeRegExp(tc)}' filter add dev 'z192\\.168\\.0\\.73' ingress pref 258 protocol ip flower dst_ip '192\\.168\\.0\\.168/32' ip_proto tcp tcp_flags 0x02/0x12 action drop`));
+    assert.match(script, new RegExp(`${escapeRegExp(tc)}' filter add dev 'z192\\.168\\.0\\.73' ingress pref 259 protocol ip flower dst_ip '192\\.168\\.0\\.168/32' ip_proto tcp .*redirect dev 'z192\\.168\\.0\\.168'`));
+    assert.match(script, new RegExp(`${escapeRegExp(tc)}' filter add dev 'z192\\.168\\.0\\.73' ingress pref 260 protocol ip flower dst_ip '192\\.168\\.0\\.168/32' ip_proto udp .*redirect dev 'z192\\.168\\.0\\.168'`));
   } finally {
     process.env.PATH = originalPath;
   }
