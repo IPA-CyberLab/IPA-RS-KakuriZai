@@ -200,6 +200,7 @@ export async function createHeteroNetworkLab(config, input = {}) {
   }
 
   const networkTopology = await syncLabNetworkTopology(config, created);
+  const namespaceSetup = await setupHeteroNetworkNamespaces(config, created);
   return {
     lab: {
       name: labName,
@@ -216,10 +217,122 @@ export async function createHeteroNetworkLab(config, input = {}) {
         relayHttp: 9580,
         agent: 9780
       },
-      networkTopology
+      networkTopology,
+      namespaceSetup
     },
     worlds: created
   };
+}
+
+async function setupHeteroNetworkNamespaces(config, worlds) {
+  const client = new CubeSandboxClient(config.cube || {});
+  const store = new WorldStore(config);
+  const results = await Promise.all(worlds.map(async (world) => {
+    const role = world.backendConfig?.network?.topology?.role || world.labels?.["kakurizai.heteroNetwork.role"];
+    if (role !== "nat" && role !== "double-nat") {
+      return { worldId: world.id, name: world.name, role, skipped: true, reason: "public node does not need an inner NAT namespace" };
+    }
+    if (world.backend !== "cube-sandbox-overlay" || !world.sandbox?.id) {
+      return { worldId: world.id, name: world.name, role, skipped: true, reason: "world is not a running CubeSandbox sandbox" };
+    }
+    const namespace = role === "double-nat" ? "kzhd-node" : "kzhn-node";
+    const script = role === "double-nat" ? heteroDoubleNatSetupScript() : heteroNatSetupScript();
+    const result = await client.exec(world, ["/bin/sh", "-lc", script], {
+      allowFailure: true,
+      timeoutMs: 180000
+    });
+    const setup = {
+      worldId: world.id,
+      name: world.name,
+      role,
+      namespace,
+      applied: result.code === 0,
+      skipped: false,
+      code: result.code,
+      reason: result.code === 0 ? null : result.stderr || result.stdout || `namespace setup exited with ${result.code}`
+    };
+    world.backendConfig.network.topology = {
+      ...(world.backendConfig.network.topology || {}),
+      runtimeNamespace: namespace
+    };
+    world.sandbox = {
+      ...(world.sandbox || {}),
+      network: {
+        ...(world.sandbox?.network || {}),
+        heteroNamespace: setup
+      }
+    };
+    await store.save(world);
+    return setup;
+  }));
+  return results;
+}
+
+function heteroNatSetupScript() {
+  return [
+    "set -eu",
+    "if ! command -v iptables >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update >/dev/null; apt-get install -y --no-install-recommends iptables >/dev/null; fi",
+    "ip netns del kzhn-node 2>/dev/null || true",
+    "ip link del kzhn-h0 2>/dev/null || true",
+    "ip netns add kzhn-node",
+    "ip link add kzhn-h0 type veth peer name kzhn-n0",
+    "ip link set kzhn-n0 netns kzhn-node",
+    "ip addr add 10.88.1.1/24 dev kzhn-h0",
+    "ip link set kzhn-h0 up",
+    "ip netns exec kzhn-node ip addr add 10.88.1.2/24 dev kzhn-n0",
+    "ip netns exec kzhn-node ip link set lo up",
+    "ip netns exec kzhn-node ip link set kzhn-n0 up",
+    "ip netns exec kzhn-node ip route add default via 10.88.1.1",
+    "sysctl -w net.ipv4.ip_forward=1 >/dev/null",
+    "iptables -t nat -C POSTROUTING -s 10.88.1.0/24 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 10.88.1.0/24 -j MASQUERADE",
+    "cat >/usr/local/bin/kz-hetero-shell <<'KZ_HETERONETWORK_SHELL'",
+    "#!/bin/sh",
+    "if [ \"$#\" -eq 0 ]; then set -- /bin/bash; fi",
+    "exec ip netns exec kzhn-node \"$@\"",
+    "KZ_HETERONETWORK_SHELL",
+    "chmod +x /usr/local/bin/kz-hetero-shell",
+    "printf 'kzhn-node 10.88.1.2/24 via 10.88.1.1\\n' >/tmp/kz-hetero-nat.txt"
+  ].join("\n");
+}
+
+function heteroDoubleNatSetupScript() {
+  return [
+    "set -eu",
+    "if ! command -v iptables >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update >/dev/null; apt-get install -y --no-install-recommends iptables >/dev/null; fi",
+    "ip netns del kzhd-node 2>/dev/null || true",
+    "ip netns del kzhd-cpe 2>/dev/null || true",
+    "ip link del kzhd-h0 2>/dev/null || true",
+    "ip netns add kzhd-cpe",
+    "ip netns add kzhd-node",
+    "ip link add kzhd-h0 type veth peer name kzhd-c0",
+    "ip link set kzhd-c0 netns kzhd-cpe",
+    "ip link add kzhd-c1 type veth peer name kzhd-n0",
+    "ip link set kzhd-c1 netns kzhd-cpe",
+    "ip link set kzhd-n0 netns kzhd-node",
+    "ip addr add 10.89.0.1/24 dev kzhd-h0",
+    "ip link set kzhd-h0 up",
+    "ip netns exec kzhd-cpe ip addr add 10.89.0.2/24 dev kzhd-c0",
+    "ip netns exec kzhd-cpe ip addr add 10.89.1.1/24 dev kzhd-c1",
+    "ip netns exec kzhd-cpe ip link set lo up",
+    "ip netns exec kzhd-cpe ip link set kzhd-c0 up",
+    "ip netns exec kzhd-cpe ip link set kzhd-c1 up",
+    "ip netns exec kzhd-cpe ip route add default via 10.89.0.1",
+    "ip netns exec kzhd-node ip addr add 10.89.1.2/24 dev kzhd-n0",
+    "ip netns exec kzhd-node ip link set lo up",
+    "ip netns exec kzhd-node ip link set kzhd-n0 up",
+    "ip netns exec kzhd-node ip route add default via 10.89.1.1",
+    "sysctl -w net.ipv4.ip_forward=1 >/dev/null",
+    "ip netns exec kzhd-cpe sysctl -w net.ipv4.ip_forward=1 >/dev/null",
+    "iptables -t nat -C POSTROUTING -s 10.89.0.0/16 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 10.89.0.0/16 -j MASQUERADE",
+    "ip netns exec kzhd-cpe iptables -t nat -C POSTROUTING -s 10.89.1.0/24 -j MASQUERADE 2>/dev/null || ip netns exec kzhd-cpe iptables -t nat -A POSTROUTING -s 10.89.1.0/24 -j MASQUERADE",
+    "cat >/usr/local/bin/kz-hetero-shell <<'KZ_HETERONETWORK_SHELL'",
+    "#!/bin/sh",
+    "if [ \"$#\" -eq 0 ]; then set -- /bin/bash; fi",
+    "exec ip netns exec kzhd-node \"$@\"",
+    "KZ_HETERONETWORK_SHELL",
+    "chmod +x /usr/local/bin/kz-hetero-shell",
+    "printf 'kzhd-node 10.89.1.2/24 via kzhd-cpe 10.89.1.1 then host 10.89.0.1\\n' >/tmp/kz-hetero-double-nat.txt"
+  ].join("\n");
 }
 
 export async function createKubernetesLab(config, input = {}) {
