@@ -27,6 +27,8 @@ export function buildNetworkProbePlan(worlds = [], runtimes = [], options = {}) 
       networkMode: network.mode,
       nat: network.nat,
       vlan: network.vlan,
+      topology: network.topology,
+      inbound: network.inbound,
       kubernetes: {
         enabled: Boolean(kubernetes.enabled),
         profile: kubernetes.profile || "k3s",
@@ -60,6 +62,7 @@ export function buildNetworkProbePlan(worlds = [], runtimes = [], options = {}) 
         toName: target.name,
         toSandboxIp: target.sandboxIp,
         hostPath: source.host && target.host && source.host === target.host ? "same-host" : source.host && target.host ? "cross-host" : "unknown-host",
+        expectedPath: expectedPathForEdge(source, target),
         checks: checksForTarget(target, options),
         reachable: null,
         reason: source.canProbe ? null : "source sandbox is not provisioned"
@@ -77,6 +80,18 @@ export function buildNetworkProbePlan(worlds = [], runtimes = [], options = {}) 
       ...forward
     })))
   };
+}
+
+function expectedPathForEdge(source, target) {
+  const sourceRole = source.topology?.role || "generic";
+  const targetRole = target.topology?.role || "generic";
+  const sourcePath = source.topology?.path || "unknown";
+  const targetPath = target.topology?.path || "unknown";
+  if (targetRole === "public" || targetRole === "relay" || target.topology?.publicEndpoint === true) return "DIRECT_PUBLIC";
+  if (sourcePath === "blocked" || targetPath === "blocked" || targetRole === "isolated") return "UNREACHABLE";
+  if (sourcePath === "relay" || targetPath === "relay" || sourceRole === "double-nat" || targetRole === "double-nat") return "RELAY";
+  if (sourcePath === "negotiated" || targetPath === "negotiated" || sourceRole === "nat" || targetRole === "nat") return "DIRECT_NAT_TRAVERSAL";
+  return "DIRECT_PUBLIC";
 }
 
 export function buildProbeScript(targets = [], options = {}) {

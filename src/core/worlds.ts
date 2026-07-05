@@ -9,6 +9,10 @@ import { normalizeKubernetesConfig, normalizeNetworkConfig } from "./network.js"
 import { WorldStore } from "./store.js";
 import { openTarget } from "./openers.js";
 
+const HETERONETWORK_TCP_PORTS = [8443, 9443, 9580, 9780];
+const HETERONETWORK_UDP_PORTS = [3478, 51820];
+const HETERONETWORK_EXPOSED_PORTS = [...HETERONETWORK_TCP_PORTS, ...HETERONETWORK_UDP_PORTS];
+
 export async function createWorld(config, input) {
   const store = new WorldStore(config);
   const backendName = input.backend || config.defaultBackend;
@@ -72,6 +76,150 @@ export async function createWorld(config, input) {
     await store.save(world);
     throw error;
   }
+}
+
+export async function createHeteroNetworkLab(config, input = {}) {
+  const labName = cleanLabName(input.name || input.labName || "hetero-network-lab");
+  const publicNodes = clampCount(input.publicNodes ?? input.publicNodeCount ?? 1, "publicNodes", { min: 1 });
+  const natNodes = clampCount(input.natNodes ?? input.natNodeCount ?? 1, "natNodes");
+  const doubleNatNodes = clampCount(input.doubleNatNodes ?? input.doubleNatNodeCount ?? 1, "doubleNatNodes");
+  const addressBase = cleanOptionalString(input.addressBase || input.sandboxIpBase || input.ipBase || "");
+  const addressStart = Number(input.addressStart || 20);
+  if (addressBase && (!Number.isInteger(addressStart) || addressStart < 2 || addressStart > 250)) {
+    throw new Error("addressStart must be an integer between 2 and 250");
+  }
+  const portOffset = Number(input.portOffset || 0);
+  if (!Number.isInteger(portOffset) || portOffset < 0 || portOffset > 13715) {
+    throw new Error("portOffset must be an integer between 0 and 13715");
+  }
+
+  const inputNetwork = input.network || {};
+  const sharedNetwork = {
+    type: "tap",
+    mode: "tap",
+    allowInternetAccess: true,
+    nat: { enabled: true, masquerade: true },
+    ...inputNetwork,
+    nat: inputNetwork.nat === false
+      ? { enabled: false }
+      : { enabled: true, masquerade: true, ...(inputNetwork.nat || {}) }
+  };
+  const baseInput = {
+    backend: input.backend || "cube-sandbox-overlay",
+    hostMount: input.hostMount === true,
+    mounts: input.hostMount === true ? input.mounts : undefined,
+    sourcePath: input.hostMount === true ? input.sourcePath : undefined,
+    mountMode: input.hostMount === true ? input.mountMode : "none",
+    cpu: input.cpu,
+    memory: input.memory,
+    writableLayerSize: input.writableLayerSize || input.disk,
+    networkType: "tap",
+    kubernetes: { enabled: false }
+  };
+
+  const created = [];
+  let addressIndex = 0;
+  const nextAddress = () => {
+    addressIndex += 1;
+    return labAddress(addressBase, addressStart + addressIndex - 1);
+  };
+
+  for (let index = 1; index <= publicNodes; index += 1) {
+    const hostOffset = portOffset + ((index - 1) * 100);
+    const network = mergeNetworkConfig(sharedNetwork, {
+      sandboxIp: nextAddress(),
+      exposedPorts: HETERONETWORK_EXPOSED_PORTS,
+      inbound: { defaultPolicy: "allow" },
+      nat: {
+        enabled: true,
+        masquerade: true,
+        portForwards: heteroPublicPortForwards(hostOffset)
+      },
+      topology: {
+        profile: "hetero-network",
+        role: "public",
+        natDepth: 0,
+        path: "direct",
+        publicEndpoint: true,
+        stun: true,
+        relay: true
+      }
+    });
+    created.push(await createWorld(config, {
+      ...baseInput,
+      name: `${labName}-public-${index}`,
+      network,
+      labels: heteroLabLabels(input.labels, labName, "public", index)
+    }));
+  }
+
+  for (let index = 1; index <= natNodes; index += 1) {
+    const network = mergeNetworkConfig(sharedNetwork, {
+      sandboxIp: nextAddress(),
+      exposedPorts: [9780],
+      inbound: { defaultPolicy: "deny" },
+      topology: {
+        profile: "hetero-network",
+        role: "nat",
+        natDepth: 1,
+        path: "negotiated",
+        publicEndpoint: false,
+        stun: true,
+        relay: false
+      }
+    });
+    created.push(await createWorld(config, {
+      ...baseInput,
+      name: `${labName}-nat-${index}`,
+      network,
+      labels: heteroLabLabels(input.labels, labName, "nat", index)
+    }));
+  }
+
+  for (let index = 1; index <= doubleNatNodes; index += 1) {
+    const network = mergeNetworkConfig(sharedNetwork, {
+      sandboxIp: nextAddress(),
+      exposedPorts: [9780],
+      inbound: { defaultPolicy: "deny" },
+      topology: {
+        profile: "hetero-network",
+        role: "double-nat",
+        natDepth: 2,
+        path: "relay",
+        publicEndpoint: false,
+        stun: true,
+        relay: true
+      }
+    });
+    created.push(await createWorld(config, {
+      ...baseInput,
+      name: `${labName}-double-nat-${index}`,
+      network,
+      labels: heteroLabLabels(input.labels, labName, "double-nat", index)
+    }));
+  }
+
+  const networkTopology = await syncLabNetworkTopology(config, created);
+  return {
+    lab: {
+      name: labName,
+      profile: "hetero-network",
+      publicNodes,
+      natNodes,
+      doubleNatNodes,
+      expectedPathStates: ["DIRECT_PUBLIC", "DIRECT_NAT_TRAVERSAL", "RELAY"],
+      servicePorts: {
+        controlPlane: 8443,
+        signal: 9443,
+        stunUdp: 3478,
+        relayUdp: 51820,
+        relayHttp: 9580,
+        agent: 9780
+      },
+      networkTopology
+    },
+    worlds: created
+  };
 }
 
 export async function createKubernetesLab(config, input = {}) {
@@ -159,7 +307,7 @@ export async function createKubernetesLab(config, input = {}) {
       labels: labLabels(input.labels, labName, "worker", index)
     }));
   }
-  const networkTopology = await syncKubernetesLabNetworkTopology(config, created);
+  const networkTopology = await syncLabNetworkTopology(config, created);
   return {
     lab: {
       name: labName,
@@ -173,7 +321,7 @@ export async function createKubernetesLab(config, input = {}) {
   };
 }
 
-async function syncKubernetesLabNetworkTopology(config, worlds) {
+async function syncLabNetworkTopology(config, worlds) {
   const cubeWorlds = worlds.filter((world) => (
     world.backend === "cube-sandbox-overlay" &&
     world.sandbox?.status !== "failed" &&
@@ -347,6 +495,52 @@ function labLabels(labels = {}, labName, role, index) {
     "kakurizai.kubernetes.nodeRole": role,
     "kakurizai.kubernetes.nodeIndex": String(index)
   };
+}
+
+function heteroLabLabels(labels = {}, labName, role, index) {
+  return {
+    ...(labels || {}),
+    "kakurizai.lab": labName,
+    "kakurizai.experiment": "hetero-network",
+    "kakurizai.heteroNetwork.role": role,
+    "kakurizai.heteroNetwork.nodeIndex": String(index)
+  };
+}
+
+function heteroPublicPortForwards(offset = 0) {
+  return [
+    ...HETERONETWORK_TCP_PORTS.map((port) => ({
+      name: heteroPortName(port),
+      protocol: "tcp",
+      listenAddress: "0.0.0.0",
+      hostPort: port + offset,
+      sandboxPort: port
+    })),
+    ...HETERONETWORK_UDP_PORTS.map((port) => ({
+      name: heteroPortName(port),
+      protocol: "udp",
+      listenAddress: "0.0.0.0",
+      hostPort: port + offset,
+      sandboxPort: port
+    }))
+  ];
+}
+
+function heteroPortName(port) {
+  return ({
+    8443: "control-plane",
+    9443: "signal",
+    9580: "relay-http",
+    9780: "agent",
+    3478: "stun",
+    51820: "relay-udp"
+  })[port] || `port-${port}`;
+}
+
+function labAddress(addressBase, hostIndex) {
+  if (!addressBase) return null;
+  const prefix = addressBase.replace(/\.$/, "");
+  return `${prefix}.${hostIndex}`;
 }
 
 function cleanLabName(value) {

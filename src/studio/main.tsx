@@ -221,6 +221,7 @@ type NetworkConfig = {
   sandboxIp?: string | null;
   vlan?: VlanConfig | null;
   nat?: NatConfig | null;
+  topology?: NetworkTopologyConfig | null;
   exposedPorts?: number[];
   allowInternetAccess?: boolean;
   allowOut?: string[];
@@ -232,6 +233,16 @@ type NetworkConfig = {
     searches?: string[];
     options?: string[];
   };
+};
+
+type NetworkTopologyConfig = {
+  profile?: string | null;
+  role?: string;
+  natDepth?: number;
+  path?: string;
+  publicEndpoint?: boolean;
+  stun?: boolean;
+  relay?: boolean;
 };
 
 type InboundConfig = {
@@ -380,6 +391,8 @@ type ProbeNode = {
   sandboxIp?: string | null;
   host?: string | null;
   canProbe?: boolean;
+  topology?: NetworkTopologyConfig | null;
+  inbound?: InboundConfig | null;
   kubernetes?: {
     enabled?: boolean;
     profile?: string;
@@ -401,9 +414,22 @@ type ProbeEdge = {
   toName: string;
   toSandboxIp?: string | null;
   hostPath?: string;
+  expectedPath?: string;
   reachable?: boolean | null;
   reason?: string | null;
   checks?: Array<{ kind: string; port?: number | null; status: string; ok?: boolean; detail?: string }>;
+};
+
+type HeteroNetworkLabResult = {
+  lab: {
+    name: string;
+    profile: string;
+    publicNodes: number;
+    natNodes: number;
+    doubleNatNodes: number;
+    servicePorts?: Record<string, number>;
+  };
+  worlds: World[];
 };
 
 type HostMountConfig = {
@@ -892,6 +918,27 @@ function App() {
       setStatus(error instanceof Error ? error.message : String(error));
     } finally {
       setProbeBusy(false);
+    }
+  }
+
+  async function createHeteroNetworkLab(options: Record<string, unknown>) {
+    setBusy(true);
+    try {
+      const result = await api<HeteroNetworkLabResult>("/api/labs/hetero-network", {
+        method: "POST",
+        token,
+        body: options
+      });
+      setActiveView("network");
+      setSelectedId(result.worlds[0] ? `world:${result.worlds[0].id}` : selectedId);
+      setStatus(`Created ${result.lab.name}: ${result.worlds.length} nodes`);
+      await refresh();
+      return result;
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+      throw error;
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -1531,6 +1578,7 @@ function App() {
               busy={busy}
               selectedTemplate={selectedTemplate}
               onProbe={runNetworkProbe}
+              onCreateHeteroNetworkLab={createHeteroNetworkLab}
               onSaveNetwork={saveNetworkSettings}
               onSelectSandbox={setSelectedId}
             />
@@ -2016,6 +2064,7 @@ function NetworkWorkspace({
   busy,
   selectedTemplate,
   onProbe,
+  onCreateHeteroNetworkLab,
   onSaveNetwork,
   onSelectSandbox
 }: {
@@ -2027,6 +2076,7 @@ function NetworkWorkspace({
   busy: boolean;
   selectedTemplate?: CubeTemplate | null;
   onProbe: (live?: boolean) => Promise<void>;
+  onCreateHeteroNetworkLab: (options: Record<string, unknown>) => Promise<HeteroNetworkLabResult>;
   onSaveNetwork: (world: World, network: NetworkConfig) => Promise<void>;
   onSelectSandbox: (key: string) => void;
 }) {
@@ -2064,6 +2114,10 @@ function NetworkWorkspace({
         )}
       </section>
 
+      <DetailSection icon={<Globe2 size={16} />} title="Experiments">
+        <HeteroNetworkLabPanel busy={busy} onCreate={onCreateHeteroNetworkLab} />
+      </DetailSection>
+
       <DetailSection icon={<Network size={16} />} title="Settings">
         {selected ? (
           <NetworkEditor
@@ -2083,6 +2137,108 @@ function NetworkWorkspace({
         <ConnectivityMatrix rows={rows} probe={networkProbe} />
       </DetailSection>
     </div>
+  );
+}
+
+function HeteroNetworkLabPanel({
+  busy,
+  onCreate
+}: {
+  busy: boolean;
+  onCreate: (options: Record<string, unknown>) => Promise<HeteroNetworkLabResult>;
+}) {
+  const [form, setForm] = React.useState({
+    name: "hetero-network-lab",
+    publicNodes: "1",
+    natNodes: "1",
+    doubleNatNodes: "1",
+    cpu: "2000m",
+    memory: "2000Mi",
+    writableLayerSize: "1G",
+    addressBase: "",
+    addressStart: "20",
+    portOffset: "0"
+  });
+  const [message, setMessage] = React.useState("");
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setMessage("");
+    try {
+      const result = await onCreate({
+        name: form.name,
+        publicNodes: Number(form.publicNodes || 1),
+        natNodes: Number(form.natNodes || 1),
+        doubleNatNodes: Number(form.doubleNatNodes || 1),
+        cpu: form.cpu,
+        memory: form.memory,
+        writableLayerSize: form.writableLayerSize,
+        addressBase: form.addressBase || undefined,
+        addressStart: Number(form.addressStart || 20),
+        portOffset: Number(form.portOffset || 0)
+      });
+      setMessage(`${result.worlds.length} nodes`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  return (
+    <form className="labProfileForm" onSubmit={submit}>
+      <div className="splitFields">
+        <div>
+          <label>Name</label>
+          <input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
+        </div>
+        <div>
+          <label>Address base</label>
+          <input value={form.addressBase} onChange={(event) => setForm({ ...form, addressBase: event.target.value })} placeholder="auto or 192.168.70" />
+        </div>
+      </div>
+      <div className="splitFields">
+        <div>
+          <label>Public</label>
+          <input inputMode="numeric" value={form.publicNodes} onChange={(event) => setForm({ ...form, publicNodes: event.target.value })} />
+        </div>
+        <div>
+          <label>NAT</label>
+          <input inputMode="numeric" value={form.natNodes} onChange={(event) => setForm({ ...form, natNodes: event.target.value })} />
+        </div>
+        <div>
+          <label>Double NAT</label>
+          <input inputMode="numeric" value={form.doubleNatNodes} onChange={(event) => setForm({ ...form, doubleNatNodes: event.target.value })} />
+        </div>
+      </div>
+      <div className="splitFields">
+        <div>
+          <label>CPU</label>
+          <input value={form.cpu} onChange={(event) => setForm({ ...form, cpu: event.target.value })} />
+        </div>
+        <div>
+          <label>Memory</label>
+          <input value={form.memory} onChange={(event) => setForm({ ...form, memory: event.target.value })} />
+        </div>
+        <div>
+          <label>Disk</label>
+          <input value={form.writableLayerSize} onChange={(event) => setForm({ ...form, writableLayerSize: event.target.value })} />
+        </div>
+      </div>
+      <div className="splitFields compactFields">
+        <div>
+          <label>Address start</label>
+          <input inputMode="numeric" value={form.addressStart} onChange={(event) => setForm({ ...form, addressStart: event.target.value })} />
+        </div>
+        <div>
+          <label>Port offset</label>
+          <input inputMode="numeric" value={form.portOffset} onChange={(event) => setForm({ ...form, portOffset: event.target.value })} />
+        </div>
+        <button className="primary fieldAlignedButton" disabled={busy || !form.name.trim()} type="submit">
+          <Plus size={15} />
+          Create
+        </button>
+      </div>
+      {message ? <div className="formMessage compactMessage">{message}</div> : null}
+    </form>
   );
 }
 
@@ -2599,6 +2755,7 @@ function NetworkEditor({
               allowInternetAccess: form.allowInternetAccess,
               allowOut: parseCsv(form.allowOut),
               denyOut: parseCsv(form.denyOut),
+              topology: configuredNetwork.topology || undefined,
               inbound: {
                 defaultPolicy: form.inboundDefaultPolicy,
                 allowFrom: parseCsv(form.inboundAllowFrom),
@@ -3024,7 +3181,8 @@ function ConnectivityMatrix({ rows, probe }: { rows: InventoryRow[]; probe?: Net
           <span>Source</span>
           <span>Target</span>
           <span>Target IP</span>
-          <span>Path</span>
+          <span>Expected</span>
+          <span>Host</span>
           <span>Probe</span>
           <span>Checks</span>
           <span>Reason</span>
@@ -3034,6 +3192,7 @@ function ConnectivityMatrix({ rows, probe }: { rows: InventoryRow[]; probe?: Net
             <span>{edge.fromName}</span>
             <span>{edge.toName}</span>
             <span>{edge.toSandboxIp || "-"}</span>
+            <span>{edge.expectedPath || "-"}</span>
             <span>{edge.hostPath || "-"}</span>
             <span>{probeLabel(edge)}</span>
             <span>{formatProbeChecks(edge.checks)}</span>
@@ -3503,6 +3662,7 @@ function buildSwitchPorts(rows: InventoryRow[], selected: InventoryRow, fallback
     const hasForward = Boolean(network.nat?.portForwards?.length);
     const profile = [
       network.type || "tap",
+      network.topology?.role && network.topology.role !== "generic" ? `${network.topology.role} nat${network.topology.natDepth ?? 0}` : "",
       network.vlan?.enabled ? `vlan ${network.vlan.vlanId || ""}`.trim() : "",
       outboundNat ? "outbound nat" : "",
       hasForward ? "ingress forward" : ""
@@ -3529,6 +3689,8 @@ type TopologyNode = {
   name: string;
   address: string;
   host: string;
+  role: string;
+  path: string;
   state: string;
 };
 
@@ -3541,6 +3703,8 @@ function topologyNodes(rows: InventoryRow[]): TopologyNode[] {
       name: row.name,
       address: row.world?.sandbox?.runtimeSandboxIp || row.world?.sandbox?.sandboxIp || row.runtime?.sandboxIp || network.sandboxIp || shortId(row.sandboxId) || "planned",
       host: row.host || "local",
+      role: network.topology?.role || "generic",
+      path: network.topology?.path || "unknown",
       state: row.status || "unknown"
     };
   });
@@ -3553,7 +3717,7 @@ function buildNetworkMermaidDiagram(nodes: TopologyNode[], edges: ProbeEdge[]) {
     "    direction LR"
   ];
   nodes.forEach((node, index) => {
-    lines.push(`    ${mermaidNodeId(index)}["${mermaidText(node.name)}<br/>${mermaidText(node.address)}<br/>${mermaidText(node.host)}"]:::${topologyNodeClass(node)}`);
+    lines.push(`    ${mermaidNodeId(index)}["${mermaidText(node.name)}<br/>${mermaidText(node.address)}<br/>${mermaidText(node.role)} / ${mermaidText(node.path)}"]:::${topologyNodeClass(node)}`);
   });
   lines.push("  end");
 
@@ -3564,7 +3728,8 @@ function buildNetworkMermaidDiagram(nodes: TopologyNode[], edges: ProbeEdge[]) {
     const sourceIndex = idToIndex.get(edge.fromWorldId);
     const targetIndex = idToIndex.get(edge.toWorldId);
     if (sourceIndex == null || targetIndex == null || sourceIndex === targetIndex) continue;
-    const label = edge.reachable === true ? "Reachable" : edge.reachable === false ? "Blocked" : "Planned";
+    const statusLabel = edge.reachable === true ? "Reachable" : edge.reachable === false ? "Blocked" : "Planned";
+    const label = edge.expectedPath ? `${edge.expectedPath} ${statusLabel}` : statusLabel;
     if (edge.reachable === false) {
       lines.push(`  ${mermaidNodeId(sourceIndex)} -. ${mermaidText(label)} .-> ${mermaidNodeId(targetIndex)}`);
       linkStyles.push(`  linkStyle ${linkIndex} stroke:#b7df22,stroke-width:2px,stroke-dasharray:6 4,color:#e6c56f`);
@@ -3878,6 +4043,7 @@ function networkForRow(row: InventoryRow, fallbackType = "tap"): NetworkConfig {
   if (row.world) return effectiveNetworkForWorld(row.world, annotations["kakurizai.network.type"] || fallbackType);
   const natAnnotation = parseAnnotationJson<NatConfig>(annotations["kakurizai.network.nat"]);
   const inboundAnnotation = parseAnnotationJson<InboundConfig>(annotations["kakurizai.network.inbound"]);
+  const topologyAnnotation = parseAnnotationJson<NetworkTopologyConfig>(annotations["kakurizai.network.topology"]);
   const portForwards = parseAnnotationJson<PortForwardConfig[]>(annotations["kakurizai.network.portForwards"]) || natAnnotation?.portForwards || [];
   return {
     type: annotations["kakurizai.network.type"] || fallbackType,
@@ -3886,6 +4052,7 @@ function networkForRow(row: InventoryRow, fallbackType = "tap"): NetworkConfig {
     exposedPorts: parsePortAnnotation(annotations["com.exposed_ports"]),
     allowOut: [],
     denyOut: [],
+    topology: topologyAnnotation || { role: "generic", natDepth: 0, path: "unknown" },
     inbound: inboundAnnotation || { defaultPolicy: "allow", allowFrom: [], denyFrom: [] },
     rules: [],
     vlan: parseAnnotationJson<VlanConfig>(annotations["kakurizai.network.vlan"]) || { enabled: false },
@@ -3922,6 +4089,7 @@ function effectiveNetworkForWorld(world?: World, fallbackType = "tap"): NetworkC
     allowInternetAccess: world?.backendConfig?.network?.allowInternetAccess,
     allowOut: world?.backendConfig?.network?.allowOut || [],
     denyOut: world?.backendConfig?.network?.denyOut || [],
+    topology: world?.backendConfig?.network?.topology || { role: "generic", natDepth: 0, path: "unknown" },
     inbound: world?.backendConfig?.network?.inbound || { defaultPolicy: "allow", allowFrom: [], denyFrom: [] },
     rules: world?.backendConfig?.network?.rules || [],
     vlan: world?.backendConfig?.network?.vlan || { enabled: false },

@@ -18,6 +18,12 @@ test("network probe plan maps worlds to sandbox IPs, ports, NAT forwards, and ed
         network: {
           type: "tap",
           exposedPorts: [8080],
+          topology: {
+            profile: "hetero-network",
+            role: "public",
+            natDepth: 0,
+            path: "direct"
+          },
           nat: {
             enabled: true,
             masquerade: true,
@@ -44,7 +50,16 @@ test("network probe plan maps worlds to sandbox IPs, ports, NAT forwards, and ed
       status: "ready",
       sandbox: { id: "sandbox-beta-long", status: "running" },
       backendConfig: {
-        network: { type: "tap", exposedPorts: [9090] },
+        network: {
+          type: "tap",
+          exposedPorts: [9090],
+          topology: {
+            profile: "hetero-network",
+            role: "double-nat",
+            natDepth: 2,
+            path: "relay"
+          }
+        },
         kubernetes: { enabled: false }
       }
     }
@@ -73,6 +88,9 @@ test("network probe plan maps worlds to sandbox IPs, ports, NAT forwards, and ed
   });
   assert.equal(plan.edges.length, 2);
   assert.equal(plan.edges[0].hostPath, "same-host");
+  assert.equal(plan.edges[0].expectedPath, "RELAY");
+  assert.equal(plan.edges[1].expectedPath, "DIRECT_PUBLIC");
+  assert.equal(plan.nodes[1].topology.role, "double-nat");
   assert.equal(plan.edges[0].checks[0].kind, "icmp");
   assert.deepEqual(plan.forwards, [
     {

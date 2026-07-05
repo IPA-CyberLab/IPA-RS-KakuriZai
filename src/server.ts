@@ -11,7 +11,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { createAuthProvider } from "./auth/providers.js";
 import { checkpointFailoverReplicas, createJoinToken, joinNode, listClusterNodes, reconcileFailover, removeClusterNode, replicateWorld, startFailoverController } from "./core/cluster.js";
 import { collectMetrics, listTraces, prometheusText, recordTraceEvent, startTrace, stopTrace } from "./core/observability.js";
-import { applyWorld, changedPaths, createKubernetesLab, createWorld, execWorld, getWorld, listWorlds, openWorld, pauseWorld, removeWorld, resumeWorld, updateWorldConfig } from "./core/worlds.js";
+import { applyWorld, changedPaths, createHeteroNetworkLab, createKubernetesLab, createWorld, execWorld, getWorld, listWorlds, openWorld, pauseWorld, removeWorld, resumeWorld, updateWorldConfig } from "./core/worlds.js";
 import { applyProbeChecks, buildNetworkProbePlan, buildProbeScript, parseProbeOutput } from "./core/probe.js";
 import { CubeSandboxClient } from "./cube/client.js";
 
@@ -1249,6 +1249,10 @@ async function api(config, devAccess, request, response, url) {
   if (request.method === "POST" && url.pathname === "/api/labs/kubernetes") {
     authorize(config, request, "worlds:write");
     return sendJson(request, response, await createKubernetesLab(config, await readBody(request)), 201);
+  }
+  if (request.method === "POST" && url.pathname === "/api/labs/hetero-network") {
+    authorize(config, request, "worlds:write");
+    return sendJson(request, response, await createHeteroNetworkLab(config, await readBody(request)), 201);
   }
   if (request.method === "GET" && url.pathname === "/api/cluster/nodes") {
     authorize(config, request, "worlds:read");

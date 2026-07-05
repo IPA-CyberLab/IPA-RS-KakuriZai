@@ -1271,6 +1271,23 @@ label {
   font-size: 12px;
 }
 
+.labProfileForm {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--raised);
+  padding: 10px;
+}
+
+.labProfileForm label {
+  margin-top: 0;
+}
+
+.compactMessage {
+  margin-top: 0;
+}
+
 .terminalLauncher {
   display: flex;
   align-items: center;
@@ -1571,8 +1588,8 @@ label {
 }
 
 .networkMatrix.probeMatrix .dataRow {
-  min-width: 980px;
-  grid-template-columns: 160px 130px minmax(230px, 1fr) 90px 160px 180px 90px;
+  min-width: 1080px;
+  grid-template-columns: 150px 130px minmax(180px, 1fr) 150px 90px 130px 170px 90px;
 }
 
 .topologyPanel {

@@ -18,6 +18,7 @@ import {
 import {
   applyWorld,
   changedPaths,
+  createHeteroNetworkLab,
   createKubernetesLab,
   createWorld,
   execWorld,
@@ -74,6 +75,7 @@ Sandbox commands:
   agctl create --source <folder> --name <name> [--backend cube-sandbox-overlay]
   agctl create --name <name> --no-host-mount [--network tap] [--expose-port 6443]
   agctl lab kubernetes --name <name> [--control-planes 1] [--workers 2] [--json]
+  agctl lab hetero-network --name <name> [--public-nodes 1] [--nat-nodes 1] [--double-nat-nodes 1] [--json]
   agctl apply -f sandbox.yaml [--json]
   agctl export <sandbox> --yaml
   agctl terraform export <sandbox|--file sandbox.yaml> --out ./terraform
@@ -270,7 +272,46 @@ async function applyManifest(config, file, args) {
 async function lab(config, args) {
   const subcommand = args.shift();
   if (subcommand === "kubernetes" || subcommand === "k8s") return kubernetesLab(config, args);
-  throw new Error("lab supports: kubernetes");
+  if (subcommand === "hetero-network" || subcommand === "hetero" || subcommand === "ipars") return heteroNetworkLab(config, args);
+  throw new Error("lab supports: hetero-network, kubernetes");
+}
+
+async function heteroNetworkLab(config, args) {
+  const name = takeOption(args, "--name") || takeOption(args, "-n");
+  if (!name) throw new Error("lab hetero-network requires --name");
+  const publicNodes = takeOption(args, "--public-nodes") || takeOption(args, "--public-node-count");
+  const natNodes = takeOption(args, "--nat-nodes") || takeOption(args, "--nat-node-count");
+  const doubleNatNodes = takeOption(args, "--double-nat-nodes") || takeOption(args, "--double-nat-node-count");
+  const writableLayerSize = takeOption(args, "--writable-layer-size") || takeOption(args, "--disk");
+  const allowInternet = takeOption(args, "--allow-internet-access");
+  const result = await createHeteroNetworkLab(config, {
+    name,
+    publicNodes: publicNodes == null ? undefined : Number(publicNodes),
+    natNodes: natNodes == null ? undefined : Number(natNodes),
+    doubleNatNodes: doubleNatNodes == null ? undefined : Number(doubleNatNodes),
+    cpu: takeOption(args, "--cpu") || undefined,
+    memory: takeOption(args, "--memory") || undefined,
+    writableLayerSize: writableLayerSize || undefined,
+    addressBase: takeOption(args, "--address-base") || takeOption(args, "--sandbox-ip-base") || undefined,
+    addressStart: takeOption(args, "--address-start") || undefined,
+    portOffset: takeOption(args, "--port-offset") || undefined,
+    network: {
+      type: "tap",
+      mode: takeOption(args, "--network-mode") || "tap",
+      ...(allowInternet == null ? {} : { allowInternetAccess: parseBooleanOption(allowInternet) }),
+      allowOut: splitOptionValues(takeRepeatedOption(args, "--allow-out-cidr")),
+      denyOut: splitOptionValues(takeRepeatedOption(args, "--deny-out-cidr"))
+    }
+  });
+  if (args.includes("--json")) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  console.log(`created HeteroNetwork lab ${result.lab.name}`);
+  for (const world of result.worlds) {
+    const topology = world.backendConfig?.network?.topology || {};
+    console.log(`${world.name}\t${world.status}\t${topology.role || "-"}\tnatDepth=${topology.natDepth ?? "-"}\t${world.sandbox?.id || world.sandbox?.status || "none"}`);
+  }
 }
 
 async function kubernetesLab(config, args) {

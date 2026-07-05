@@ -20,6 +20,7 @@ export function normalizeNetworkConfig(input = {}) {
     sandboxIp: sandboxIp ? normalizeIpv4(sandboxIp, "network.sandboxIp") : null,
     vlan: normalizeVlanConfig(source.vlan || {}),
     nat: normalizeNatConfig(source.nat || source.natConfig || {}),
+    topology: normalizeTopologyConfig(source.topology || source.experiment || source.connectivity || {}),
     exposedPorts,
     dns,
     allowOut: normalizeStringList(source.allowOut),
@@ -68,6 +69,28 @@ export function normalizeVlanConfig(input = {}) {
   };
 }
 
+export function normalizeTopologyConfig(input = {}) {
+  const source = input || {};
+  const role = cleanString(source.role || source.kind || "generic").toLowerCase();
+  const validRoles = new Set(["generic", "public", "nat", "double-nat", "relay", "isolated"]);
+  if (!validRoles.has(role)) throw new Error("network.topology.role must be generic, public, nat, double-nat, relay, or isolated");
+  const natDepth = source.natDepth ?? source.nat_depth ?? inferredNatDepth(role);
+  const number = Number(natDepth);
+  if (!Number.isInteger(number) || number < 0 || number > 4) throw new Error("network.topology.natDepth must be an integer between 0 and 4");
+  const path = cleanString(source.path || source.p2p || source.pathState || "unknown").toLowerCase();
+  const validPaths = new Set(["unknown", "direct", "negotiated", "relay", "blocked"]);
+  if (!validPaths.has(path)) throw new Error("network.topology.path must be unknown, direct, negotiated, relay, or blocked");
+  return {
+    profile: cleanString(source.profile || source.scenario || "") || null,
+    role,
+    natDepth: number,
+    path,
+    publicEndpoint: source.publicEndpoint == null ? role === "public" || role === "relay" : Boolean(source.publicEndpoint),
+    stun: source.stun == null ? path === "negotiated" || role === "public" : Boolean(source.stun),
+    relay: source.relay == null ? path === "relay" || role === "relay" || role === "public" : Boolean(source.relay)
+  };
+}
+
 export function normalizeKubernetesConfig(input = {}) {
   if (input === true) input = { enabled: true };
   const enabled = Boolean(input?.enabled);
@@ -97,6 +120,13 @@ export function normalizeKubernetesConfig(input = {}) {
       ...(input?.sysctls || {})
     }
   };
+}
+
+function inferredNatDepth(role) {
+  if (role === "public" || role === "relay") return 0;
+  if (role === "nat") return 1;
+  if (role === "double-nat") return 2;
+  return 0;
 }
 
 export function normalizeNatConfig(input = {}) {
