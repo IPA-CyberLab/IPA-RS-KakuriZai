@@ -1415,6 +1415,7 @@ function normalizeBootstrapConfig(config = {}) {
       "fuse-overlayfs",
       "fuse3",
       "git",
+      "iptables",
       "iproute2",
       "iputils-ping",
       "less",
@@ -1429,7 +1430,7 @@ function normalizeBootstrapConfig(config = {}) {
       "unionfs-fuse",
       "vim-tiny"
     ],
-    commands: ["bash", "curl", "git", "ip", "nano", "ping", "ps", "sudo", "tmux"]
+    commands: ["bash", "curl", "git", "ip", "iptables", "nano", "ping", "ps", "sudo", "tmux"]
   };
   if (config === false) return { ...defaults, enabled: false };
   return {
