@@ -337,6 +337,75 @@ export class CubeSandboxClient {
     return this.createSandboxViaCli(world, request, status.binary);
   }
 
+  async findWorldSandboxes(world) {
+    const status = this.available();
+    if (!status.available) {
+      return {
+        checked: false,
+        mode: null,
+        sandboxes: [],
+        reason: status.reason
+      };
+    }
+    if (status.mode === "master") {
+      const result = await commandSummary(status.binary, [
+        "list",
+        "--all",
+        "--wide",
+        "--filter",
+        `kakurizai.world=${world.id}`
+      ], parseSandboxesWide);
+      if (!result.ok) {
+        return {
+          checked: false,
+          mode: "master",
+          sandboxes: [],
+          reason: result.reason
+        };
+      }
+      return {
+        checked: true,
+        mode: "master",
+        sandboxes: (result.value || []).filter((sandbox) => (
+          !sandbox.labels?.["kakurizai.world"] || sandbox.labels["kakurizai.world"] === world.id
+        )),
+        reason: null
+      };
+    }
+    if (status.mode === "cli") {
+      const result = await cubeCliCommandSummary(status.binary, [
+        ...cubeCliGlobalArgs(this.config),
+        "cubebox",
+        "list",
+        "--all",
+        "--quiet",
+        "--no-trunc",
+        "kakurizai.world",
+        world.id
+      ], parseSandboxIds);
+      if (!result.ok) {
+        return {
+          checked: false,
+          mode: "cli",
+          sandboxes: [],
+          reason: result.reason
+        };
+      }
+      return {
+        checked: true,
+        mode: "cli",
+        sandboxes: (result.value || []).map((id) => ({ id, status: "running", labels: { "kakurizai.world": world.id } })),
+        reason: null
+      };
+    }
+    return {
+      checked: false,
+      mode: status.mode || null,
+      sandboxes: [],
+      reason: `CubeSandbox ${status.mode || "unknown"} mode cannot list world sandboxes`
+    };
+  }
+
   async createSandboxViaMaster(world, request, binary) {
     const requestPath = path.join(world.paths.logs, "cubemaster-create-request.json");
     await fs.writeFile(requestPath, `${JSON.stringify(request, null, 2)}\n`, "utf8");
@@ -1701,6 +1770,15 @@ function parseSandboxes(output) {
     createdAt: columns[3],
     pausedAt: columns[4] || "-"
   }));
+}
+
+function parseSandboxIds(output) {
+  return [...new Set(
+    String(output || "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => /^[A-Za-z0-9._:-]+$/.test(line))
+  )];
 }
 
 function parseSandboxesWide(output) {

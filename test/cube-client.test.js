@@ -51,6 +51,34 @@ test("cube client accepts absolute cubemastercli paths", async () => {
   assert.equal(client.available().binary, mastercli);
 });
 
+test("cube client finds a CubeMaster sandbox by its KakuriZai world label", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-lookup-"));
+  const mastercli = path.join(tmp, "cubemastercli");
+  const argsFile = path.join(tmp, "args.txt");
+  await fs.writeFile(mastercli, `#!/bin/sh
+printf '%s\\n' "$@" > "${argsFile}"
+cat <<'TABLE'
+NODE_SCOPE    all
+NODES_SCANNED    1/1
+SANDBOX_COUNT    1
+
+sandbox_id	status	host_id	create_at	pause_at	template_id	namespace	host_ip	labels
+4fac1c9a074d49bf8e29ee1d90592b22	running	host-a	2026-07-23 08:00:00	-	tpl-test	kakurizai	192.0.2.10	{"kakurizai.world":"escape-a137c152cf22"}
+TABLE
+`, "utf8");
+  await fs.chmod(mastercli, 0o755);
+
+  const client = new CubeSandboxClient({ mode: "master", mastercli });
+  const result = await client.findWorldSandboxes({ id: "escape-a137c152cf22" });
+
+  assert.equal(result.checked, true);
+  assert.equal(result.mode, "master");
+  assert.deepEqual(result.sandboxes.map((sandbox) => sandbox.id), ["4fac1c9a074d49bf8e29ee1d90592b22"]);
+  assert.equal(result.sandboxes[0].labels["kakurizai.world"], "escape-a137c152cf22");
+  const args = (await fs.readFile(argsFile, "utf8")).trim().split("\n");
+  assert.deepEqual(args, ["list", "--all", "--wide", "--filter", "kakurizai.world=escape-a137c152cf22"]);
+});
+
 test("CubeSandbox create failure is saved as failed, not pending", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-create-failed-"));
   const mastercli = path.join(tmp, "cubemastercli");

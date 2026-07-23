@@ -12,6 +12,7 @@ import { openTarget } from "./openers.js";
 const HETERONETWORK_TCP_PORTS = [8443, 9443, 9580, 9780];
 const HETERONETWORK_UDP_PORTS = [3478, 51820];
 const HETERONETWORK_EXPOSED_PORTS = [...HETERONETWORK_TCP_PORTS, ...HETERONETWORK_UDP_PORTS];
+const worldProvisioning = new Map();
 
 export async function createWorld(config, input) {
   const store = new WorldStore(config);
@@ -63,7 +64,7 @@ export async function createWorld(config, input) {
     }
   });
   try {
-    return await backend.afterCreate(world, store);
+    return await serializeWorldProvisioning(world.id, () => backend.afterCreate(world, store));
   } catch (error) {
     world.status = "failed";
     world.sandbox = {
@@ -702,26 +703,29 @@ function clampCount(value, name, options = {}) {
 }
 
 async function recreateSavedWorld(config, store, world) {
-  const backend = getBackend(config, world.backend);
-  if (world.sandbox?.id) {
-    const removal = await backend.remove(world);
-    if (removal?.skipped) {
-      throw new Error(`cannot recreate sandbox: ${removal.reason || "remove skipped"}`);
+  return serializeWorldProvisioning(world.id, async () => {
+    world = await store.get(world.id, { exactId: true });
+    const backend = getBackend(config, world.backend);
+    if (world.sandbox?.id) {
+      const removal = await backend.remove(world);
+      if (removal?.skipped) {
+        throw new Error(`cannot recreate sandbox: ${removal.reason || "remove skipped"}`);
+      }
+      if (typeof removal?.code === "number" && removal.code !== 0) {
+        throw new Error(`cannot recreate sandbox: ${removal.stderr || removal.stdout || `remove exited with ${removal.code}`}`);
+      }
     }
-    if (typeof removal?.code === "number" && removal.code !== 0) {
-      throw new Error(`cannot recreate sandbox: ${removal.stderr || removal.stdout || `remove exited with ${removal.code}`}`);
-    }
-  }
-  world.status = "creating";
-  world.sandbox = {
-    ...(world.sandbox || {}),
-    id: null,
-    containerId: null,
-    status: "recreating",
-    reason: "recreating sandbox to apply disk/configuration changes"
-  };
-  await store.save(world);
-  return backend.afterCreate(world, store);
+    world.status = "creating";
+    world.sandbox = {
+      ...(world.sandbox || {}),
+      id: null,
+      containerId: null,
+      status: "recreating",
+      reason: "recreating sandbox to apply disk/configuration changes"
+    };
+    await store.save(world);
+    return backend.afterCreate(world, store);
+  });
 }
 
 export async function upsertWorldFromManifest(config, manifest) {
@@ -741,6 +745,87 @@ export async function listWorlds(config) {
 
 export async function getWorld(config, ref) {
   return new WorldStore(config).get(ref);
+}
+
+export async function ensureWorldProvisioned(config, ref) {
+  const store = new WorldStore(config);
+  const initial = await store.get(ref);
+  if (initial.backend !== "cube-sandbox-overlay") {
+    throw statusError(`world ${initial.name} does not use the CubeSandbox backend`, 409);
+  }
+  return serializeWorldProvisioning(initial.id, async () => {
+    let world = await store.get(initial.id, { exactId: true });
+    const recordedSandboxId = world.sandbox?.containerId || world.sandbox?.id || null;
+    if (world.sandbox?.mode === "direct-cubelet") {
+      if (recordedSandboxId) return world;
+      throw provisioningError(world, "direct Cubelet world has no sandbox id", 409);
+    }
+
+    const client = new CubeSandboxClient(config.cube || {});
+    const lookup = await client.findWorldSandboxes(world);
+    if (!lookup.checked) {
+      throw provisioningError(world, lookup.reason || "CubeSandbox runtime lookup failed", 503);
+    }
+
+    const candidate = selectWorldSandbox(world, lookup.sandboxes || []);
+    if (candidate) {
+      assertConnectableSandbox(world, candidate);
+      return saveReconciledWorld(store, world, candidate, lookup.mode);
+    }
+    const previousProvisioningFailed = world.status === "failed" || world.sandbox?.status === "failed";
+    if (previousProvisioningFailed && recordedSandboxId) {
+      throw provisioningError(world, world.sandbox?.reason || "the previous provisioning attempt failed", 409);
+    }
+
+    const previousFailureReason = previousProvisioningFailed ? world.sandbox?.reason : null;
+    world.status = "creating";
+    world.sandbox = {
+      ...(world.sandbox || {}),
+      id: null,
+      containerId: null,
+      runtime: "CubeSandbox",
+      status: "provisioning",
+      reason: recordedSandboxId
+        ? `recorded CubeSandbox ${recordedSandboxId} no longer exists; provisioning a replacement`
+        : previousFailureReason
+          ? `retrying CubeSandbox provisioning after: ${previousFailureReason}`
+          : "provisioning CubeSandbox before connection"
+    };
+    await store.save(world);
+
+    const backend = getBackend(config, world.backend);
+    try {
+      world = await backend.afterCreate(world, store);
+    } catch (error) {
+      const failed = await store.get(world.id, { exactId: true });
+      failed.status = "failed";
+      failed.sandbox = {
+        ...(failed.sandbox || {}),
+        id: null,
+        containerId: null,
+        runtime: "CubeSandbox",
+        status: "failed",
+        reason: error.message || String(error)
+      };
+      await store.save(failed);
+      throw provisioningError(failed, failed.sandbox.reason, 503);
+    }
+    const provisionedSandboxId = world.sandbox?.containerId || world.sandbox?.id || null;
+    if (!provisionedSandboxId) {
+      throw provisioningError(world, world.sandbox?.reason || "CubeSandbox did not return a sandbox id", 503);
+    }
+
+    const verification = await client.findWorldSandboxes(world);
+    if (!verification.checked) {
+      throw provisioningError(world, verification.reason || "created sandbox could not be verified", 503);
+    }
+    const verified = selectWorldSandbox(world, verification.sandboxes || []);
+    if (!verified) {
+      throw provisioningError(world, `created sandbox ${provisionedSandboxId} is not visible in CubeSandbox`, 503);
+    }
+    assertConnectableSandbox(world, verified);
+    return saveReconciledWorld(store, world, verified, verification.mode);
+  });
 }
 
 export async function removeWorld(config, ref, options = {}) {
@@ -801,7 +886,10 @@ export async function resumeWorld(config, ref) {
 
 export async function execWorld(config, ref, command, options = {}) {
   const store = new WorldStore(config);
-  const world = await store.get(ref);
+  let world = await store.get(ref);
+  if (world.backend === "cube-sandbox-overlay") {
+    world = await ensureWorldProvisioned(config, world.id);
+  }
   const backend = getBackend(config, world.backend);
   return backend.exec(world, command, options);
 }
@@ -847,6 +935,72 @@ function statusError(message, statusCode) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
+}
+
+async function serializeWorldProvisioning(worldId, action) {
+  const previous = worldProvisioning.get(worldId) || Promise.resolve();
+  const task = previous.catch(() => {}).then(action);
+  worldProvisioning.set(worldId, task);
+  try {
+    return await task;
+  } finally {
+    if (worldProvisioning.get(worldId) === task) worldProvisioning.delete(worldId);
+  }
+}
+
+function selectWorldSandbox(world, candidates) {
+  const unique = [...new Map(
+    (candidates || []).filter((candidate) => candidate?.id).map((candidate) => [candidate.id, candidate])
+  ).values()];
+  const recordedIds = [world.sandbox?.containerId, world.sandbox?.id].filter(Boolean);
+  const recorded = unique.find((candidate) => recordedIds.includes(candidate.id));
+  if (recorded) return recorded;
+  if (unique.length === 1) return unique[0];
+  if (unique.length > 1) {
+    throw provisioningError(
+      world,
+      `multiple CubeSandbox sandboxes match this world (${unique.map((candidate) => candidate.id).join(", ")})`,
+      409
+    );
+  }
+  return null;
+}
+
+function assertConnectableSandbox(world, sandbox) {
+  const status = String(sandbox.status || "").toLowerCase();
+  if (/paused|pausing|exited|failed|stopped|deleted/.test(status)) {
+    throw provisioningError(world, `CubeSandbox ${sandbox.id} is ${sandbox.status}`, 409);
+  }
+}
+
+async function saveReconciledWorld(store, world, sandbox, mode) {
+  const overlayPending = world.sandbox?.overlay?.mounted === false;
+  const nextStatus = overlayPending ? "pending-overlay" : "ready";
+  const nextSandbox = {
+    ...(world.sandbox || {}),
+    id: sandbox.id,
+    containerId: sandbox.id,
+    baseId: sandbox.templateId || world.sandbox?.baseId || world.backendConfig?.template || null,
+    runtime: "CubeSandbox",
+    mode: mode || world.sandbox?.mode || null,
+    status: overlayPending ? "running-overlay-pending" : sandbox.status || "running",
+    reason: overlayPending ? world.sandbox?.overlay?.reason || world.sandbox?.reason || null : null
+  };
+  const changed = world.status !== nextStatus
+    || world.sandbox?.id !== nextSandbox.id
+    || world.sandbox?.containerId !== nextSandbox.containerId
+    || world.sandbox?.baseId !== nextSandbox.baseId
+    || world.sandbox?.runtime !== nextSandbox.runtime
+    || world.sandbox?.mode !== nextSandbox.mode
+    || world.sandbox?.status !== nextSandbox.status
+    || world.sandbox?.reason !== nextSandbox.reason;
+  world.status = nextStatus;
+  world.sandbox = nextSandbox;
+  return changed ? store.save(world) : world;
+}
+
+function provisioningError(world, reason, statusCode) {
+  return statusError(`world ${world.name} could not be provisioned in CubeSandbox: ${reason}`, statusCode);
 }
 
 function cubeRequestWritableLayerSize(world) {

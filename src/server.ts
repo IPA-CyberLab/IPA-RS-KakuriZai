@@ -11,7 +11,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { createAuthProvider } from "./auth/providers.js";
 import { checkpointFailoverReplicas, createJoinToken, joinNode, listClusterNodes, reconcileFailover, removeClusterNode, replicateWorld, startFailoverController } from "./core/cluster.js";
 import { collectMetrics, listTraces, prometheusText, recordTraceEvent, startTrace, stopTrace } from "./core/observability.js";
-import { applyWorld, changedPaths, createHeteroNetworkLab, createKubernetesLab, createWorld, execWorld, getWorld, listWorlds, openWorld, pauseWorld, removeWorld, resumeWorld, updateWorldConfig } from "./core/worlds.js";
+import { applyWorld, changedPaths, createHeteroNetworkLab, createKubernetesLab, createWorld, ensureWorldProvisioned, execWorld, getWorld, listWorlds, openWorld, pauseWorld, removeWorld, resumeWorld, updateWorldConfig } from "./core/worlds.js";
 import { applyProbeChecks, buildNetworkProbePlan, buildProbeScript, parseProbeOutput } from "./core/probe.js";
 import { CubeSandboxClient } from "./cube/client.js";
 
@@ -63,7 +63,8 @@ export async function startStudio(config) {
       return;
     }
     handleUpgrade(config, auth, sessions, shellServer, request, socket, head).catch((error) => {
-      socket.write(`HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain\r\n\r\n${error.message || String(error)}\n`);
+      const status = error.statusCode || 500;
+      socket.write(`HTTP/1.1 ${status} ${httpStatusText(status)}\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n${error.message || String(error)}\n`);
       socket.destroy();
     });
   });
@@ -98,18 +99,18 @@ async function handleUpgrade(config, auth, sessions, shellServer, request, socke
   request.user = session.user;
   request.authSession = session.session;
   authorize(config, request, "shell:open");
-  const world = await getWorld(config, decodeURIComponent(match[1]));
+  const world = await ensureWorldProvisioned(config, decodeURIComponent(match[1]));
+  const shell = new CubeSandboxClient(config.cube).shellCommand(world);
   void request.audit?.write(auditRecord(request, 101, { action: "shell.open", target: world.id }));
   shellServer.handleUpgrade(request, socket, head, (ws) => {
     shellServer.emit("connection", ws, request, world);
-    attachShell(config, world, ws);
+    attachShell(world, ws, shell);
   });
 }
 
-function attachShell(config, world, ws) {
+function attachShell(world, ws, shell) {
   let shellProcess;
   try {
-    const shell = new CubeSandboxClient(config.cube).shellCommand(world);
     shellProcess = pty.spawn(shell.command, shell.args, {
       name: "xterm-256color",
       cols: 100,
@@ -175,6 +176,19 @@ function parseShellEnvelope(text) {
   return null;
 }
 
+function httpStatusText(status) {
+  return ({
+    400: "Bad Request",
+    401: "Unauthorized",
+    403: "Forbidden",
+    404: "Not Found",
+    409: "Conflict",
+    429: "Too Many Requests",
+    500: "Internal Server Error",
+    503: "Service Unavailable"
+  })[status] || "Error";
+}
+
 class DevAccessManager {
   constructor(config) {
     this.config = config;
@@ -202,6 +216,7 @@ class DevAccessManager {
   }
 
   async ensureSessionLocked(world, options = {}) {
+    world = await ensureWorldProvisioned(this.config, world.id);
     const needsVscode = options.vscode !== false;
     const needsSsh = options.ssh === true;
     let session = this.sessions.get(world.id);
