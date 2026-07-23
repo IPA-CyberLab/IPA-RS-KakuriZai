@@ -1,0 +1,66 @@
+diff --git a/cubecow/src/engine/reflink.rs b/cubecow/src/engine/reflink.rs
+index 72a84b6..ea6e5f2 100644
+--- a/cubecow/src/engine/reflink.rs
++++ b/cubecow/src/engine/reflink.rs
+@@ -489,27 +489,21 @@ impl Engine for ReflinkEngine {
+     }
+ 
+     fn resize_volume(&self, name: &str, new_size_bytes: u64) -> CubecowResult<(u64, u64)> {
+-        // Only the volume's main file is resized; existing snapshot
+-        // files are independent reflink copies and intentionally keep
+-        // their old size — same observable behaviour as taking a
+-        // dm-thin snapshot before an origin resize.
++        // Reflink snapshots are independent copy-on-write files. Resizing
++        // one therefore grows only that derived object and leaves its
++        // origin and sibling snapshots unchanged.
+         let _guard = self
+             .name_index
+             .read()
+             .expect("reflink name_index lock poisoned");
+-        match _guard.get(name) {
+-            Some(NameKind::Volume) => {}
+-            Some(NameKind::Snapshot { .. }) => {
+-                return Err(CubecowError::InvalidArg(format!(
+-                    "'{name}' is a snapshot; cannot resize"
+-                )));
+-            }
++        let main = match _guard.get(name) {
++            Some(NameKind::Volume) => self.vol_main_file(name),
++            Some(NameKind::Snapshot { origin_volume }) => self.snap_file(origin_volume, name),
+             None => {
+                 return Err(CubecowError::NotFound(format!("volume '{name}'")));
+             }
+-        }
++        };
+ 
+-        let main = self.vol_main_file(name);
+         let meta = std::fs::metadata(&main).map_err(CubecowError::IoError)?;
+         let old_size = meta.size();
+         if new_size_bytes < old_size {
+@@ -1398,7 +1392,7 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn resize_only_grows_volume_main_file() {
++    fn resize_only_grows_requested_reflink_object() {
+         let root = unique_root("resize");
+         if !fs_supports_ficlone(&root.join("volumes")) {
+             eprintln!("[skip] tmpdir does not support FICLONE");
+@@ -1422,6 +1416,17 @@ mod tests {
+         assert_eq!(snaps.len(), 1);
+         assert_eq!(snaps[0].size_bytes, 1024 * 1024);
+ 
++        // A writable derived snapshot can grow without changing its origin.
++        let (old, new) = engine.resize_volume("s", 2 * 1024 * 1024).unwrap();
++        assert_eq!(old, 1024 * 1024);
++        assert_eq!(new, 2 * 1024 * 1024);
++        assert_eq!(
++            engine.get_volume_info("v").unwrap().size_bytes,
++            4 * 1024 * 1024
++        );
++        let (snaps, _) = engine.list_snapshots("v", 0, None);
++        assert_eq!(snaps[0].size_bytes, 2 * 1024 * 1024);
++
+         // Shrink rejected.
+         let bad = engine.resize_volume("v", 0);
+         assert!(matches!(bad, Err(CubecowError::InvalidArg(_))));
