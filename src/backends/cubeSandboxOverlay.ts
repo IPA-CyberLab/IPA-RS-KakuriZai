@@ -23,6 +23,19 @@ export class CubeSandboxOverlayBackend {
       kubernetes: world.backendConfig?.kubernetes || null,
       mountMode
     };
+    const templateResolution = await this.client.resolveTemplateForResources(cubeConfig);
+    if (templateResolution.templateId) {
+      cubeConfig.template = templateResolution.templateId;
+      world.backendConfig.template = templateResolution.templateId;
+    }
+    world.backendConfig.templateResolution = {
+      sourceTemplateId: templateResolution.sourceTemplateId || templateResolution.templateId || null,
+      templateId: templateResolution.templateId || null,
+      changed: templateResolution.changed === true,
+      created: templateResolution.created === true,
+      jobId: templateResolution.jobId || null,
+      resources: templateResolution.resources || null
+    };
     const request = buildCubeSandboxRequest(world, cubeConfig);
     const mountSpecs = mountSpecsForWorld(world, cubeConfig);
     world.backendConfig.cubeRequest = request;

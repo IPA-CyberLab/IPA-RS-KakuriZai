@@ -66,6 +66,7 @@ const CUBE_MVM_MAC = "20:90:6f:fc:fc:fc";
 const CUBE_GATEWAY_MAC = "20:90:6f:cf:cf:cf";
 const HAIRPIN_PREF_START = 250;
 const HAIRPIN_PREF_END = 899;
+const compatibleTemplateBuilds = new Map();
 
 function datapathDropCidrsForNetwork(network = {}) {
   const dropCidrs = new Set(network.denyOut || []);
@@ -316,6 +317,162 @@ export class CubeSandboxClient {
     if (binary) return { available: true, mode: "cli", binary };
     if (mode === "auto" || mode === "cli") return { available: false, reason: "cubecli not found" };
     return { available: false, reason: `cube mode ${mode} is not available` };
+  }
+
+  async resolveTemplateForResources(resources = {}) {
+    const templateId = String(resources.template || "").trim();
+    const writableLayerSize = String(resources.writableLayerSize || "").trim();
+    if (!templateId || !writableLayerSize) {
+      return { templateId: templateId || null, changed: false, created: false };
+    }
+
+    const status = this.available();
+    if (!status.available || status.mode !== "master") {
+      return { templateId, changed: false, created: false, unchecked: true };
+    }
+
+    const templatesResult = await commandSummary(
+      status.binary,
+      ["template", "list", "--json"],
+      parseTemplateListJson
+    );
+    if (!templatesResult.ok) {
+      throw new Error(`could not list CubeSandbox templates: ${templatesResult.reason}`);
+    }
+    const templates = templatesResult.value || [];
+    const sourceSummary = templates.find((template) => template.id === templateId);
+    if (!sourceSummary) {
+      throw new Error(`CubeSandbox template ${templateId} is not registered`);
+    }
+
+    const requested = normalizeTemplateResources(resources);
+    const source = await this.inspectTemplate(sourceSummary, status.binary);
+    if (source.detailError) {
+      throw new Error(`could not inspect CubeSandbox template ${templateId}: ${source.detailError}`);
+    }
+    if (templateResourcesMatch(source, requested)) {
+      return { templateId, changed: false, created: false, resources: requested };
+    }
+    if (!sourceSummary.imageInfo) {
+      throw new Error(
+        `CubeSandbox template ${templateId} resources ${describeTemplateResources(source)} do not match `
+        + `requested ${describeTemplateResources(requested)}, and it has no source image for an automatic compatible build`
+      );
+    }
+
+    const matchingSummaries = templates.filter((template) => (
+      template.id !== templateId
+      && String(template.status || "").toUpperCase() === "READY"
+      && template.imageInfo === sourceSummary.imageInfo
+    ));
+    for (const summary of matchingSummaries) {
+      const candidate = await this.inspectTemplate(summary, status.binary);
+      if (!candidate.detailError && templateResourcesMatch(candidate, requested)) {
+        return {
+          templateId: candidate.id,
+          sourceTemplateId: templateId,
+          changed: true,
+          created: false,
+          resources: requested
+        };
+      }
+    }
+
+    const buildKey = [
+      sourceSummary.imageInfo,
+      requested.writableLayerSize,
+      requested.cpu,
+      requested.memory,
+      requested.instanceType,
+      requested.networkType
+    ].join("\u0000");
+    const existingBuild = compatibleTemplateBuilds.get(buildKey);
+    if (existingBuild) return existingBuild;
+
+    const build = this.createCompatibleTemplate(status.binary, sourceSummary, requested)
+      .finally(() => {
+        if (compatibleTemplateBuilds.get(buildKey) === build) compatibleTemplateBuilds.delete(buildKey);
+      });
+    compatibleTemplateBuilds.set(buildKey, build);
+    return build;
+  }
+
+  async createCompatibleTemplate(binary, sourceSummary, resources) {
+    const args = [
+      "template",
+      "create-from-image",
+      "--image",
+      sourceSummary.imageInfo,
+      "--writable-layer-size",
+      resources.writableLayerSize,
+      "--instance-type",
+      resources.instanceType,
+      "--network-type",
+      resources.networkType,
+      "--cpu",
+      String(cpuMillicores(resources.cpu)),
+      "--memory",
+      String(memoryMi(resources.memory)),
+      "--json"
+    ];
+    const create = await commandSummary(binary, args, parseJsonFromOutput);
+    if (!create.ok) {
+      throw new Error(`could not create a resource-compatible CubeSandbox template: ${create.reason}`);
+    }
+    const job = create.value?.job;
+    const jobId = job?.job_id || job?.jobId;
+    const templateId = job?.template_id || job?.templateId;
+    if (!jobId || !templateId || !isSuccessRet(create.value?.ret)) {
+      throw new Error("CubeSandbox template build did not return a job and template id");
+    }
+
+    const timeoutMs = Number(this.config.templateBuildTimeoutMs || 20 * 60 * 1000);
+    const intervalMs = Number(this.config.templateBuildPollIntervalMs || 2000);
+    const deadline = Date.now() + timeoutMs;
+    let current = job;
+    while (Date.now() < deadline) {
+      const state = String(current?.status || "").toUpperCase();
+      if (state === "READY") break;
+      if (state === "FAILED" || state === "ERROR") {
+        throw new Error(
+          `CubeSandbox template ${templateId} build failed: `
+          + (current?.error_message || current?.errorMessage || current?.phase || state)
+        );
+      }
+      await delay(intervalMs);
+      const status = await commandSummary(
+        binary,
+        ["template", "status", "--job-id", jobId, "--json"],
+        parseJsonFromOutput
+      );
+      if (!status.ok) {
+        throw new Error(`could not read CubeSandbox template build ${jobId}: ${status.reason}`);
+      }
+      current = status.value?.job || {};
+    }
+    if (String(current?.status || "").toUpperCase() !== "READY") {
+      throw new Error(`CubeSandbox template ${templateId} build timed out after ${timeoutMs}ms`);
+    }
+
+    const detail = await this.inspectTemplate({
+      id: templateId,
+      status: "READY",
+      imageInfo: sourceSummary.imageInfo
+    }, binary);
+    if (detail.detailError || !templateResourcesMatch(detail, resources)) {
+      throw new Error(
+        `CubeSandbox template ${templateId} completed with incompatible resources `
+        + `${describeTemplateResources(detail)}; requested ${describeTemplateResources(resources)}`
+      );
+    }
+    return {
+      templateId,
+      sourceTemplateId: sourceSummary.id,
+      changed: true,
+      created: true,
+      jobId,
+      resources
+    };
   }
 
   async createSandbox(world, request) {
@@ -1761,6 +1918,18 @@ function parseTemplates(output) {
   }));
 }
 
+function parseTemplateListJson(output) {
+  const raw = parseJson(output);
+  if (!isSuccessRet(raw?.ret)) throw new Error(raw?.ret?.ret_msg || "CubeSandbox template list failed");
+  return (Array.isArray(raw?.data) ? raw.data : []).map((template) => ({
+    id: template.template_id || template.templateId || template.id,
+    status: template.status || "UNKNOWN",
+    version: template.version || null,
+    imageInfo: template.image_info || template.imageInfo || null,
+    jobId: template.job_id || template.jobId || null
+  })).filter((template) => template.id);
+}
+
 function parseSandboxes(output) {
   const rows = tableRows(output, "sandbox_id");
   return rows.map((columns) => ({
@@ -1836,6 +2005,64 @@ function isSuccessRet(ret) {
   if (!ret) return false;
   const code = Number(ret.ret_code ?? ret.retCode ?? ret.code);
   return code === 0 || code === 200;
+}
+
+function normalizeTemplateResources(resources) {
+  return {
+    writableLayerSize: String(resources.writableLayerSize || "").trim(),
+    cpu: String(resources.cpu || "2000m").trim(),
+    memory: String(resources.memory || "2000Mi").trim(),
+    instanceType: String(resources.instanceType || "cubebox").trim(),
+    networkType: String(resources.networkType || "tap").trim()
+  };
+}
+
+function templateResourcesMatch(template, requested) {
+  try {
+    return sizeQuantityBytes(template.writableLayerSize) === sizeQuantityBytes(requested.writableLayerSize)
+      && cpuMillicores(template.cpu) === cpuMillicores(requested.cpu)
+      && sizeQuantityBytes(template.memory) === sizeQuantityBytes(requested.memory)
+      && String(template.instanceType || "cubebox") === String(requested.instanceType || "cubebox")
+      && String(template.networkType || "tap") === String(requested.networkType || "tap");
+  } catch {
+    return false;
+  }
+}
+
+function describeTemplateResources(resources = {}) {
+  return [
+    resources.writableLayerSize || "?",
+    resources.cpu || "?",
+    resources.memory || "?",
+    resources.instanceType || "cubebox",
+    resources.networkType || "tap"
+  ].join("/");
+}
+
+function cpuMillicores(value) {
+  const text = String(value || "").trim();
+  const milli = /^(\d+(?:\.\d+)?)m$/i.exec(text);
+  if (milli) return Math.round(Number(milli[1]));
+  if (/^\d+(?:\.\d+)?$/.test(text)) return Math.round(Number(text) * 1000);
+  throw new Error(`invalid CPU quantity: ${value}`);
+}
+
+function memoryMi(value) {
+  const text = String(value || "").trim();
+  if (/^\d+$/.test(text)) return Number(text);
+  return Math.max(1, Math.ceil(sizeQuantityBytes(text) / 1024 ** 2));
+}
+
+function sizeQuantityBytes(value) {
+  const match = /^(\d+(?:\.\d+)?)([KMGTP])?(i)?B?$/i.exec(String(value || "").trim());
+  if (!match) throw new Error(`invalid size quantity: ${value}`);
+  const power = match[2] ? { K: 1, M: 2, G: 3, T: 4, P: 5 }[match[2].toUpperCase()] : 0;
+  const base = match[3] ? 1024 : 1000;
+  return Number(match[1]) * base ** power;
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, milliseconds)));
 }
 
 function operationFinishedStatus(status) {

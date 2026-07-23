@@ -79,15 +79,85 @@ TABLE
   assert.deepEqual(args, ["list", "--all", "--wide", "--filter", "kakurizai.world=escape-a137c152cf22"]);
 });
 
+test("cube client builds a resource-compatible template before sandbox creation", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-template-resources-"));
+  const mastercli = path.join(tmp, "cubemastercli");
+  const argsFile = path.join(tmp, "args.txt");
+  await fs.writeFile(mastercli, `#!/bin/sh
+printf '%s\\n' "$*" >> "${argsFile}"
+case "$1 $2" in
+  "template list")
+    printf '%s\\n' '{"ret":{"ret_code":200,"ret_msg":"success"},"data":[{"template_id":"tpl-source","status":"READY","version":"v2","image_info":"registry.example/sandbox@sha256:abc"}]}'
+    ;;
+  "tpl info")
+    case "$*" in
+      *"tpl-compatible"*)
+        printf '%s\\n' '{"ret":{"ret_code":200},"template_id":"tpl-compatible","status":"READY","version":"v2","instance_type":"cubebox","create_request":{"network_type":"tap","annotations":{"cube.master.rootfs.writable_layer_size":"20G"},"containers":[{"resources":{"cpu":"2000m","mem":"4000Mi"}}]}}'
+        ;;
+      *)
+        printf '%s\\n' '{"ret":{"ret_code":200},"template_id":"tpl-source","status":"READY","version":"v2","instance_type":"cubebox","create_request":{"network_type":"tap","annotations":{"cube.master.rootfs.writable_layer_size":"1G"},"containers":[{"resources":{"cpu":"2000m","mem":"2000Mi"}}]}}'
+        ;;
+    esac
+    ;;
+  "template create-from-image")
+    printf '%s\\n' '{"ret":{"ret_code":200,"ret_msg":"success"},"job":{"job_id":"job-compatible","template_id":"tpl-compatible","status":"PENDING"}}'
+    ;;
+  "template status")
+    printf '%s\\n' '{"ret":{"ret_code":200,"ret_msg":"success"},"job":{"job_id":"job-compatible","template_id":"tpl-compatible","status":"READY","progress":100}}'
+    ;;
+  *)
+    printf 'unexpected args: %s\\n' "$*" >&2
+    exit 9
+    ;;
+esac
+`, "utf8");
+  await fs.chmod(mastercli, 0o755);
+
+  const client = new CubeSandboxClient({
+    mode: "master",
+    mastercli,
+    templateBuildPollIntervalMs: 1,
+    templateBuildTimeoutMs: 1000
+  });
+  const result = await client.resolveTemplateForResources({
+    template: "tpl-source",
+    writableLayerSize: "20G",
+    cpu: "2000m",
+    memory: "4000Mi",
+    instanceType: "cubebox",
+    networkType: "tap"
+  });
+
+  assert.equal(result.templateId, "tpl-compatible");
+  assert.equal(result.sourceTemplateId, "tpl-source");
+  assert.equal(result.changed, true);
+  assert.equal(result.created, true);
+  const args = await fs.readFile(argsFile, "utf8");
+  assert.match(args, /template create-from-image --image registry\.example\/sandbox@sha256:abc/);
+  assert.match(args, /--writable-layer-size 20G/);
+  assert.match(args, /--cpu 2000 --memory 4000/);
+});
+
 test("CubeSandbox create failure is saved as failed, not pending", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-create-failed-"));
   const mastercli = path.join(tmp, "cubemastercli");
   await fs.writeFile(mastercli, `#!/bin/sh
-cat <<'LOG'
+case "$1 $2" in
+  "template list")
+    printf '%s\\n' '{"ret":{"ret_code":200,"ret_msg":"success"},"data":[{"template_id":"tpl-test","status":"READY","version":"v2","image_info":"registry.example/sandbox@sha256:test"}]}'
+    ;;
+  "tpl info")
+    printf '%s\\n' '{"ret":{"ret_code":200},"template_id":"tpl-test","status":"READY","version":"v2","instance_type":"cubebox","create_request":{"network_type":"tap","annotations":{"cube.master.rootfs.writable_layer_size":"10G"},"containers":[{"resources":{"cpu":"2000m","mem":"2000Mi"}}]}}'
+    ;;
+  "multirun --norm")
+    cat <<'LOG'
 2026/06/25 04:41:18 doCreateSandbox RequestId:test,sandBoxId:,Ip:,HostID:,HostIP:,code:130545, message:derive v2 default-medium from template fail: cubecow error code=invalid_argument raw_rc=-4 action=bug: invalid argument: 'rootfs-gen0' is a snapshot; cannot resize,cost:39
 2026/06/25 04:41:23 totalRunSuccCnt:0
 2026/06/25 04:41:23 totalRunErr:2
 LOG
+    exit 1
+    ;;
+esac
 `, "utf8");
   await fs.chmod(mastercli, 0o755);
 
