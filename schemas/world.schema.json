@@ -8,7 +8,7 @@
     "id": { "type": "string", "pattern": "^[a-z0-9._-]+-[a-f0-9]{12}$" },
     "name": { "type": "string", "minLength": 1 },
     "status": {
-      "enum": ["creating", "created", "ready", "pending-cube", "pending-agentctl", "failed"]
+      "enum": ["creating", "created", "ready", "paused", "pending-cube", "pending-overlay", "pending-agentctl", "failed"]
     },
     "sourcePath": { "type": "string" },
     "backend": {
@@ -20,7 +20,9 @@
         "btrfs",
         "path-preserving-overlay",
         "windows-minifilter-overlay",
-        "cube-sandbox-overlay"
+        "cube-sandbox-overlay",
+        "gvisor",
+        "fuchsia"
       ]
     },
     "createdAt": { "type": "string", "format": "date-time" },

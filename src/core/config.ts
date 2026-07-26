@@ -92,6 +92,7 @@ export function defaultConfig(home = defaultHome()) {
       cubecli: process.env.KAKURIZAI_CUBECLI || "cubecli",
       mastercli: process.env.KAKURIZAI_CUBEMASTERCLI || "cubemastercli",
       apiBaseUrl: process.env.KAKURIZAI_CUBE_API || null,
+      apiTimeoutMs: Number(process.env.KAKURIZAI_CUBE_API_TIMEOUT_MS || 120000),
       template: process.env.KAKURIZAI_CUBE_TEMPLATE || "kakurizai-base",
       namespace: process.env.KAKURIZAI_CUBE_NAMESPACE || "kakurizai",
       workspacePath: "/workspace",
@@ -122,6 +123,33 @@ export function defaultConfig(home = defaultHome()) {
         commands: ["bash", "curl", "git", "ip", "nano", "ping", "ps", "sudo", "tmux"]
       }
     },
+    gvisor: {
+      docker: process.env.KAKURIZAI_GVISOR_DOCKER || "docker",
+      dockerHost: process.env.KAKURIZAI_GVISOR_DOCKER_HOST || null,
+      runtime: process.env.KAKURIZAI_GVISOR_RUNTIME || "runsc",
+      image: process.env.KAKURIZAI_GVISOR_IMAGE || "ubuntu:24.04",
+      workspacePath: "/workspace",
+      dockerNetwork: process.env.KAKURIZAI_GVISOR_DOCKER_NETWORK || "bridge",
+      mountMode: "agctl-overlay",
+      cpu: process.env.KAKURIZAI_GVISOR_CPU || "1000m",
+      memory: process.env.KAKURIZAI_GVISOR_MEMORY || "1024Mi",
+      pull: process.env.KAKURIZAI_GVISOR_PULL || "missing",
+      createTimeoutMs: 300000
+    },
+    fuchsia: {
+      ffx: process.env.KAKURIZAI_FFX || "ffx",
+      isolateDir: process.env.KAKURIZAI_FUCHSIA_ISOLATE_DIR || path.join(home, "fuchsia", "ffx"),
+      productBundle: process.env.KAKURIZAI_FUCHSIA_PRODUCT_BUNDLE || null,
+      acceleration: process.env.KAKURIZAI_FUCHSIA_ACCELERATION || "auto",
+      engine: process.env.KAKURIZAI_FUCHSIA_ENGINE || null,
+      network: process.env.KAKURIZAI_FUCHSIA_NETWORK || "user",
+      cpu: process.env.KAKURIZAI_FUCHSIA_CPU || "2",
+      startupTimeoutSeconds: Number(process.env.KAKURIZAI_FUCHSIA_STARTUP_TIMEOUT || 180),
+      targetTimeoutMs: 60000,
+      repositoryEnabled: process.env.KAKURIZAI_FUCHSIA_REPOSITORY !== "false",
+      repositoryAddress: process.env.KAKURIZAI_FUCHSIA_REPOSITORY_ADDRESS || "[::]:0",
+      disableAnalytics: true
+    },
     isolatedAgent: {
       agentctl: process.env.AGCTL_AGENTCTL || process.env.AGENTCTL || "agentctl",
       sourceTree: "vendor/IPA-RS-IsolatedAgent"
@@ -145,6 +173,8 @@ export function mergeConfig(base, override) {
   result.cluster = { ...base.cluster, ...(override?.cluster || {}) };
   result.cluster.failover = { ...base.cluster?.failover, ...(override?.cluster?.failover || {}) };
   result.cube = { ...base.cube, ...(override?.cube || {}) };
+  result.gvisor = { ...base.gvisor, ...(override?.gvisor || {}) };
+  result.fuchsia = { ...base.fuchsia, ...(override?.fuchsia || {}) };
   result.isolatedAgent = { ...base.isolatedAgent, ...(override?.isolatedAgent || {}) };
   return result;
 }

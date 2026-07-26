@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import pty from "node-pty";
 import { WebSocket, WebSocketServer } from "ws";
 import { createAuthProvider } from "./auth/providers.js";
+import { getBackend } from "./backends/index.js";
 import { checkpointFailoverReplicas, createJoinToken, joinNode, listClusterNodes, reconcileFailover, removeClusterNode, replicateWorld, startFailoverController } from "./core/cluster.js";
 import { collectMetrics, listTraces, prometheusText, recordTraceEvent, startTrace, stopTrace } from "./core/observability.js";
 import { applyWorld, changedPaths, createHeteroNetworkLab, createKubernetesLab, createWorld, ensureWorldProvisioned, execWorld, getWorld, listWorlds, openWorld, pauseWorld, removeWorld, resumeWorld, updateWorldConfig } from "./core/worlds.js";
@@ -99,8 +100,17 @@ async function handleUpgrade(config, auth, sessions, shellServer, request, socke
   request.user = session.user;
   request.authSession = session.session;
   authorize(config, request, "shell:open");
-  const world = await ensureWorldProvisioned(config, decodeURIComponent(match[1]));
-  const shell = new CubeSandboxClient(config.cube).shellCommand(world);
+  let world = await getWorld(config, decodeURIComponent(match[1]));
+  if (world.backend === "cube-sandbox-overlay") {
+    world = await ensureWorldProvisioned(config, world.id);
+  }
+  const backend = getBackend(config, world.backend);
+  if (typeof backend.shellCommand !== "function") {
+    const error = new Error(`backend ${world.backend} does not support an interactive shell`);
+    error.statusCode = 409;
+    throw error;
+  }
+  const shell = backend.shellCommand(world);
   void request.audit?.write(auditRecord(request, 101, { action: "shell.open", target: world.id }));
   shellServer.handleUpgrade(request, socket, head, (ws) => {
     shellServer.emit("connection", ws, request, world);
@@ -118,6 +128,7 @@ function attachShell(world, ws, shell) {
       cwd: process.cwd(),
       env: {
         ...process.env,
+        ...(shell.env || {}),
         TERM: "xterm-256color",
         COLORTERM: "truecolor",
         CLICOLOR: "1"
@@ -216,6 +227,11 @@ class DevAccessManager {
   }
 
   async ensureSessionLocked(world, options = {}) {
+    if (world.backend !== "cube-sandbox-overlay") {
+      const error = new Error(`developer access currently requires the CubeSandbox backend; ${world.backend} supports terminal and exec access`);
+      error.statusCode = 409;
+      throw error;
+    }
     world = await ensureWorldProvisioned(this.config, world.id);
     const needsVscode = options.vscode !== false;
     const needsSsh = options.ssh === true;

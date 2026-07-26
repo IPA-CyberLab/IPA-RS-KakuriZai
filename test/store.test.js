@@ -109,3 +109,50 @@ test("duplicate world names require exact id for destructive operations", async 
   assert.equal(removed.id, second.id);
   assert.deepEqual(remaining.map((world) => world.id), [first.id]);
 });
+
+test("gVisor copy-on-write workspace reports and applies an exact tree diff", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-gvisor-cow-"));
+  const source = path.join(tmp, "source");
+  await fs.mkdir(path.join(source, "deleted-dir"), { recursive: true });
+  await fs.writeFile(path.join(source, "same.txt"), "same\n");
+  await fs.writeFile(path.join(source, "changed.txt"), "before\n");
+  await fs.writeFile(path.join(source, "deleted-dir", "old.txt"), "old\n");
+  await fs.symlink("same.txt", path.join(source, "link"));
+  const config = await loadConfig({ home: path.join(tmp, "home"), createSecrets: false });
+  const store = new WorldStore(config);
+  const world = await store.create({
+    name: "gvisor-cow",
+    sourcePath: source,
+    backend: "gvisor",
+    backendConfig: { mountMode: "agctl-overlay" }
+  });
+  world.backendConfig.workspaceStrategy = "copy-on-write";
+  await store.save(world);
+
+  const upper = path.join(world.paths.upper, world.backendConfig.mounts[0].id);
+  await fs.cp(source, upper, { recursive: true, verbatimSymlinks: true });
+  await fs.writeFile(path.join(upper, "changed.txt"), "after\n");
+  await fs.rm(path.join(upper, "deleted-dir"), { recursive: true });
+  await fs.rm(path.join(upper, "link"));
+  await fs.symlink("changed.txt", path.join(upper, "link"));
+  await fs.writeFile(path.join(upper, "new.txt"), "new\n");
+
+  const dryRun = await store.apply(world, { dryRun: true });
+  assert.deepEqual(
+    dryRun.changes.map((change) => `${change.action}:${change.path}`),
+    [
+      "upsert:changed.txt",
+      "delete:deleted-dir",
+      "upsert:link",
+      "upsert:new.txt"
+    ]
+  );
+  assert.equal(await fs.readFile(path.join(source, "changed.txt"), "utf8"), "before\n");
+
+  const applied = await store.apply(world);
+  assert.equal(applied.applied, true);
+  assert.equal(await fs.readFile(path.join(source, "changed.txt"), "utf8"), "after\n");
+  assert.equal(await fs.readFile(path.join(source, "new.txt"), "utf8"), "new\n");
+  assert.equal(await fs.readlink(path.join(source, "link")), "changed.txt");
+  await assert.rejects(fs.stat(path.join(source, "deleted-dir")), /ENOENT/);
+});

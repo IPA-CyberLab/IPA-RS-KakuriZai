@@ -1,6 +1,6 @@
 # IPA-RS KakuriZai
 
-KakuriZai is a sandbox lifecycle control plane and compact Studio UI for isolated workspaces. CubeSandbox is the sandbox runtime. KakuriZai adds a `cube-sandbox-overlay` runtime path that maps a host source folder to a writable per-sandbox upper layer.
+KakuriZai is a sandbox lifecycle control plane and compact Studio UI for isolated workspaces. Its isolated runtime backends are CubeSandbox microVMs, gVisor (`runsc`) containers, and Fuchsia emulators, alongside the native IsolatedAgent backends.
 
 ## Submodules
 
@@ -16,6 +16,8 @@ git submodule update --init --recursive
 ```bash
 npm test
 npm run agctl -- create --source /path/to/source --name demo --backend cube-sandbox-overlay
+npm run agctl -- create --name guarded --no-host-mount --backend gvisor
+npm run agctl -- create --name fuchsia --no-host-mount --backend fuchsia --product-bundle /path/to/product_bundle
 npm run agctl -- list
 npm start
 ```
@@ -214,7 +216,49 @@ Default backend selection preserves the IsolatedAgent defaults:
 - Windows: `windows-block-clone`
 - Linux: `linux-native`
 
-`cube-sandbox-overlay` adds strong execution isolation by running commands inside a CubeSandbox sandbox. The host source is mounted read-only as lower, and the sandbox upper/work paths are mounted separately. Inside the sandbox, overlayfs or fuse-overlayfs presents `/workspace`.
+The explicitly selectable isolated runtimes have the same KakuriZai lifecycle: create, exec/shell, pause, resume, and remove.
+
+| Backend | Runtime | Host workspace behavior | Prerequisite |
+| --- | --- | --- | --- |
+| `cube-sandbox-overlay` | CubeSandbox microVM | Read-only lower plus per-World upper/work/whiteouts | Running CubeSandbox `cubecli`, or CubeMaster `cubemastercli` |
+| `gvisor` | Docker with `runsc` | A private copy is bind-mounted; `agctl changed/apply` computes the exact tree diff | Docker with a registered `runsc` runtime |
+| `fuchsia` | `ffx emu` | No Linux host bind mounts; use `--no-host-mount` | Fuchsia SDK, `ffx`, and a downloaded product bundle |
+
+CubeSandbox example:
+
+```sh
+export KAKURIZAI_CUBE_MODE=master
+export KAKURIZAI_CUBE_TEMPLATE=tpl-xxxxxxxxxxxxxxxxxxxxxxxx
+agctl create --name cube --no-host-mount --backend cube-sandbox-overlay \
+  --cpu 1000m --memory 1024Mi --writable-layer-size 1Gi
+agctl exec cube -- uname -a
+```
+
+CubeMaster v2 owns the writable rootfs volume. KakuriZai keeps the container `/` mount but does not duplicate CubeMaster's `cube_rootfs_rw` volume definition.
+
+gVisor example:
+
+```sh
+docker info --format '{{json .Runtimes}}'  # must contain runsc
+export KAKURIZAI_GVISOR_RUNTIME=runsc
+export KAKURIZAI_GVISOR_IMAGE=ubuntu:24.04
+agctl create --name guarded --no-host-mount --backend gvisor
+agctl exec guarded -- sh -lc 'uname -a; cat /proc/version'
+```
+
+For a host workspace, omit `--no-host-mount` and pass `--source`. The default `agctl-overlay` mode clones the source into the World upper directory before Docker starts. Changes remain private until `agctl apply`.
+
+Fuchsia example:
+
+```sh
+export KAKURIZAI_FFX=/path/to/fuchsia-sdk/tools/x64/ffx
+export KAKURIZAI_FUCHSIA_PRODUCT_BUNDLE=/path/to/product_bundle
+export KAKURIZAI_FUCHSIA_ACCELERATION=auto
+agctl create --name fuchsia --no-host-mount --backend fuchsia
+agctl exec fuchsia -- uname -a
+```
+
+Kakurizai starts `ffx emu` headlessly, verifies the target with `ffx target show`, and optionally starts/registers the product-bundle package repository. Pause persistently stops the emulator and resume uses `ffx emu start --reuse`.
 
 ## Existing agctl
 

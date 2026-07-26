@@ -130,6 +130,33 @@ test("cube request carries writable layer and network settings", async () => {
   assert.equal(rootMount.container_path, "/");
 });
 
+test("CubeMaster v2 owns the writable rootfs volume but keeps the container mount", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-master-v2-"));
+  const config = await loadConfig({ home: path.join(tmp, "home"), createSecrets: false });
+  const store = new WorldStore(config);
+  const world = await store.create({
+    name: "cube-master-v2",
+    backend: "cube-sandbox-overlay",
+    backendConfig: { hostMount: false, mountMode: "none" }
+  });
+
+  const request = buildCubeSandboxRequest(world, {
+    template: "tpl-v2",
+    templateVersion: "v2",
+    templateOwnedRootfs: true,
+    workspacePath: "/workspace",
+    writableLayerSize: "1Gi"
+  });
+
+  assert.equal(request.volumes.some((volume) => volume.name === "cube_rootfs_rw"), false);
+  assert.deepEqual(
+    request.containers[0].volume_mounts.find((mount) => mount.name === "cube_rootfs_rw"),
+    { name: "cube_rootfs_rw", container_path: "/" }
+  );
+  assert.equal(request.containers[0].working_dir, "/");
+  assert.match(request.containers[0].args[0], /mkdir -p '\/workspace'/);
+});
+
 test("cube request can launch without a host mount", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-"));
   const config = await loadConfig({ home: path.join(tmp, "home"), createSecrets: false });

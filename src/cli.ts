@@ -4,6 +4,7 @@ import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { commandExists } from "./core/fs.js";
+import { getBackend } from "./backends/index.js";
 import { parseBooleanOption } from "./core/network.js";
 import { initConfigFile, loadConfig } from "./core/config.js";
 import { checkpointFailoverReplicas, createJoinToken, joinNode, listClusterNodes, reconcileFailover, removeClusterNode, replicateWorld } from "./core/cluster.js";
@@ -21,6 +22,7 @@ import {
   createHeteroNetworkLab,
   createKubernetesLab,
   createWorld,
+  ensureWorldProvisioned,
   execWorld,
   getWorld,
   listWorlds,
@@ -72,8 +74,10 @@ function help() {
   console.log(`agctl
 
 Sandbox commands:
-  agctl create --source <folder> --name <name> [--backend cube-sandbox-overlay]
-  agctl create --name <name> --no-host-mount [--network tap] [--expose-port 6443]
+  agctl create --source <folder> --name <name> [--backend cube-sandbox-overlay|gvisor]
+  agctl create --name <name> --no-host-mount --backend <cube-sandbox-overlay|gvisor|fuchsia>
+    [--template <cube-template|container-image|product-bundle>] [--cpu 2000m] [--memory 2GiB]
+    [--mount-mode agctl-overlay|cubesandbox-readonly|unsafe-rw] [--network tap] [--expose-port 6443]
   agctl lab kubernetes --name <name> [--control-planes 1] [--workers 2] [--json]
   agctl lab hetero-network --name <name> [--public-nodes 1] [--nat-nodes 1] [--double-nat-nodes 1] [--json]
   agctl apply -f sandbox.yaml [--json]
@@ -121,6 +125,11 @@ async function create(config, args) {
   const name = takeOption(args, "--name") || takeOption(args, "-n");
   const backend = takeOption(args, "--backend") || config.defaultBackend;
   const noHostMount = takeFlag(args, "--no-host-mount");
+  const mountMode = takeOption(args, "--mount-mode");
+  const template = takeOption(args, "--template") || takeOption(args, "--image") || takeOption(args, "--product-bundle");
+  const cpu = takeOption(args, "--cpu");
+  const memory = takeOption(args, "--memory");
+  const writableLayerSize = takeOption(args, "--writable-layer-size") || takeOption(args, "--disk");
   const networkType = takeOption(args, "--network") || takeOption(args, "--network-type");
   const exposedPorts = takeRepeatedOption(args, "--expose-port");
   const dnsServers = takeRepeatedOption(args, "--dns");
@@ -131,13 +140,18 @@ async function create(config, args) {
   const mounts = [
     ...mountOptions,
     ...(sourcePath ? [{ sourcePath, mode: undefined }] : [])
-  ].map((mount) => ({ ...mount, mode: mount.mode || undefined }));
+  ].map((mount) => ({ ...mount, mode: mount.mode || mountMode || undefined }));
   const world = await createWorld(config, {
     sourcePath,
     mounts: mounts.length ? mounts : undefined,
     name,
     backend,
     hostMount: !noHostMount,
+    mountMode,
+    template,
+    cpu,
+    memory,
+    writableLayerSize,
     networkType,
     network: {
       type: networkType,
@@ -707,7 +721,16 @@ async function worldOrDelegate(config, command, args) {
   if (!ref) return delegateToIsolatedAgent(config, [command, ...args]);
   try {
     if (command === "shell") {
-      return execWorld(config, ref, [process.env.SHELL || "bash"], { inherit: true, tty: true });
+      let world = await getWorld(config, ref);
+      if (world.backend === "cube-sandbox-overlay") {
+        world = await ensureWorldProvisioned(config, world.id);
+      }
+      const backend = getBackend(config, world.backend);
+      if (typeof backend.shellCommand === "function") {
+        const shell = backend.shellCommand(world);
+        return runCommand(shell.command, shell.args, { inherit: true, env: shell.env });
+      }
+      return execWorld(config, ref, ["sh"], { inherit: true, tty: true });
     }
     const separator = args.indexOf("--");
     const execArgs = separator >= 0 ? args.slice(separator + 1) : args.slice(1);

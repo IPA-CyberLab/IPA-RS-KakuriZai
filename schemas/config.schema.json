@@ -15,7 +15,9 @@
         "btrfs",
         "path-preserving-overlay",
         "windows-minifilter-overlay",
-        "cube-sandbox-overlay"
+        "cube-sandbox-overlay",
+        "gvisor",
+        "fuchsia"
       ]
     },
     "studio": {
@@ -179,11 +181,47 @@
         "cubecli": { "type": "string" },
         "mastercli": { "type": "string" },
         "apiBaseUrl": { "type": ["string", "null"] },
+        "apiTimeoutMs": { "type": "integer", "minimum": 1000 },
         "template": { "type": "string" },
         "namespace": { "type": "string" },
         "cpu": { "type": "string" },
         "memory": { "type": "string" },
         "workspacePath": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "gvisor": {
+      "type": "object",
+      "properties": {
+        "docker": { "type": "string" },
+        "dockerHost": { "type": ["string", "null"] },
+        "runtime": { "type": "string" },
+        "image": { "type": "string" },
+        "workspacePath": { "type": "string" },
+        "dockerNetwork": { "type": ["string", "null"] },
+        "mountMode": { "enum": ["agctl-overlay", "cubesandbox-readonly", "unsafe-rw", "none"] },
+        "cpu": { "type": "string" },
+        "memory": { "type": "string" },
+        "pull": { "enum": ["always", "missing", "never"] },
+        "createTimeoutMs": { "type": "integer", "minimum": 1000 }
+      },
+      "additionalProperties": true
+    },
+    "fuchsia": {
+      "type": "object",
+      "properties": {
+        "ffx": { "type": "string" },
+        "isolateDir": { "type": "string" },
+        "productBundle": { "type": ["string", "null"] },
+        "acceleration": { "enum": ["auto", "hyper", "none"] },
+        "engine": { "enum": ["femu", "qemu", null] },
+        "network": { "enum": ["auto", "user", "tap", "none"] },
+        "cpu": { "type": ["string", "integer"] },
+        "startupTimeoutSeconds": { "type": "integer", "minimum": 1 },
+        "targetTimeoutMs": { "type": "integer", "minimum": 1000 },
+        "repositoryEnabled": { "type": "boolean" },
+        "repositoryAddress": { "type": "string" },
+        "disableAnalytics": { "type": "boolean" }
       },
       "additionalProperties": true
     },

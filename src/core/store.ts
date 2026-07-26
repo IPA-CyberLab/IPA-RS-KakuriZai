@@ -54,7 +54,9 @@ export class WorldStore {
       mountMode: input.backendConfig?.mountMode,
       mounts: input.backendConfig?.mounts
     }, {
-      workspacePath: this.config.cube?.workspacePath
+      workspacePath: input.backend === "gvisor"
+        ? this.config.gvisor?.workspacePath
+        : this.config.cube?.workspacePath
     });
     const hostMount = mountConfig.length > 0;
     const sourcePath = hostMount ? primaryMount(mountConfig).sourcePath : paths.source;
@@ -148,12 +150,17 @@ export class WorldStore {
       const changed = [];
       for (const mount of mounts) {
         if (mount.mode !== "agctl-overlay") continue;
-        await collectUpperChanges({
-          changed,
-          upperRoot: path.join(world.paths.upper, mount.id),
-          whiteoutsRoot: path.join(world.paths.whiteouts, mount.id),
-          mount
-        });
+        const upperRoot = path.join(world.paths.upper, mount.id);
+        if (world.backendConfig?.workspaceStrategy === "copy-on-write") {
+          await collectCopyOnWriteChanges({ changed, upperRoot, mount });
+        } else {
+          await collectUpperChanges({
+            changed,
+            upperRoot,
+            whiteoutsRoot: path.join(world.paths.whiteouts, mount.id),
+            mount
+          });
+        }
       }
       return dedupeChanges(changed);
     }
@@ -224,6 +231,82 @@ async function collectUpperChanges({ changed, upperRoot, whiteoutsRoot, mount })
   }
 }
 
+async function collectCopyOnWriteChanges({ changed, upperRoot, mount }) {
+  const [upperEntries, sourceEntries] = await Promise.all([
+    treeEntries(upperRoot),
+    treeEntries(mount.sourcePath)
+  ]);
+  const replacements = new Set();
+  for (const [relativePath, upper] of upperEntries) {
+    const source = sourceEntries.get(relativePath);
+    if (source && await entriesEqual(upper, source)) continue;
+    changed.push(changeForMount("upsert", relativePath, "copy-on-write", mount, upperRoot));
+    if (!source || source.type !== upper.type || upper.type !== "directory") {
+      replacements.add(relativePath);
+    }
+  }
+  const deletedDirectories = new Set();
+  for (const [relativePath, source] of sourceEntries) {
+    if (upperEntries.has(relativePath)) continue;
+    if (hasAncestor(relativePath, deletedDirectories) || hasAncestor(relativePath, replacements)) continue;
+    changed.push(changeForMount("delete", relativePath, "copy-on-write", mount, upperRoot));
+    if (source.type === "directory") deletedDirectories.add(relativePath);
+  }
+}
+
+async function treeEntries(root) {
+  const entries = new Map();
+  for await (const entry of walkFiles(root)) {
+    entries.set(entry.relativePath, entry);
+  }
+  return entries;
+}
+
+async function entriesEqual(left, right) {
+  if (left.type !== right.type) return false;
+  if (left.type === "directory") return true;
+  if (left.type === "symlink") {
+    const [leftTarget, rightTarget] = await Promise.all([fs.readlink(left.path), fs.readlink(right.path)]);
+    return leftTarget === rightTarget;
+  }
+  if (left.type !== "file") return false;
+  const [leftStat, rightStat] = await Promise.all([fs.lstat(left.path), fs.lstat(right.path)]);
+  if (leftStat.size !== rightStat.size || (leftStat.mode & 0o777) !== (rightStat.mode & 0o777)) return false;
+  return filesEqual(left.path, right.path, leftStat.size);
+}
+
+async function filesEqual(leftPath, rightPath, size) {
+  const [left, right] = await Promise.all([fs.open(leftPath, "r"), fs.open(rightPath, "r")]);
+  try {
+    const chunkSize = 64 * 1024;
+    const leftBuffer = Buffer.allocUnsafe(chunkSize);
+    const rightBuffer = Buffer.allocUnsafe(chunkSize);
+    for (let position = 0; position < size; position += chunkSize) {
+      const length = Math.min(chunkSize, size - position);
+      const [leftRead, rightRead] = await Promise.all([
+        left.read(leftBuffer, 0, length, position),
+        right.read(rightBuffer, 0, length, position)
+      ]);
+      if (leftRead.bytesRead !== rightRead.bytesRead
+        || !leftBuffer.subarray(0, leftRead.bytesRead).equals(rightBuffer.subarray(0, rightRead.bytesRead))) {
+        return false;
+      }
+    }
+    return true;
+  } finally {
+    await Promise.all([left.close(), right.close()]);
+  }
+}
+
+function hasAncestor(relativePath, candidates) {
+  let current = path.dirname(relativePath);
+  while (current && current !== ".") {
+    if (candidates.has(current)) return true;
+    current = path.dirname(current);
+  }
+  return false;
+}
+
 function changeForMount(action, relativePath, source, mount, upperRoot) {
   return {
     action,
@@ -244,7 +327,9 @@ function structuredMountsForWorld(world, config) {
     mountMode: world.backendConfig?.mountMode,
     mounts: world.backendConfig.mounts
   }, {
-    workspacePath: config.cube?.workspacePath
+    workspacePath: world.backend === "gvisor"
+      ? config.gvisor?.workspacePath
+      : config.cube?.workspacePath
   });
 }
 

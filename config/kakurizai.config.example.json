@@ -69,11 +69,37 @@
     "cubecli": "cubecli",
     "mastercli": "cubemastercli",
     "apiBaseUrl": null,
+    "apiTimeoutMs": 120000,
     "template": "kakurizai-base",
     "namespace": "kakurizai",
     "cpu": "2000m",
     "memory": "2000Mi",
     "workspacePath": "/workspace"
+  },
+  "gvisor": {
+    "docker": "docker",
+    "dockerHost": null,
+    "runtime": "runsc",
+    "image": "ubuntu:24.04",
+    "workspacePath": "/workspace",
+    "dockerNetwork": "bridge",
+    "mountMode": "agctl-overlay",
+    "cpu": "1000m",
+    "memory": "1024Mi",
+    "pull": "missing"
+  },
+  "fuchsia": {
+    "ffx": "ffx",
+    "isolateDir": ".kakurizai/fuchsia/ffx",
+    "productBundle": null,
+    "acceleration": "auto",
+    "engine": null,
+    "network": "user",
+    "cpu": "2",
+    "startupTimeoutSeconds": 180,
+    "repositoryEnabled": true,
+    "repositoryAddress": "[::]:0",
+    "disableAnalytics": true
   },
   "isolatedAgent": {
     "agentctl": "agentctl",

@@ -554,6 +554,8 @@ function App() {
   const [stateFilter, setStateFilter] = React.useState<StateFilter>("all");
   const [launch, setLaunch] = React.useState({
     name: "kakurizai-sandbox",
+    backend: "cube-sandbox-overlay",
+    template: "",
     hostMount: false,
     sourcePath: "",
     mountMode: "agctl-overlay",
@@ -593,6 +595,9 @@ function App() {
   const selected = inventory.find((row) => row.key === selectedId) || filteredInventory[0] || inventory[0] || null;
   const selectedTemplate = findTemplateForSandbox(cube, selected);
   const selectedNode = findNodeForSandbox(cube, selected);
+  const selectedUsesCubeRuntime = !selected?.world || selected.world.backend === "cube-sandbox-overlay";
+  const canPauseSelected = selectedUsesCubeRuntime ? Boolean(cube?.capabilities?.pause) : Boolean(selected?.world);
+  const canResumeSelected = selectedUsesCubeRuntime ? Boolean(cube?.capabilities?.resume) : Boolean(selected?.world);
 
   React.useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -772,7 +777,8 @@ function App() {
           name: launch.name.trim(),
           sourcePath: launch.hostMount ? launchMounts[0]?.sourcePath : undefined,
           mounts: launch.hostMount ? launchMounts : undefined,
-          backend: "cube-sandbox-overlay",
+          backend: launch.backend,
+          template: launch.template.trim() || undefined,
           hostMount: launch.hostMount,
           mountMode: launch.hostMount ? launchMounts[0]?.mode || launch.mountMode : "none",
           cpu: launch.cpu,
@@ -1226,16 +1232,41 @@ function App() {
           <label>Name</label>
           <input value={launch.name} onChange={(event) => setLaunch({ ...launch, name: event.target.value })} autoFocus />
 
+          <label>Backend</label>
+          <select
+            value={launch.backend}
+            onChange={(event) => {
+              const backend = event.target.value;
+              setLaunch({
+                ...launch,
+                backend,
+                hostMount: backend === "fuchsia" ? false : launch.hostMount
+              });
+            }}
+          >
+            <option value="cube-sandbox-overlay">CubeSandbox</option>
+            <option value="gvisor">gVisor (runsc)</option>
+            <option value="fuchsia">Fuchsia Emulator</option>
+          </select>
+
+          <label>{launch.backend === "gvisor" ? "Container image" : launch.backend === "fuchsia" ? "Product bundle path" : "Template override"}</label>
+          <input
+            value={launch.template}
+            onChange={(event) => setLaunch({ ...launch, template: event.target.value })}
+            placeholder={launch.backend === "gvisor" ? "ubuntu:24.04" : launch.backend === "fuchsia" ? "/path/to/product-bundle" : "use configured default"}
+          />
+
           <div className="toggleRow">
             <label className="checkRow">
               <input
                 type="checkbox"
                 checked={launch.hostMount}
                 onChange={(event) => void toggleHostMount(event.target.checked)}
+                disabled={launch.backend === "fuchsia"}
               />
               <span>
                 <strong>Host mount</strong>
-                <small>Attach a host folder</small>
+                <small>{launch.backend === "fuchsia" ? "Not available for Fuchsia guests" : "Attach a host folder"}</small>
               </span>
             </label>
           </div>
@@ -1522,9 +1553,9 @@ function App() {
               <button
                 className="ghost"
                 onClick={() => void resumeSelected()}
-                title={cube?.capabilities?.resume ? "Resume sandbox" : "Resume is not available on this CubeSandbox runtime"}
+                title={canResumeSelected ? "Resume sandbox" : "Resume is not available on this runtime"}
                 type="button"
-                disabled={busy || !selected.sandboxId || !cube?.capabilities?.resume}
+                disabled={busy || !selected.sandboxId || !canResumeSelected}
               >
                 <Play size={16} />
                 Resume
@@ -1533,9 +1564,9 @@ function App() {
               <button
                 className="ghost"
                 onClick={() => void pauseSelected()}
-                title={cube?.capabilities?.pause ? "Pause sandbox" : "Pause is not available on this CubeSandbox runtime"}
+                title={canPauseSelected ? "Pause sandbox" : "Pause is not available on this runtime"}
                 type="button"
-                disabled={busy || !selected.sandboxId || !cube?.capabilities?.pause}
+                disabled={busy || !selected.sandboxId || !canPauseSelected}
               >
                 <Pause size={16} />
                 Pause
@@ -1596,7 +1627,7 @@ function App() {
               <DetailSection icon={<Box size={16} />} title="Sandbox">
                 <div className="metricStrip">
                   <Metric label="Origin" value={selected.origin} />
-                  <Metric label="Runtime" value={cube?.mode || "-"} />
+                  <Metric label="Runtime" value={selected.world?.sandbox?.runtime || cube?.mode || "-"} />
                   <Metric label="Namespace" value={selected.runtime?.namespace || cube?.namespace || "-"} />
                   <Metric label="Created" value={formatDate(selected.createdAt)} />
                   <Metric label="Host mount" value={hasHostMount(selected) ? "enabled" : "disabled"} />
@@ -2370,9 +2401,10 @@ function ShellPage({ worldId }: { worldId: string }) {
     let fitFrame: number | null = null;
     const term = new XTerminal({
       cursorBlink: true,
-      convertEol: true,
-      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+      convertEol: false,
+      fontFamily: "'Noto Sans Mono CJK JP', 'Noto Sans CJK JP', 'Noto Sans JP', 'Yu Gothic UI', 'Yu Gothic', Meiryo, 'Hiragino Kaku Gothic ProN', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
       fontSize: 13,
+      rescaleOverlappingGlyphs: true,
       scrollback: 10000,
       theme: {
         background: "#091018",

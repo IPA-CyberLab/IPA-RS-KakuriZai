@@ -206,6 +206,40 @@ test("cube client passes namespace to cubecli exec", async () => {
   assert.deepEqual(args, ["--namespace", "kakurizai", "exec", "-w", "/workspace", "4fac1c9a074d", "id"]);
 });
 
+test("cube client prepares the workspace before workdir-scoped exec", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-workspace-"));
+  const cubecli = path.join(tmp, "cubecli");
+  const argsFile = path.join(tmp, "args.txt");
+  await fs.writeFile(cubecli, `#!/bin/sh\nprintf '%s\\n' "$@" > "${argsFile}"\n`, "utf8");
+  await fs.chmod(cubecli, 0o755);
+  const client = new CubeSandboxClient({
+    cubecli,
+    namespace: "kakurizai",
+    workspacePath: "/workspace"
+  });
+
+  const result = await client.prepareSandboxWorkspace(
+    {
+      name: "cube",
+      paths: { logs: tmp },
+      sandbox: { mode: "master" }
+    },
+    "4fac1c9a074d49bf8e29ee1d90592b22"
+  );
+
+  assert.equal(result.applied, true);
+  const args = (await fs.readFile(argsFile, "utf8")).trim().split("\n");
+  assert.deepEqual(args, [
+    "--namespace",
+    "kakurizai",
+    "exec",
+    "4fac1c9a074d",
+    "/bin/mkdir",
+    "-p",
+    "/workspace"
+  ]);
+});
+
 test("cube client pauses and resumes through CubeMaster update API", async () => {
   const master = await createMasterApi();
   try {
@@ -357,6 +391,8 @@ test("cube client opens web shell with colorized bash profile", () => {
   assert.equal(shell.args[8], "/bin/sh");
   assert.equal(shell.args[9], "-lc");
   assert.match(shell.args[10], /TERM=xterm-256color/);
+  assert.match(shell.args[10], /LANG=C\.UTF-8/);
+  assert.match(shell.args[10], /LC_ALL=C\.UTF-8/);
   assert.match(shell.args[10], /alias ls='ls --color=auto/);
   assert.match(shell.args[10], /PS1=/);
   assert.match(shell.args[10], /exec bash --rcfile/);

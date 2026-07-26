@@ -27,8 +27,9 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
   );
   const writableLayerSize = cubeConfig.writableLayerSize || world.backendConfig?.writableLayerSize || null;
   const writableLayerRequestAnnotations = writableLayerAnnotations(writableLayerSize);
-  const volumes = volumesForMounts(mounts, world, { writableLayerSize });
-  const volumeMounts = volumeMountsForMounts(mounts, world, { writableLayerSize });
+  const templateOwnedRootfs = cubeConfig.templateOwnedRootfs === true;
+  const volumes = volumesForMounts(mounts, world, { writableLayerSize, templateOwnedRootfs });
+  const volumeMounts = volumeMountsForMounts(mounts, world, { writableLayerSize, templateOwnedRootfs });
   const primaryMount = mounts[0] || null;
   const request = {
     requestID: `kakurizai-${world.id}`,
@@ -39,7 +40,7 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
         image: cubeConfig.image ? { image: cubeConfig.image } : undefined,
         command: ["/bin/sh", "-lc"],
         args: [setup],
-        working_dir: workspace,
+        working_dir: "/",
         resources: {
           cpu: cubeConfig.cpu || "2000m",
           mem: cubeConfig.memory || "2000Mi"
@@ -310,7 +311,7 @@ function withReplicationHydration(setup, replication = {}, paths) {
 
 function volumesForMounts(mounts, world, options = {}) {
   const volumes = [];
-  if (options.writableLayerSize) {
+  if (options.writableLayerSize && !options.templateOwnedRootfs) {
     volumes.push(rootfsWritableVolume(options.writableLayerSize));
   }
   if (!mounts.length) return volumes;
@@ -330,7 +331,7 @@ function volumesForMounts(mounts, world, options = {}) {
 
 function volumeMountsForMounts(mounts, world, options = {}) {
   const volumeMounts = [];
-  if (options.writableLayerSize) {
+  if (options.writableLayerSize || options.templateOwnedRootfs) {
     volumeMounts.push({ name: "cube_rootfs_rw", container_path: "/" });
   }
   if (!mounts.length) return volumeMounts;

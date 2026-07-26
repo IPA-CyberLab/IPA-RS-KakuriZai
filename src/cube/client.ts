@@ -1360,6 +1360,8 @@ export class CubeSandboxClient {
       sandbox_id: sandboxId,
       instance_type: this.config.instanceType || "cubebox",
       action
+    }, {
+      timeoutMs: Number(this.config.apiTimeoutMs || 120000)
     });
     const ret = response?.ret || {};
     const retCode = Number(ret.ret_code);
@@ -1448,6 +1450,50 @@ export class CubeSandboxClient {
     const status = this.available();
     if (!status.available || status.mode !== "cli") return { skipped: true, reason: status.reason };
     return runCommand(status.binary, ["cubebox", "destroy", "--force", sandboxId], { allowFailure: true });
+  }
+
+  async prepareSandboxWorkspace(world, sandboxId) {
+    const workspacePath = this.config.workspacePath || "/workspace";
+    const cubeArgs = [
+      "exec",
+      sandboxIdForCubeCli(sandboxId),
+      "/bin/mkdir",
+      "-p",
+      workspacePath
+    ];
+    const direct = directCubeCliCommand(world, this.config, cubeArgs);
+    let result;
+    if (direct) {
+      result = await runCommand(direct.command, direct.args, { allowFailure: true });
+    } else {
+      const binary = commandExists(this.config.cubecli || "cubecli");
+      if (!binary) {
+        return {
+          applied: false,
+          skipped: false,
+          workspacePath,
+          reason: "cubecli not found"
+        };
+      }
+      result = await runCommand(binary, [
+        ...cubeCliGlobalArgs(this.config),
+        ...cubeArgs
+      ], {
+        allowFailure: true
+      });
+    }
+    const output = `${result.stdout}\n${result.stderr}`;
+    await fs.writeFile(path.join(world.paths.logs, "cube-workspace-prepare.log"), output, "utf8");
+    return {
+      applied: result.code === 0,
+      skipped: false,
+      code: result.code,
+      workspacePath,
+      reason: result.code === 0
+        ? null
+        : parseFailure(output) || `cubecli workspace preparation exited with ${result.code}`,
+      output
+    };
   }
 
   async exec(world, command, options = {}) {
@@ -1725,11 +1771,13 @@ function rpmPackageName(pkg) {
 
 function buildInteractiveShellScript() {
   return [
-    "export TERM=xterm-256color COLORTERM=truecolor CLICOLOR=1",
+    "export TERM=xterm-256color COLORTERM=truecolor CLICOLOR=1 LANG=C.UTF-8 LC_ALL=C.UTF-8",
     "cat > /tmp/kakurizai-bashrc <<'KAKURIZAI_RC'",
     "export TERM=xterm-256color",
     "export COLORTERM=truecolor",
     "export CLICOLOR=1",
+    "export LANG=C.UTF-8",
+    "export LC_ALL=C.UTF-8",
     "export GREP_COLORS='ms=01;38;5;203:mc=01;38;5;203:sl=:cx=:fn=38;5;111:ln=38;5;246:bn=38;5;150:se=38;5;246'",
     "if command -v dircolors >/dev/null 2>&1; then eval \"$(dircolors -b 2>/dev/null || true)\"; fi",
     "alias ls='ls --color=auto --group-directories-first'",
@@ -1873,7 +1921,7 @@ function masterApiBaseUrl(config = {}) {
   return String(config.apiBaseUrl || "http://127.0.0.1:8089").replace(/\/+$/, "");
 }
 
-function postJson(url, body) {
+function postJson(url, body, options = {}) {
   const target = new URL(url);
   const payload = `${JSON.stringify(body)}\n`;
   const transport = target.protocol === "https:" ? https : http;
@@ -1904,6 +1952,9 @@ function postJson(url, body) {
       });
     });
     request.on("error", reject);
+    request.setTimeout(Number(options.timeoutMs || 120000), () => {
+      request.destroy(new Error(`CubeMaster API request timed out after ${Number(options.timeoutMs || 120000)}ms`));
+    });
     request.end(payload);
   });
 }

@@ -18,19 +18,23 @@ export async function createWorld(config, input) {
   const store = new WorldStore(config);
   const backendName = input.backend || config.defaultBackend;
   const backend = getBackend(config, backendName);
+  const defaults = backendCreateDefaults(config, backendName);
   const requestedMounts = Array.isArray(input.mounts) && input.mounts.length
     ? input.mounts
     : input.sourcePath
       ? [{ sourcePath: input.sourcePath, name: input.mountName, mode: input.mountMode }]
       : [];
   const hostMount = input.hostMount !== false && requestedMounts.length > 0;
-  const mountMode = hostMount ? input.mountMode || config.cube?.mountMode || "agctl-overlay" : "none";
+  if (backendName === "fuchsia" && hostMount) {
+    throw statusError("Fuchsia does not support Linux host bind mounts; use --no-host-mount", 400);
+  }
+  const mountMode = hostMount ? input.mountMode || defaults.mountMode || "agctl-overlay" : "none";
   const network = normalizeNetworkConfig({
     ...(input.network || {}),
-    type: input.network?.type || input.networkType || config.cube?.networkType || "tap"
+    type: input.network?.type || input.networkType || defaults.networkType || "tap"
   });
   const kubernetes = normalizeKubernetesConfig(input.kubernetes || input.k8s || {});
-  const writableLayerSize = input.writableLayerSize || config.cube?.writableLayerSize || null;
+  const writableLayerSize = input.writableLayerSize || defaults.writableLayerSize || null;
   const extraBackendConfig = input.backendConfig || {};
   const world = await store.create({
     name: input.name,
@@ -52,9 +56,9 @@ export async function createWorld(config, input) {
       hostMount,
       mountMode,
       mounts: hostMount ? requestedMounts : [],
-      template: input.template || config.cube?.template || null,
-      cpu: input.cpu || config.cube?.cpu || null,
-      memory: input.memory || config.cube?.memory || null,
+      template: input.template || defaults.template || null,
+      cpu: input.cpu || defaults.cpu || null,
+      memory: input.memory || defaults.memory || null,
       writableLayerSize,
       writableLayerMinimumSize: writableLayerSize,
       networkType: network.type,
@@ -77,6 +81,37 @@ export async function createWorld(config, input) {
     await store.save(world);
     throw error;
   }
+}
+
+function backendCreateDefaults(config, backendName) {
+  if (backendName === "gvisor") {
+    return {
+      template: config.gvisor?.image,
+      cpu: config.gvisor?.cpu,
+      memory: config.gvisor?.memory,
+      mountMode: config.gvisor?.mountMode || "agctl-overlay",
+      networkType: "tap",
+      writableLayerSize: null
+    };
+  }
+  if (backendName === "fuchsia") {
+    return {
+      template: config.fuchsia?.productBundle,
+      cpu: config.fuchsia?.cpu,
+      memory: null,
+      mountMode: "none",
+      networkType: "tap",
+      writableLayerSize: null
+    };
+  }
+  return {
+    template: config.cube?.template,
+    cpu: config.cube?.cpu,
+    memory: config.cube?.memory,
+    mountMode: config.cube?.mountMode || "agctl-overlay",
+    networkType: config.cube?.networkType || "tap",
+    writableLayerSize: config.cube?.writableLayerSize
+  };
 }
 
 export async function createHeteroNetworkLab(config, input = {}) {
@@ -832,7 +867,16 @@ export async function removeWorld(config, ref, options = {}) {
   const store = new WorldStore(config);
   const world = await store.get(ref, options);
   const backend = getBackend(config, world.backend);
-  await backend.remove(world);
+  const result = await backend.remove(world);
+  const failed = (
+    (Number.isInteger(result?.code) && result.code !== 0 && result.skipped !== true)
+    || (result?.applied === false && result.skipped !== true)
+    || (result?.destroyed === false && result.skipped !== true)
+  );
+  if (failed) {
+    const reason = result?.reason || result?.stderr || result?.stdout || `backend ${world.backend} refused removal`;
+    throw new Error(`could not remove ${world.name}: ${String(reason).trim()}`);
+  }
   return store.remove(world.id, { exactId: true });
 }
 

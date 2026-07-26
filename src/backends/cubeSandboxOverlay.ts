@@ -28,6 +28,13 @@ export class CubeSandboxOverlayBackend {
       cubeConfig.template = templateResolution.templateId;
       world.backendConfig.template = templateResolution.templateId;
     }
+    const runtimeAvailability = this.client.available();
+    cubeConfig.templateOwnedRootfs = (
+      runtimeAvailability.available
+      && runtimeAvailability.mode === "master"
+      && Boolean(cubeConfig.template)
+      && (cubeConfig.templateVersion || "v2") === "v2"
+    );
     world.backendConfig.templateResolution = {
       sourceTemplateId: templateResolution.sourceTemplateId || templateResolution.templateId || null,
       templateId: templateResolution.templateId || null,
@@ -50,7 +57,7 @@ export class CubeSandboxOverlayBackend {
     world.backendConfig.mountMap = mountMapForMode(world, mountSpecs);
     const provision = await this.client.createSandbox(world, request);
     const overlayPending = provision.provisioned && provision.overlay?.mounted === false;
-    const provisionFailed = !provision.provisioned && provision.mode !== "planned";
+    const provisionFailedAtCreate = !provision.provisioned && provision.mode !== "planned";
     world.sandbox = {
       id: provision.sandboxId || null,
       containerId: provision.containerId || null,
@@ -58,22 +65,34 @@ export class CubeSandboxOverlayBackend {
       runtime: "CubeSandbox",
       mode: provision.mode,
       mountMode,
-      status: provisionFailed ? "failed" : overlayPending ? "running-overlay-pending" : provision.provisioned ? "running" : "planned",
+      status: provisionFailedAtCreate ? "failed" : overlayPending ? "running-overlay-pending" : provision.provisioned ? "running" : "planned",
       reason: provision.reason || provision.overlay?.reason || null,
       overlay: provision.overlay || null,
+      workspace: null,
       bootstrap: provision.provisioned
         ? { pending: true, skipped: false, applied: false, reason: "installing terminal tools in background" }
         : null
     };
     if (provision.provisioned) {
-      const runtimeNetwork = await this.client.applyRuntimeNetworkPolicy(world);
-      world.sandbox.sandboxIp = runtimeNetwork.sandboxIp || runtimeNetwork.runtimeIp || null;
-      world.sandbox.runtimeSandboxIp = runtimeNetwork.runtimeIp || null;
-      world.sandbox.network = runtimeNetwork;
+      const workspace = await this.client.prepareSandboxWorkspace(
+        world,
+        provision.sandboxId || provision.containerId
+      );
+      world.sandbox.workspace = workspace;
+      if (!workspace.applied) {
+        world.sandbox.status = "failed";
+        world.sandbox.reason = workspace.reason || "CubeSandbox workspace preparation failed";
+      } else {
+        const runtimeNetwork = await this.client.applyRuntimeNetworkPolicy(world);
+        world.sandbox.sandboxIp = runtimeNetwork.sandboxIp || runtimeNetwork.runtimeIp || null;
+        world.sandbox.runtimeSandboxIp = runtimeNetwork.runtimeIp || null;
+        world.sandbox.network = runtimeNetwork;
+      }
     }
+    const provisionFailed = provisionFailedAtCreate || world.sandbox?.workspace?.applied === false;
     world.status = provisionFailed ? "failed" : overlayPending ? "pending-overlay" : provision.provisioned ? "ready" : "pending-cube";
     const saved = await store.save(world);
-    if (provision.provisioned) {
+    if (provision.provisioned && !provisionFailed) {
       this.bootstrapToolsInBackground(saved, store, provision.sandboxId || provision.containerId);
     }
     return saved;
@@ -124,6 +143,10 @@ export class CubeSandboxOverlayBackend {
 
   async exec(world, command, options = {}) {
     return this.client.exec(world, command, options);
+  }
+
+  shellCommand(world) {
+    return this.client.shellCommand(world);
   }
 }
 

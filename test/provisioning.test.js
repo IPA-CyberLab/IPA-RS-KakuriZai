@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { WebSocket } from "ws";
 import { loadConfig } from "../dist/src/core/config.js";
-import { createWorld, ensureWorldProvisioned, getWorld } from "../dist/src/core/worlds.js";
+import { createWorld, ensureWorldProvisioned, getWorld, removeWorld } from "../dist/src/core/worlds.js";
 import { startStudio } from "../dist/src/server.js";
 
 test("pending CubeSandbox world is provisioned once before concurrent connections", async () => {
@@ -68,6 +68,34 @@ test("failed world without a sandbox id retries provisioning once and becomes re
   assert.equal(provisioned.sandbox.id, runtime.sandboxId);
   assert.equal(provisioned.sandbox.reason, null);
   assert.equal(await readCreateCount(runtime.countFile), 1);
+});
+
+test("failed runtime removal preserves world metadata", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-remove-failure-"));
+  const config = await provisioningConfig(tmp);
+  const world = await createPendingWorld(config, "remove-me");
+  const cubecli = path.join(tmp, "cubecli-remove-failure");
+  await fs.writeFile(cubecli, "#!/bin/sh\nprintf 'runtime refused removal\\n' >&2\nexit 7\n", "utf8");
+  await fs.chmod(cubecli, 0o755);
+  config.cube.mode = "cli";
+  config.cube.cubecli = cubecli;
+  await saveWorldState(world, {
+    status: "ready",
+    sandbox: {
+      ...(world.sandbox || {}),
+      id: "9e0d0a2c1ad14b18a6a946f38109f138",
+      containerId: "9e0d0a2c1ad14b18a6a946f38109f138",
+      mode: "cli",
+      status: "running"
+    }
+  });
+
+  await assert.rejects(
+    removeWorld(config, world.id, { exactId: true }),
+    /runtime refused removal/
+  );
+  const preserved = await getWorld(config, world.id);
+  assert.equal(preserved.sandbox.id, "9e0d0a2c1ad14b18a6a946f38109f138");
 });
 
 test("failed runtime candidate is rejected without creating a duplicate", async () => {
