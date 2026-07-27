@@ -256,9 +256,11 @@ agctl create --name guarded --no-host-mount --backend gvisor
 agctl exec guarded -- sh -lc 'uname -a; cat /proc/version'
 ```
 
+For a restart-safe Ubuntu image with Codex CLI and tmux preinstalled, build `deploy/gvisor-codex/Dockerfile` and use the resulting image as `gvisor.image` or the World template. Packages installed only into a running `runsc` root filesystem may not survive a runtime restart.
+
 For a host workspace, omit `--no-host-mount` and pass `--source`. The default `agctl-overlay` mode clones the source into the World upper directory before Docker starts. Changes remain private until `agctl apply`.
 
-The gVisor backend applies a fail-closed host firewall policy after create/resume and reconciles it while Studio is running. All traffic from the container to the host is rejected, and private, carrier-grade NAT, link-local, documentation, multicast, and other non-public IPv4 ranges are denied before user `allowOut` rules. Configured `denyOut`, `allowOut`, and `allowInternetAccess` are enforced in addition to those mandatory ranges. The Studio service therefore needs permission to run the configured `gvisor.iptables` command through non-interactive `sudo`; if the policy cannot be installed, KakuriZai stops the container.
+The gVisor backend applies a fail-closed host firewall policy after create/resume and reconciles it while Studio is running. All traffic from the container to the host is rejected, and private, carrier-grade NAT, link-local, documentation, multicast, and other non-public IPv4 ranges are denied before user `allowOut` rules. Configured `denyOut`, `allowOut`, and `allowInternetAccess` are enforced in addition to those mandatory ranges. The Studio service therefore needs permission to run the configured `gvisor.iptables` command through non-interactive `sudo`; if the policy cannot be installed, KakuriZai stops the container. Containers default to Docker's `on-failure:5` restart policy for OOM/crash recovery. That policy intentionally does not auto-start containers after a Docker daemon restart; Studio leaves a stopped World stopped when there is no container address to secure, preserving fail-closed host startup.
 
 Fuchsia example:
 

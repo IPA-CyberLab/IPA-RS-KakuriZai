@@ -37,11 +37,15 @@ export class GVisorBackend {
     const docker = this.dockerCommand();
     await this.assertRuntime(docker);
     const containerName = this.containerName(world);
+    const restartPolicy = this.restartPolicy();
     const existing = await this.inspectState(docker, containerName);
     let created = false;
     if (existing.exists) {
       if (existing.runtime !== this.runtimeName()) {
         throw new Error(`existing container ${containerName} uses runtime ${existing.runtime || "unknown"}, expected ${this.runtimeName()}`);
+      }
+      if (existing.restartPolicy !== restartPolicy) {
+        await this.docker(docker, ["update", "--restart", restartPolicy, containerName]);
       }
       if (existing.status !== "running") {
         await this.docker(docker, ["start", containerName]);
@@ -55,6 +59,7 @@ export class GVisorBackend {
         "-d",
         "--name", containerName,
         "--runtime", this.runtimeName(),
+        "--restart", restartPolicy,
         "--label", `io.kakurizai.world=${world.id}`,
         "--label", "io.kakurizai.backend=gvisor",
         "--workdir", primaryMount(mounts)?.sandboxPath || this.runtime.workspacePath || "/workspace"
@@ -73,8 +78,8 @@ export class GVisorBackend {
     }
 
     const state = await this.inspectState(docker, containerName);
-    if (!state.exists || state.status !== "running" || state.runtime !== this.runtimeName()) {
-      throw new Error(`gVisor container verification failed: status=${state.status || "missing"} runtime=${state.runtime || "unknown"}`);
+    if (!state.exists || state.status !== "running" || state.runtime !== this.runtimeName() || state.restartPolicy !== restartPolicy) {
+      throw new Error(`gVisor container verification failed: status=${state.status || "missing"} runtime=${state.runtime || "unknown"} restart=${state.restartPolicy || "unknown"}`);
     }
     let networkPolicy;
     try {
@@ -92,6 +97,7 @@ export class GVisorBackend {
     world.backendConfig.gvisor = {
       containerName,
       runtime: state.runtime,
+      restartPolicy: state.restartPolicy,
       dockerHost: this.runtime.dockerHost || null,
       networkPolicy
     };
@@ -243,6 +249,9 @@ export class GVisorBackend {
       status: detail.State?.Status || null,
       runtime: detail.HostConfig?.Runtime || null,
       paused: detail.State?.Paused === true,
+      oomKilled: detail.State?.OOMKilled === true,
+      exitCode: detail.State?.ExitCode ?? null,
+      restartPolicy: dockerRestartPolicy(detail.HostConfig?.RestartPolicy),
       ipv4s,
       ipv6s,
       networks: networks.map(([network]) => network)
@@ -252,8 +261,13 @@ export class GVisorBackend {
   async reconcileSecurity(world) {
     const docker = this.dockerCommand();
     const containerName = this.containerName(world);
+    const restartPolicy = this.restartPolicy();
     const state = await this.inspectState(docker, containerName);
     if (!state.exists) return { skipped: true, reason: "container is absent" };
+    if (state.restartPolicy !== restartPolicy) {
+      await this.docker(docker, ["update", "--restart", restartPolicy, containerName]);
+      state.restartPolicy = restartPolicy;
+    }
     if (state.status !== "running") return { skipped: true, reason: `container is ${state.status}` };
     try {
       return await this.applyNetworkPolicy(world, state);
@@ -376,6 +390,14 @@ export class GVisorBackend {
     return String(this.runtime.runtime || "runsc");
   }
 
+  restartPolicy() {
+    const value = String(this.runtime.restartPolicy || "on-failure:5").trim();
+    if (!/^(?:no|always|unless-stopped|on-failure(?::\d+)?)$/.test(value)) {
+      throw new Error(`invalid gvisor.restartPolicy: ${value}`);
+    }
+    return value;
+  }
+
   containerName(world) {
     return world.backendConfig?.gvisor?.containerName || `kz-${world.id}`.slice(0, 63);
   }
@@ -458,6 +480,12 @@ function deleteTaggedRulesCommand(iptables, chain, tag) {
 
 function uniqueCidrs(values) {
   return [...new Set((values || []).map((value) => normalizeIpv4Cidr(value)))];
+}
+
+function dockerRestartPolicy(value) {
+  const name = String(value?.Name || "no");
+  const retries = Number(value?.MaximumRetryCount || 0);
+  return name === "on-failure" && retries > 0 ? `${name}:${retries}` : name;
 }
 
 function normalizeIpv4Cidr(value) {

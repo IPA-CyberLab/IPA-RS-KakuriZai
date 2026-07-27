@@ -205,6 +205,10 @@
         "cpu": { "type": "string" },
         "memory": { "type": "string" },
         "pull": { "enum": ["always", "missing", "never"] },
+        "restartPolicy": {
+          "type": "string",
+          "pattern": "^(no|always|unless-stopped|on-failure(?::[0-9]+)?)$"
+        },
         "createTimeoutMs": { "type": "integer", "minimum": 1000 },
         "iptables": { "type": "string" },
         "firewallReconcileMs": { "type": "integer", "minimum": 1000 },

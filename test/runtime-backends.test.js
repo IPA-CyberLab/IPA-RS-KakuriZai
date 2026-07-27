@@ -41,11 +41,18 @@ test("gVisor backend drives Docker with the registered runsc runtime", async () 
   assert.equal(world.sandbox.runtime, "gVisor");
   assert.equal(world.sandbox.mode, "docker-runsc");
   assert.equal(world.backendConfig.gvisor.networkPolicy.applied, true);
+  assert.equal(world.backendConfig.gvisor.restartPolicy, "on-failure:5");
   assert.equal(world.backendConfig.gvisor.networkPolicy.ipv4, "172.30.0.2");
   assert.equal(world.backendConfig.gvisor.networkPolicy.hostAccess, "denied");
   assert.equal(world.backendConfig.gvisor.networkPolicy.internetAccess, true);
   assert.ok(world.backendConfig.gvisor.networkPolicy.protectedCidrs.includes("192.168.0.0/16"));
   assert.ok(world.backendConfig.gvisor.networkPolicy.protectedCidrs.includes("8.8.8.0/24"));
+
+  await fs.writeFile(runtime.state, "oom-exited\n", "utf8");
+  const stopped = await new GVisorBackend(config).reconcileSecurity(world);
+  assert.equal(stopped.skipped, true);
+  assert.equal(stopped.reason, "container is exited");
+  await fs.writeFile(runtime.state, "running\n", "utf8");
 
   const executed = await execWorld(config, world.id, ["sh", "-lc", "echo ok"]);
   assert.match(executed.stdout, /GVisor fake exec OK/);
@@ -66,6 +73,8 @@ test("gVisor backend drives Docker with the registered runsc runtime", async () 
 
   const log = await fs.readFile(runtime.log, "utf8");
   assert.match(log, /run .*--runtime runsc/);
+  assert.match(log, /--restart on-failure:5/);
+  assert.doesNotMatch(log, /^start kz-gvisor-test-/m);
   assert.match(log, /--label io\.kakurizai\.backend=gvisor/);
   assert.match(log, /pause kz-gvisor-test-/);
   assert.match(log, /unpause kz-gvisor-test-/);
@@ -175,7 +184,17 @@ case "$1" in
     ;;
   inspect)
     if [ ! -f "$state" ]; then exit 1; fi
-    printf '{"State":{"Status":"%s","Paused":false},"HostConfig":{"Runtime":"runsc"},"NetworkSettings":{"Networks":{"bridge":{"IPAddress":"172.30.0.2","GlobalIPv6Address":""}}}}\\n' "$(cat "$state")"
+    status="$(cat "$state")"
+    oom=false
+    exit_code=0
+    if [ "$status" = "oom-exited" ]; then
+      status=exited
+      oom=true
+      exit_code=137
+    fi
+    ip=
+    if [ "$status" = "running" ]; then ip=172.30.0.2; fi
+    printf '{"State":{"Status":"%s","Paused":false,"OOMKilled":%s,"ExitCode":%s},"HostConfig":{"Runtime":"runsc","RestartPolicy":{"Name":"on-failure","MaximumRetryCount":5}},"NetworkSettings":{"Networks":{"bridge":{"IPAddress":"%s","GlobalIPv6Address":""}}}}\\n' "$status" "$oom" "$exit_code" "$ip"
     ;;
   run)
     printf 'running\\n' > "$state"
