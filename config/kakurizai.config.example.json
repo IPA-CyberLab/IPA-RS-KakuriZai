@@ -70,6 +70,7 @@
     "mastercli": "cubemastercli",
     "apiBaseUrl": null,
     "apiTimeoutMs": 120000,
+    "apiKeyFile": "auth/cube-api.key",
     "template": "kakurizai-base",
     "namespace": "kakurizai",
     "cpu": "2000m",
@@ -86,7 +87,10 @@
     "mountMode": "agctl-overlay",
     "cpu": "1000m",
     "memory": "1024Mi",
-    "pull": "missing"
+    "pull": "missing",
+    "iptables": "iptables",
+    "firewallReconcileMs": 60000,
+    "protectedCidrs": []
   },
   "fuchsia": {
     "ffx": "ffx",

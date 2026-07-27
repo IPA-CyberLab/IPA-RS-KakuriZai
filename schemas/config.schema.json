@@ -182,6 +182,8 @@
         "mastercli": { "type": "string" },
         "apiBaseUrl": { "type": ["string", "null"] },
         "apiTimeoutMs": { "type": "integer", "minimum": 1000 },
+        "apiKey": { "type": ["string", "null"], "minLength": 32 },
+        "apiKeyFile": { "type": "string" },
         "template": { "type": "string" },
         "namespace": { "type": "string" },
         "cpu": { "type": "string" },
@@ -203,7 +205,13 @@
         "cpu": { "type": "string" },
         "memory": { "type": "string" },
         "pull": { "enum": ["always", "missing", "never"] },
-        "createTimeoutMs": { "type": "integer", "minimum": 1000 }
+        "createTimeoutMs": { "type": "integer", "minimum": 1000 },
+        "iptables": { "type": "string" },
+        "firewallReconcileMs": { "type": "integer", "minimum": 1000 },
+        "protectedCidrs": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
       },
       "additionalProperties": true
     },

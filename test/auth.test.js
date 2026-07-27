@@ -5,7 +5,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { normalizeAuthConfig } from "../dist/src/core/config.js";
+import { loadConfig, normalizeAuthConfig } from "../dist/src/core/config.js";
 import { createAuthProvider } from "../dist/src/auth/providers.js";
 import { startStudio } from "../dist/src/server.js";
 
@@ -22,6 +22,83 @@ test("keycloak config normalizes to oidc discovery", () => {
   assert.equal(auth.discoveryUrl, "https://id.example.com/realms/kakurizai/.well-known/openid-configuration");
   assert.equal(auth.audience, "studio");
   assert.equal(auth.authorizationParams.acr_values, "mfa");
+});
+
+test("loadConfig creates and reuses a mode-0600 Cube API key", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-api-key-"));
+  const first = await loadConfig({ home: tmp });
+  assert.ok(first.cube.apiKey.length >= 32);
+  const stat = await fs.stat(first.cube.apiKeyFile);
+  assert.equal(stat.mode & 0o777, 0o600);
+  const second = await loadConfig({ home: tmp });
+  assert.equal(second.cube.apiKey, first.cube.apiKey);
+});
+
+test("Cube API auth callback requires the host-held API key", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-api-auth-"));
+  const apiKey = "cube-test-key-0123456789-abcdefghijklmnopqrstuvwxyz";
+  const studio = await startStudio({
+    home: tmp,
+    studio: { host: "127.0.0.1", port: 0, tls: { certFile: null, keyFile: null } },
+    auth: { provider: "none", rbac: { enabled: false }, mfa: { required: false } },
+    audit: { enabled: true, file: path.join(tmp, "audit", "studio.jsonl") },
+    cube: { mode: "disabled", apiKey },
+    storeDir: path.join(tmp, "store")
+  });
+  const origin = `http://127.0.0.1:${studio.server.address().port}`;
+  const callbackHeaders = {
+    "x-request-method": "DELETE",
+    "x-request-path": "/cubeapi/v1/sandboxes/other-world"
+  };
+  try {
+    const missing = await fetch(`${origin}/api/integrations/cube/auth`, {
+      method: "POST",
+      headers: callbackHeaders
+    });
+    assert.equal(missing.status, 401);
+
+    const wrong = await fetch(`${origin}/api/integrations/cube/auth`, {
+      method: "POST",
+      headers: { ...callbackHeaders, "x-api-key": `${apiKey}-wrong` }
+    });
+    assert.equal(wrong.status, 401);
+
+    const accepted = await fetch(`${origin}/api/integrations/cube/auth`, {
+      method: "POST",
+      headers: { ...callbackHeaders, "x-api-key": apiKey }
+    });
+    assert.equal(accepted.status, 200);
+    assert.deepEqual(await accepted.json(), { authorized: true });
+
+    const acceptedLegacy = await fetch(`${origin}/api/integrations/cube/auth`, {
+      method: "POST",
+      headers: {
+        "x-request-path": "/config",
+        "x-api-key": apiKey
+      }
+    });
+    assert.equal(acceptedLegacy.status, 200);
+    assert.deepEqual(await acceptedLegacy.json(), { authorized: true });
+
+    const unsupported = await fetch(`${origin}/api/integrations/cube/auth`, {
+      method: "POST",
+      headers: {
+        "x-request-method": "TRACE",
+        "x-request-path": "/cubeapi/v1/sandboxes",
+        "x-api-key": apiKey
+      }
+    });
+    assert.equal(unsupported.status, 400);
+
+    const audit = await waitForFile(
+      path.join(tmp, "audit", "studio.jsonl"),
+      /"path":"\/cubeapi\/v1\/sandboxes\/other-world"/
+    );
+    assert.match(audit, /"path":"\/cubeapi\/v1\/sandboxes\/other-world"/);
+    assert.doesNotMatch(audit, new RegExp(apiKey));
+  } finally {
+    await new Promise((resolve) => studio.server.close(resolve));
+  }
 });
 
 test("keycloak provider verifies bearer tokens and maps keycloak roles", async () => {

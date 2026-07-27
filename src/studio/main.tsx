@@ -572,7 +572,7 @@ function App() {
     dnsOptions: "",
     allowInternetAccess: true,
     allowOut: "",
-    denyOut: "10.0.0.0/8,100.64.0.0/10,172.16.0.0/12,192.168.0.0/18",
+    denyOut: "10.0.0.0/8,100.64.0.0/10,172.16.0.0/12,192.168.0.0/16",
     inboundDefaultPolicy: "allow",
     inboundAllowFrom: "",
     inboundDenyFrom: "",

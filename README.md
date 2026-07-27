@@ -236,6 +236,16 @@ agctl exec cube -- uname -a
 
 CubeMaster v2 owns the writable rootfs volume. KakuriZai keeps the container `/` mount but does not duplicate CubeMaster's `cube_rootfs_rw` volume definition.
 
+Do not expose Cube API without request authentication. KakuriZai creates a mode-`0600` API key at `cube.apiKeyFile` and provides a callback that validates either that key or a permitted OIDC bearer token. Configure Cube API with:
+
+```sh
+AUTH_CALLBACK_URL=http://127.0.0.1:38476/api/integrations/cube/auth
+```
+
+For the one-click systemd deployment, install `deploy/systemd/cube-sandbox-cube-api-auth.conf` as `/etc/systemd/system/cube-sandbox-cube-api.service.d/kakurizai-auth.conf`, reload systemd, and restart Cube API after KakuriZai Studio is running.
+
+Clients using the host-held key must send it as `X-API-Key`. Never copy or mount the key into a sandbox. CubeMaster's internal port must remain unreachable from sandbox networks even when Cube API authentication is enabled. Older Cube API builds that omit `X-Request-Method` are restricted to the API key or an OIDC bearer principal with the `admin` permission.
+
 gVisor example:
 
 ```sh
@@ -247,6 +257,8 @@ agctl exec guarded -- sh -lc 'uname -a; cat /proc/version'
 ```
 
 For a host workspace, omit `--no-host-mount` and pass `--source`. The default `agctl-overlay` mode clones the source into the World upper directory before Docker starts. Changes remain private until `agctl apply`.
+
+The gVisor backend applies a fail-closed host firewall policy after create/resume and reconciles it while Studio is running. All traffic from the container to the host is rejected, and private, carrier-grade NAT, link-local, documentation, multicast, and other non-public IPv4 ranges are denied before user `allowOut` rules. Configured `denyOut`, `allowOut`, and `allowInternetAccess` are enforced in addition to those mandatory ranges. The Studio service therefore needs permission to run the configured `gvisor.iptables` command through non-interactive `sudo`; if the policy cannot be installed, KakuriZai stops the container.
 
 Fuchsia example:
 

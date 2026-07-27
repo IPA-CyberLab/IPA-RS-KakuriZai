@@ -38,6 +38,7 @@ export async function startStudio(config) {
   await audit.load();
   const devAccess = new DevAccessManager(config);
   const rateLimiter = new RequestRateLimiter(config);
+  const runtimeSecurityController = await startRuntimeSecurityController(config);
   const failoverController = startFailoverController(config);
   const listener = (request, response) => {
     request.audit = audit;
@@ -69,15 +70,59 @@ export async function startStudio(config) {
       socket.destroy();
     });
   });
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(config.studio.port, config.studio.host, resolve);
+  try {
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(config.studio.port, config.studio.host, resolve);
+    });
+  } catch (error) {
+    runtimeSecurityController.stop();
+    failoverController.stop();
+    throw error;
+  }
+  server.on("close", () => {
+    runtimeSecurityController.stop();
+    failoverController.stop();
   });
-  server.on("close", () => failoverController.stop());
   const address = server.address();
   const boundPort = typeof address === "object" && address ? address.port : config.studio.port;
   const url = config.studio.publicUrl || `${protocol}://${config.studio.host}:${boundPort}/`;
   return { server, url, auth: auth.publicConfig(), tls: Boolean(tls) };
+}
+
+async function startRuntimeSecurityController(config) {
+  let stopped = false;
+  let running = false;
+  const reconcile = async () => {
+    if (stopped || running) return;
+    running = true;
+    try {
+      const worlds = await listWorlds(config);
+      for (const world of worlds) {
+        if (world.backend !== "gvisor" || !world.sandbox?.id) continue;
+        const backend = getBackend(config, world.backend);
+        if (typeof backend.reconcileSecurity === "function") {
+          await backend.reconcileSecurity(world);
+        }
+      }
+    } finally {
+      running = false;
+    }
+  };
+  await reconcile();
+  const intervalMs = Math.max(1000, Number(config.gvisor?.firewallReconcileMs || 60000));
+  const timer = setInterval(() => {
+    reconcile().catch((error) => {
+      console.error(`[kakurizai] runtime security reconciliation failed: ${error.message || String(error)}`);
+    });
+  }, intervalMs);
+  timer.unref?.();
+  return {
+    stop() {
+      stopped = true;
+      clearInterval(timer);
+    }
+  };
 }
 
 async function loadTlsOptions(config) {
@@ -707,6 +752,9 @@ function assertHostAllowed(config, request) {
     error.statusCode = 400;
     throw error;
   }
+  if (isLoopbackAddress(request.socket?.remoteAddress) && ["127.0.0.1", "::1", "localhost"].includes(host.toLowerCase())) {
+    return;
+  }
   const allowed = allowedHostnames(config);
   if (!allowed.size || allowed.has("*") || allowed.has(host.toLowerCase())) return;
   const error = new Error("host header is not allowed");
@@ -835,6 +883,9 @@ async function route(config, auth, sessions, devAccess, request, response) {
     void request.audit?.write(auditRecord(request, 204, { action: "auth.logout" }));
     return;
   }
+  if (request.method === "POST" && url.pathname === "/api/integrations/cube/auth") {
+    return authorizeCubeApiRequest(config, auth, request, response);
+  }
   if (url.pathname.startsWith("/api/")) {
     const session = await authenticateRequest(config, auth, sessions, request, { requireCsrf: requiresCsrf(url, request) });
     request.user = session.user;
@@ -844,6 +895,75 @@ async function route(config, auth, sessions, devAccess, request, response) {
     return api(config, devAccess, request, response, url);
   }
   return staticFile(request, response, url);
+}
+
+async function authorizeCubeApiRequest(config, auth, request, response) {
+  const requestedPath = singleHeader(request, "x-request-path");
+  const requestedMethod = singleHeader(request, "x-request-method")?.toUpperCase();
+  if (!requestedPath || requestedPath.length > 2048 || !requestedPath.startsWith("/") || /[\r\n\0]/.test(requestedPath)) {
+    const error = new Error("invalid Cube API request path");
+    error.statusCode = 400;
+    throw error;
+  }
+  const permission = cubeApiPermission(requestedMethod);
+  const suppliedKey = singleHeader(request, "x-api-key");
+  const configuredKey = config.cube?.apiKey;
+  if (suppliedKey) {
+    if (!configuredKey || !secretEqual(suppliedKey, configuredKey)) {
+      const error = new Error("invalid Cube API key");
+      error.statusCode = 401;
+      throw error;
+    }
+    request.user = {
+      subject: "cube-api-key",
+      provider: "api-key",
+      claims: { permissions: ["admin"] }
+    };
+    request.authMethod = "api-key";
+  } else {
+    const bearer = bearerHeader(request);
+    if (!bearer || auth.type === "none") {
+      const error = new Error("Cube API authentication requires a bearer token or API key");
+      error.statusCode = 401;
+      throw error;
+    }
+    const user = await auth.verifyRequest({ headers: { authorization: bearer } });
+    verifyBearerMfaPolicy(config, user);
+    request.user = user;
+    request.authMethod = "bearer";
+    authorize(config, request, permission);
+  }
+  request.cubeApiRequest = {
+    method: requestedMethod,
+    path: requestedPath,
+    permission
+  };
+  return sendJson(request, response, { authorized: true });
+}
+
+function cubeApiPermission(method) {
+  if (method === "GET" || method === "HEAD") return "worlds:read";
+  if (method === "DELETE") return "worlds:delete";
+  if (method === "POST" || method === "PUT" || method === "PATCH") return "worlds:write";
+  // Older Cube API builds only forward X-Request-Path. Treat those callbacks as
+  // administrative operations so API keys remain compatible while bearer
+  // tokens still fail closed unless the caller has the admin permission.
+  if (!method) return "admin";
+  const error = new Error(`unsupported Cube API request method: ${method || "missing"}`);
+  error.statusCode = 400;
+  throw error;
+}
+
+function singleHeader(request, name) {
+  const value = request.headers?.[name];
+  if (Array.isArray(value)) return value.length === 1 ? value[0] : null;
+  return typeof value === "string" ? value.trim() : null;
+}
+
+function secretEqual(left, right) {
+  const leftDigest = crypto.createHash("sha256").update(String(left)).digest();
+  const rightDigest = crypto.createHash("sha256").update(String(right)).digest();
+  return crypto.timingSafeEqual(leftDigest, rightDigest);
 }
 
 async function beginOidcLogin(config, auth, sessions, request, response, url) {
@@ -1164,6 +1284,11 @@ function normalizeIp(value) {
   return text;
 }
 
+function isLoopbackAddress(value) {
+  const ip = normalizeIp(value);
+  return ip === "::1" || ip.startsWith("127.");
+}
+
 function ipToBigInt(ip) {
   const version = net.isIP(ip);
   if (version === 4) {
@@ -1216,7 +1341,14 @@ function auditRecord(request, status, extra = {}) {
     target: extra.target || targetFromPath(url.pathname),
     ip: requestIp(request, request.config),
     userAgent: request.headers["user-agent"] || null,
-    readOnly: SAFE_METHODS.has(request.method)
+    readOnly: SAFE_METHODS.has(request.method),
+    ...(request.cubeApiRequest ? {
+      cubeApiRequest: {
+        method: request.cubeApiRequest.method,
+        path: request.cubeApiRequest.path,
+        permission: request.cubeApiRequest.permission
+      }
+    } : {})
   };
 }
 
@@ -1242,6 +1374,7 @@ function auditAction(url, request) {
   if (url.pathname === "/api/auth/login") return "auth.login";
   if (url.pathname === "/api/auth/callback") return "auth.callback";
   if (url.pathname === "/api/auth/logout") return "auth.logout";
+  if (url.pathname === "/api/integrations/cube/auth") return "cube.auth";
   if (request.method === "DELETE") return "delete";
   if (!SAFE_METHODS.has(request.method)) return "write";
   return "read";

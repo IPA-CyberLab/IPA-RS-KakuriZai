@@ -22,8 +22,10 @@ The guest workspace is mounted at `/workspace`. In CubeMaster v2 mode the regist
 
 The gVisor backend verifies that Docker has the configured `runsc` runtime, then launches a labelled container with `--runtime runsc`. For `agctl-overlay` host mounts it copies the source tree into the World upper directory and bind-mounts that copy. `changed` compares file contents, modes, symlink targets, additions, and deletions against the source; `apply` is the only operation that mutates the source.
 
+gVisor network isolation is enforced outside the container with tagged host firewall rules. The `INPUT` path denies every connection from the container to the host, while `DOCKER-USER` denies mandatory non-public destinations before applying the World's `denyOut`, `allowOut`, and internet-access policy. Rules are installed before a World becomes ready, after resume, and periodically while Studio runs. Failure to install them stops the affected container.
+
 ## Fuchsia
 
 The Fuchsia backend uses an isolated `ffx` directory and a local product bundle. It starts a headless emulator, verifies the target, and can host/register the product-bundle repository. Linux host bind mounts are rejected before runtime creation. Pause uses a persistent emulator stop and resume reuses the staged emulator state.
 
-Authentication is isolated from request handling through `createAuthProvider()`. Provider-specific configuration is normalized before request verification; production deployments use Keycloak or a compatible OIDC provider, while `none` is restricted to isolated local development.
+Authentication is isolated from request handling through `createAuthProvider()`. Provider-specific configuration is normalized before request verification; production deployments use Keycloak or a compatible OIDC provider, while `none` is restricted to isolated local development. Cube API's auth callback terminates at KakuriZai and accepts either an RBAC-authorized OIDC bearer token or a dedicated mode-`0600` API key. This protects the public API layer; CubeMaster and Cubelet remain management-plane services and are additionally excluded by sandbox network policy.

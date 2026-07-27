@@ -16,10 +16,12 @@ import {
 test("gVisor backend drives Docker with the registered runsc runtime", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-gvisor-backend-"));
   const runtime = await fakeDocker(tmp);
+  const firewall = await fakeIptables(tmp);
   const config = await loadConfig({ home: path.join(tmp, "home"), createSecrets: false });
   config.gvisor = {
     ...config.gvisor,
     docker: runtime.binary,
+    iptables: firewall.binary,
     runtime: "runsc",
     image: "alpine:3.23",
     pull: "never"
@@ -28,11 +30,22 @@ test("gVisor backend drives Docker with the registered runsc runtime", async () 
   const world = await createWorld(config, {
     name: "gvisor-test",
     backend: "gvisor",
-    hostMount: false
+    hostMount: false,
+    network: {
+      allowInternetAccess: true,
+      nat: { enabled: true, masquerade: true },
+      denyOut: ["8.8.8.0/24"]
+    }
   });
   assert.equal(world.status, "ready");
   assert.equal(world.sandbox.runtime, "gVisor");
   assert.equal(world.sandbox.mode, "docker-runsc");
+  assert.equal(world.backendConfig.gvisor.networkPolicy.applied, true);
+  assert.equal(world.backendConfig.gvisor.networkPolicy.ipv4, "172.30.0.2");
+  assert.equal(world.backendConfig.gvisor.networkPolicy.hostAccess, "denied");
+  assert.equal(world.backendConfig.gvisor.networkPolicy.internetAccess, true);
+  assert.ok(world.backendConfig.gvisor.networkPolicy.protectedCidrs.includes("192.168.0.0/16"));
+  assert.ok(world.backendConfig.gvisor.networkPolicy.protectedCidrs.includes("8.8.8.0/24"));
 
   const executed = await execWorld(config, world.id, ["sh", "-lc", "echo ok"]);
   assert.match(executed.stdout, /GVisor fake exec OK/);
@@ -56,6 +69,41 @@ test("gVisor backend drives Docker with the registered runsc runtime", async () 
   assert.match(log, /--label io\.kakurizai\.backend=gvisor/);
   assert.match(log, /pause kz-gvisor-test-/);
   assert.match(log, /unpause kz-gvisor-test-/);
+  const firewallLog = await fs.readFile(firewall.log, "utf8");
+  assert.match(firewallLog, /-I INPUT 1 -j KAKURIZAI-GVISOR-IN/);
+  assert.match(firewallLog, /-I DOCKER-USER 1 -j KAKURIZAI-GVISOR-OUT/);
+  assert.match(firewallLog, /-A KAKURIZAI-GVISOR-IN -s 172\.30\.0\.2\/32 .* -j REJECT/);
+  assert.match(firewallLog, /-A KAKURIZAI-GVISOR-OUT -s 172\.30\.0\.2\/32 -d 169\.254\.0\.0\/16 .* -j REJECT/);
+  assert.match(firewallLog, /-A KAKURIZAI-GVISOR-OUT -s 172\.30\.0\.2\/32 -d 192\.168\.0\.0\/16 .* -j REJECT/);
+  assert.match(firewallLog, /-A KAKURIZAI-GVISOR-OUT -s 172\.30\.0\.2\/32 -d 8\.8\.8\.0\/24 .* -j REJECT/);
+});
+
+test("gVisor fails closed and removes a new container when firewall installation fails", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-gvisor-fail-closed-"));
+  const runtime = await fakeDocker(tmp);
+  const firewall = await fakeIptables(tmp, { fail: true });
+  const config = await loadConfig({ home: path.join(tmp, "home"), createSecrets: false });
+  config.gvisor = {
+    ...config.gvisor,
+    docker: runtime.binary,
+    iptables: firewall.binary,
+    runtime: "runsc",
+    image: "alpine:3.23",
+    pull: "never"
+  };
+
+  await assert.rejects(
+    createWorld(config, {
+      name: "gvisor-fail-closed",
+      backend: "gvisor",
+      hostMount: false
+    }),
+    /network isolation failed closed/
+  );
+
+  const log = await fs.readFile(runtime.log, "utf8");
+  assert.match(log, /stop -t 0 kz-gvisor-fail-closed-/);
+  assert.match(log, /rm -f kz-gvisor-fail-closed-/);
 });
 
 test("Fuchsia backend starts, executes, persists, reuses, and removes an ffx emulator", async () => {
@@ -127,7 +175,7 @@ case "$1" in
     ;;
   inspect)
     if [ ! -f "$state" ]; then exit 1; fi
-    printf '%s|runsc\\n' "$(cat "$state")"
+    printf '{"State":{"Status":"%s","Paused":false},"HostConfig":{"Runtime":"runsc"},"NetworkSettings":{"Networks":{"bridge":{"IPAddress":"172.30.0.2","GlobalIPv6Address":""}}}}\\n' "$(cat "$state")"
     ;;
   run)
     printf 'running\\n' > "$state"
@@ -142,6 +190,9 @@ case "$1" in
   unpause|start)
     printf 'running\\n' > "$state"
     ;;
+  stop)
+    printf 'stopped\\n' > "$state"
+    ;;
   rm)
     rm -f "$state"
     ;;
@@ -149,6 +200,19 @@ esac
 `, "utf8");
   await fs.chmod(binary, 0o755);
   return { binary, log, state };
+}
+
+async function fakeIptables(tmp, options = {}) {
+  const binary = path.join(tmp, "iptables");
+  const log = path.join(tmp, "iptables.log");
+  await fs.writeFile(binary, `#!/bin/sh
+printf '%s\\n' "$*" >> ${quote(log)}
+${options.fail ? "exit 42" : ""}
+if [ "$1" = "-C" ]; then exit 1; fi
+exit 0
+`, "utf8");
+  await fs.chmod(binary, 0o755);
+  return { binary, log };
 }
 
 async function fakeFfx(tmp) {

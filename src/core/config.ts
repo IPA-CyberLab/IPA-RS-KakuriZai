@@ -1,4 +1,6 @@
 // @ts-nocheck
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { defaultHome, ensureDir, pathExists, readJson, writeJsonAtomic } from "./fs.js";
@@ -93,6 +95,8 @@ export function defaultConfig(home = defaultHome()) {
       mastercli: process.env.KAKURIZAI_CUBEMASTERCLI || "cubemastercli",
       apiBaseUrl: process.env.KAKURIZAI_CUBE_API || null,
       apiTimeoutMs: Number(process.env.KAKURIZAI_CUBE_API_TIMEOUT_MS || 120000),
+      apiKey: null,
+      apiKeyFile: process.env.KAKURIZAI_CUBE_API_KEY_FILE || path.join(home, "auth", "cube-api.key"),
       template: process.env.KAKURIZAI_CUBE_TEMPLATE || "kakurizai-base",
       namespace: process.env.KAKURIZAI_CUBE_NAMESPACE || "kakurizai",
       workspacePath: "/workspace",
@@ -134,7 +138,9 @@ export function defaultConfig(home = defaultHome()) {
       cpu: process.env.KAKURIZAI_GVISOR_CPU || "1000m",
       memory: process.env.KAKURIZAI_GVISOR_MEMORY || "1024Mi",
       pull: process.env.KAKURIZAI_GVISOR_PULL || "missing",
-      createTimeoutMs: 300000
+      createTimeoutMs: 300000,
+      iptables: process.env.KAKURIZAI_GVISOR_IPTABLES || "iptables",
+      firewallReconcileMs: Number(process.env.KAKURIZAI_GVISOR_FIREWALL_RECONCILE_MS || 60000)
     },
     fuchsia: {
       ffx: process.env.KAKURIZAI_FFX || "ffx",
@@ -189,7 +195,56 @@ export async function loadConfig(options = {}) {
   config.configPath = configPath;
   config.storeDir = path.resolve(config.storeDir || path.join(home, "store"));
   await ensureDir(config.storeDir);
+  await loadCubeApiKey(config, options);
   return config;
+}
+
+async function loadCubeApiKey(config, options = {}) {
+  const configured = String(process.env.KAKURIZAI_CUBE_API_KEY || config.cube?.apiKey || "").trim();
+  if (configured) {
+    assertCubeApiKey(configured);
+    config.cube.apiKey = configured;
+    return;
+  }
+  const configuredKeyFile = config.cube?.apiKeyFile || path.join(config.home, "auth", "cube-api.key");
+  const keyFile = path.isAbsolute(configuredKeyFile)
+    ? configuredKeyFile
+    : path.resolve(config.home, configuredKeyFile);
+  config.cube.apiKeyFile = keyFile;
+  if (await pathExists(keyFile)) {
+    config.cube.apiKey = await readCubeApiKeyFile(keyFile);
+    return;
+  }
+  if (options.createSecrets === false) {
+    config.cube.apiKey = null;
+    return;
+  }
+  await ensureDir(path.dirname(keyFile));
+  const key = crypto.randomBytes(32).toString("base64url");
+  try {
+    await fs.writeFile(keyFile, `${key}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    config.cube.apiKey = key;
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+    config.cube.apiKey = await readCubeApiKeyFile(keyFile);
+  }
+}
+
+async function readCubeApiKeyFile(keyFile) {
+  const stat = await fs.lstat(keyFile);
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error(`cube.apiKeyFile must be a regular file, not a link: ${keyFile}`);
+  }
+  const key = (await fs.readFile(keyFile, "utf8")).trim();
+  assertCubeApiKey(key);
+  await fs.chmod(keyFile, 0o600);
+  return key;
+}
+
+function assertCubeApiKey(value) {
+  if (Buffer.byteLength(String(value || ""), "utf8") < 32) {
+    throw new Error("cube.apiKey must contain at least 32 bytes");
+  }
 }
 
 export async function initConfigFile(options = {}) {
