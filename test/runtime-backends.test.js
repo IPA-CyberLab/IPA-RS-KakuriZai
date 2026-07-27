@@ -24,7 +24,10 @@ test("gVisor backend drives Docker with the registered runsc runtime", async () 
     iptables: firewall.binary,
     runtime: "runsc",
     image: "alpine:3.23",
-    pull: "never"
+    pull: "never",
+    persistentVolumes: {
+      "codex-home": "/root/.codex"
+    }
   };
 
   const world = await createWorld(config, {
@@ -42,6 +45,11 @@ test("gVisor backend drives Docker with the registered runsc runtime", async () 
   assert.equal(world.sandbox.mode, "docker-runsc");
   assert.equal(world.backendConfig.gvisor.networkPolicy.applied, true);
   assert.equal(world.backendConfig.gvisor.restartPolicy, "on-failure:5");
+  assert.deepEqual(world.backendConfig.gvisor.persistentVolumes, [{
+    key: "codex-home",
+    name: `${world.backendConfig.gvisor.containerName}-codex-home`,
+    target: "/root/.codex"
+  }]);
   assert.equal(world.backendConfig.gvisor.networkPolicy.ipv4, "172.30.0.2");
   assert.equal(world.backendConfig.gvisor.networkPolicy.hostAccess, "denied");
   assert.equal(world.backendConfig.gvisor.networkPolicy.internetAccess, true);
@@ -74,6 +82,9 @@ test("gVisor backend drives Docker with the registered runsc runtime", async () 
   const log = await fs.readFile(runtime.log, "utf8");
   assert.match(log, /run .*--runtime runsc/);
   assert.match(log, /--restart on-failure:5/);
+  assert.match(log, new RegExp(`volume create .*${world.backendConfig.gvisor.containerName}-codex-home`));
+  assert.match(log, new RegExp(`--mount type=volume,src=${world.backendConfig.gvisor.containerName}-codex-home,dst=/root/\\.codex`));
+  assert.doesNotMatch(log, /volume rm/);
   assert.doesNotMatch(log, /^start kz-gvisor-test-/m);
   assert.match(log, /--label io\.kakurizai\.backend=gvisor/);
   assert.match(log, /pause kz-gvisor-test-/);
@@ -194,7 +205,8 @@ case "$1" in
     fi
     ip=
     if [ "$status" = "running" ]; then ip=172.30.0.2; fi
-    printf '{"State":{"Status":"%s","Paused":false,"OOMKilled":%s,"ExitCode":%s},"HostConfig":{"Runtime":"runsc","RestartPolicy":{"Name":"on-failure","MaximumRetryCount":5}},"NetworkSettings":{"Networks":{"bridge":{"IPAddress":"%s","GlobalIPv6Address":""}}}}\\n' "$status" "$oom" "$exit_code" "$ip"
+    container="$4"
+    printf '{"State":{"Status":"%s","Paused":false,"OOMKilled":%s,"ExitCode":%s},"HostConfig":{"Runtime":"runsc","RestartPolicy":{"Name":"on-failure","MaximumRetryCount":5}},"Mounts":[{"Type":"volume","Name":"%s-codex-home","Source":"/var/lib/docker/volumes/%s-codex-home/_data","Destination":"/root/.codex"}],"NetworkSettings":{"Networks":{"bridge":{"IPAddress":"%s","GlobalIPv6Address":""}}}}\\n' "$status" "$oom" "$exit_code" "$container" "$container" "$ip"
     ;;
   run)
     printf 'running\\n' > "$state"

@@ -209,6 +209,16 @@
           "type": "string",
           "pattern": "^(no|always|unless-stopped|on-failure(?::[0-9]+)?)$"
         },
+        "persistentVolumes": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,47}$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^/[^,]+$"
+          }
+        },
         "createTimeoutMs": { "type": "integer", "minimum": 1000 },
         "iptables": { "type": "string" },
         "firewallReconcileMs": { "type": "integer", "minimum": 1000 },

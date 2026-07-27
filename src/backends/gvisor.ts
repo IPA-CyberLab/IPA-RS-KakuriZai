@@ -38,12 +38,14 @@ export class GVisorBackend {
     await this.assertRuntime(docker);
     const containerName = this.containerName(world);
     const restartPolicy = this.restartPolicy();
+    const persistentVolumes = this.persistentVolumeSpecs(world);
     const existing = await this.inspectState(docker, containerName);
     let created = false;
     if (existing.exists) {
       if (existing.runtime !== this.runtimeName()) {
         throw new Error(`existing container ${containerName} uses runtime ${existing.runtime || "unknown"}, expected ${this.runtimeName()}`);
       }
+      this.assertPersistentVolumes(existing, persistentVolumes);
       if (existing.restartPolicy !== restartPolicy) {
         await this.docker(docker, ["update", "--restart", restartPolicy, containerName]);
       }
@@ -52,6 +54,7 @@ export class GVisorBackend {
       }
     } else {
       const mounts = await this.prepareMounts(world);
+      await this.ensurePersistentVolumes(docker, world, persistentVolumes);
       const image = world.backendConfig?.template || this.runtime.image;
       if (!image) throw new Error("gvisor.image or create.template is required");
       const args = [
@@ -72,6 +75,9 @@ export class GVisorBackend {
       for (const mount of mounts) {
         args.push("--mount", dockerMount(mount));
       }
+      for (const volume of persistentVolumes) {
+        args.push("--mount", `type=volume,src=${volume.name},dst=${volume.target}`);
+      }
       args.push(String(image), ...keepAliveCommand(this.runtime.keepAliveCommand));
       await this.docker(docker, args, { timeoutMs: Number(this.runtime.createTimeoutMs || 300000) });
       created = true;
@@ -81,6 +87,7 @@ export class GVisorBackend {
     if (!state.exists || state.status !== "running" || state.runtime !== this.runtimeName() || state.restartPolicy !== restartPolicy) {
       throw new Error(`gVisor container verification failed: status=${state.status || "missing"} runtime=${state.runtime || "unknown"} restart=${state.restartPolicy || "unknown"}`);
     }
+    this.assertPersistentVolumes(state, persistentVolumes);
     let networkPolicy;
     try {
       networkPolicy = await this.applyNetworkPolicy(world, state);
@@ -98,6 +105,7 @@ export class GVisorBackend {
       containerName,
       runtime: state.runtime,
       restartPolicy: state.restartPolicy,
+      persistentVolumes,
       dockerHost: this.runtime.dockerHost || null,
       networkPolicy
     };
@@ -242,6 +250,12 @@ export class GVisorBackend {
       throw new Error(`Docker returned invalid inspect JSON for ${name}`);
     }
     const networks = Object.entries(detail.NetworkSettings?.Networks || {});
+    const mounts = (detail.Mounts || []).map((mount) => ({
+      type: String(mount?.Type || ""),
+      name: String(mount?.Name || ""),
+      source: String(mount?.Source || ""),
+      target: String(mount?.Destination || "")
+    }));
     const ipv4s = [...new Set(networks.map(([, network]) => String(network?.IPAddress || "").trim()).filter(Boolean))];
     const ipv6s = [...new Set(networks.map(([, network]) => String(network?.GlobalIPv6Address || "").trim()).filter(Boolean))];
     return {
@@ -254,7 +268,8 @@ export class GVisorBackend {
       restartPolicy: dockerRestartPolicy(detail.HostConfig?.RestartPolicy),
       ipv4s,
       ipv6s,
-      networks: networks.map(([network]) => network)
+      networks: networks.map(([network]) => network),
+      mounts
     };
   }
 
@@ -396,6 +411,57 @@ export class GVisorBackend {
       throw new Error(`invalid gvisor.restartPolicy: ${value}`);
     }
     return value;
+  }
+
+  persistentVolumeSpecs(world) {
+    const saved = world.backendConfig?.gvisor?.persistentVolumes;
+    const configured = Array.isArray(saved) && saved.length
+      ? Object.fromEntries(saved.map((volume) => [volume.key, volume.target]))
+      : this.runtime.persistentVolumes || {};
+    if (!configured || Array.isArray(configured) || typeof configured !== "object") {
+      throw new Error("gvisor.persistentVolumes must be an object of volume keys to absolute container paths");
+    }
+    const targets = new Set();
+    return Object.entries(configured).map(([key, configuredTarget]) => {
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,47}$/.test(key)) {
+        throw new Error(`invalid gvisor persistent volume key: ${key}`);
+      }
+      const target = String(configuredTarget || "").trim();
+      if (!target.startsWith("/") || target === "/" || target.includes(",") || path.posix.normalize(target) !== target) {
+        throw new Error(`invalid gvisor persistent volume target for ${key}: ${target || "missing"}`);
+      }
+      if (targets.has(target)) {
+        throw new Error(`duplicate gvisor persistent volume target: ${target}`);
+      }
+      targets.add(target);
+      return {
+        key,
+        name: `${this.containerName(world)}-${key}`,
+        target
+      };
+    });
+  }
+
+  async ensurePersistentVolumes(docker, world, volumes) {
+    for (const volume of volumes) {
+      await this.docker(docker, [
+        "volume", "create",
+        "--label", `io.kakurizai.world=${world.id}`,
+        "--label", `io.kakurizai.state=${volume.key}`,
+        volume.name
+      ]);
+    }
+  }
+
+  assertPersistentVolumes(state, expected) {
+    for (const volume of expected) {
+      const mounted = (state.mounts || []).some((mount) => mount.type === "volume"
+        && (mount.name === volume.name || mount.source === volume.name)
+        && mount.target === volume.target);
+      if (!mounted) {
+        throw new Error(`existing container is missing persistent volume ${volume.name} at ${volume.target}; recreate the runtime without deleting the named volume`);
+      }
+    }
   }
 
   containerName(world) {

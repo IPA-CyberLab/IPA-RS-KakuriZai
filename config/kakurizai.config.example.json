@@ -89,6 +89,7 @@
     "memory": "1024Mi",
     "pull": "missing",
     "restartPolicy": "on-failure:5",
+    "persistentVolumes": {},
     "iptables": "iptables",
     "firewallReconcileMs": 60000,
     "protectedCidrs": []

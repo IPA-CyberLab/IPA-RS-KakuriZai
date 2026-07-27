@@ -256,7 +256,7 @@ agctl create --name guarded --no-host-mount --backend gvisor
 agctl exec guarded -- sh -lc 'uname -a; cat /proc/version'
 ```
 
-For a restart-safe Ubuntu image with Codex CLI and tmux preinstalled, build `deploy/gvisor-codex/Dockerfile` and use the resulting image as `gvisor.image` or the World template. Packages installed only into a running `runsc` root filesystem may not survive a runtime restart.
+For a restart-safe Ubuntu image with Codex CLI and tmux preinstalled, build `deploy/gvisor-codex/Dockerfile` and use the resulting image as `gvisor.image` or the World template. Packages installed only into a running `runsc` root filesystem may not survive a runtime restart. To preserve Codex authentication and session history across container recreation, configure `"persistentVolumes": { "codex-home": "/root/.codex" }` under `gvisor`. KakuriZai creates a World-specific named volume and intentionally retains it when the container is removed.
 
 For a host workspace, omit `--no-host-mount` and pass `--source`. The default `agctl-overlay` mode clones the source into the World upper directory before Docker starts. Changes remain private until `agctl apply`.
 

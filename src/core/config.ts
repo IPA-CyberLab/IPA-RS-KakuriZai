@@ -139,6 +139,7 @@ export function defaultConfig(home = defaultHome()) {
       memory: process.env.KAKURIZAI_GVISOR_MEMORY || "1024Mi",
       pull: process.env.KAKURIZAI_GVISOR_PULL || "missing",
       restartPolicy: process.env.KAKURIZAI_GVISOR_RESTART_POLICY || "on-failure:5",
+      persistentVolumes: {},
       createTimeoutMs: 300000,
       iptables: process.env.KAKURIZAI_GVISOR_IPTABLES || "iptables",
       firewallReconcileMs: Number(process.env.KAKURIZAI_GVISOR_FIREWALL_RECONCILE_MS || 60000)
