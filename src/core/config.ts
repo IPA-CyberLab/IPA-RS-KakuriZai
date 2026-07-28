@@ -138,7 +138,7 @@ export function defaultConfig(home = defaultHome()) {
       cpu: process.env.KAKURIZAI_GVISOR_CPU || "1000m",
       memory: process.env.KAKURIZAI_GVISOR_MEMORY || "1024Mi",
       pull: process.env.KAKURIZAI_GVISOR_PULL || "missing",
-      restartPolicy: process.env.KAKURIZAI_GVISOR_RESTART_POLICY || "on-failure:5",
+      restartPolicy: process.env.KAKURIZAI_GVISOR_RESTART_POLICY || "on-failure",
       persistentVolumes: {},
       managedTmux: {
         enabled: false,

@@ -163,10 +163,28 @@ async function handleUpgrade(config, auth, sessions, shellServer, request, socke
   });
 }
 
-function attachShell(world, ws, shell) {
+export function attachShell(world, ws, shell, spawnPty = pty.spawn) {
+  const safeSend = (message) => {
+    if (ws.readyState !== WebSocket.OPEN) return false;
+    try {
+      ws.send(message);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const closeSocket = (message = null) => {
+    if (message) safeSend(message);
+    if (ws.readyState !== WebSocket.OPEN) return;
+    try {
+      ws.close();
+    } catch {
+      // The WebSocket may have closed between the ready-state check and close.
+    }
+  };
   let shellProcess;
   try {
-    shellProcess = pty.spawn(shell.command, shell.args, {
+    shellProcess = spawnPty(shell.command, shell.args, {
       name: "xterm-256color",
       cols: 100,
       rows: 24,
@@ -180,38 +198,51 @@ function attachShell(world, ws, shell) {
       }
     });
   } catch (error) {
-    ws.send(`\r\n${error.message || String(error)}\r\n`);
-    ws.close();
+    closeSocket(`\r\n${error.message || String(error)}\r\n`);
     return;
   }
 
+  let terminalClosed = false;
+  const closeAfterPtyError = (error) => {
+    terminalClosed = true;
+    closeSocket(`\r\n[session unavailable: ${error.message || String(error)}]\r\n`);
+  };
   const write = (chunk) => {
-    if (ws.readyState === WebSocket.OPEN) ws.send(chunk.toString());
+    safeSend(chunk.toString());
   };
   shellProcess.onData(write);
   shellProcess.onExit(({ exitCode }) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(`\r\n[session exited ${exitCode ?? ""}]\r\n`);
-      ws.close();
-    }
+    terminalClosed = true;
+    closeSocket(`\r\n[session exited ${exitCode ?? ""}]\r\n`);
   });
   ws.on("message", (message) => {
+    if (terminalClosed) return;
     const text = message.toString();
     const envelope = parseShellEnvelope(text);
-    if (envelope?.type === "resize") {
-      shellProcess.resize(envelope.cols, envelope.rows);
-      return;
+    try {
+      if (envelope?.type === "resize") {
+        shellProcess.resize(envelope.cols, envelope.rows);
+        return;
+      }
+      if (envelope?.type === "input") {
+        shellProcess.write(envelope.data);
+        return;
+      }
+      shellProcess.write(text);
+    } catch (error) {
+      closeAfterPtyError(error);
     }
-    if (envelope?.type === "input") {
-      shellProcess.write(envelope.data);
-      return;
-    }
-    shellProcess.write(text);
   });
   ws.on("close", () => {
-    shellProcess.kill("SIGTERM");
+    if (terminalClosed) return;
+    terminalClosed = true;
+    try {
+      shellProcess.kill("SIGTERM");
+    } catch {
+      // The PTY may have closed between the WebSocket close event and kill.
+    }
   });
-  ws.send(`Connected to ${world.name}\r\n`);
+  safeSend(`Connected to ${world.name}\r\n`);
 }
 
 function parseShellEnvelope(text) {

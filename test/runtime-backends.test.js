@@ -52,7 +52,7 @@ test("gVisor backend drives Docker with the registered runsc runtime", async () 
   assert.equal(world.sandbox.runtime, "gVisor");
   assert.equal(world.sandbox.mode, "docker-runsc");
   assert.equal(world.backendConfig.gvisor.networkPolicy.applied, true);
-  assert.equal(world.backendConfig.gvisor.restartPolicy, "on-failure:5");
+  assert.equal(world.backendConfig.gvisor.restartPolicy, "on-failure");
   assert.deepEqual(world.backendConfig.gvisor.persistentVolumes, [{
     key: "codex-home",
     name: `${world.backendConfig.gvisor.containerName}-codex-home`,
@@ -68,10 +68,12 @@ test("gVisor backend drives Docker with the registered runsc runtime", async () 
   assert.ok(world.backendConfig.gvisor.networkPolicy.protectedCidrs.includes("192.168.0.0/16"));
   assert.ok(world.backendConfig.gvisor.networkPolicy.protectedCidrs.includes("8.8.8.0/24"));
 
+  await fs.writeFile(runtime.restartPolicy, "5\n", "utf8");
   await fs.writeFile(runtime.state, "oom-exited\n", "utf8");
   const stopped = await new GVisorBackend(config).reconcileSecurity(world);
   assert.equal(stopped.skipped, true);
   assert.equal(stopped.reason, "container is exited");
+  assert.equal((await fs.readFile(runtime.restartPolicy, "utf8")).trim(), "0");
   await fs.writeFile(runtime.state, "running\n", "utf8");
   const retained = await new GVisorBackend(config).reconcileSecurity(world);
   assert.equal(retained.managedTmux.applied, false);
@@ -99,7 +101,8 @@ test("gVisor backend drives Docker with the registered runsc runtime", async () 
 
   const log = await fs.readFile(runtime.log, "utf8");
   assert.match(log, /run .*--runtime runsc/);
-  assert.match(log, /--restart on-failure:5/);
+  assert.match(log, /run .*--restart on-failure:0/);
+  assert.match(log, /update --restart on-failure:0/);
   assert.match(log, new RegExp(`volume create .*${world.backendConfig.gvisor.containerName}-codex-home`));
   assert.match(log, new RegExp(`--mount type=volume,src=${world.backendConfig.gvisor.containerName}-codex-home,dst=/root/\\.codex`));
   assert.match(log, /exec kz-gvisor-test-[^ ]+ tmux new-session -d -s codex-0 -n codex -c \/workspace .*codex.*resume.*--last.*--no-alt-screen/);
@@ -203,10 +206,12 @@ test("Fuchsia rejects host bind mounts before starting ffx", async () => {
 async function fakeDocker(tmp) {
   const binary = path.join(tmp, "docker");
   const state = path.join(tmp, "docker-state");
+  const restartPolicy = path.join(tmp, "docker-restart-policy");
   const tmuxSession = path.join(tmp, "tmux-session");
   const log = path.join(tmp, "docker.log");
   await fs.writeFile(binary, `#!/bin/sh
 state=${quote(state)}
+restart_policy=${quote(restartPolicy)}
 tmux_session=${quote(tmuxSession)}
 log=${quote(log)}
 printf '%s\\n' "$*" >> "$log"
@@ -224,14 +229,34 @@ case "$1" in
       oom=true
       exit_code=137
     fi
+    retries=0
+    if [ -f "$restart_policy" ]; then retries=$(cat "$restart_policy"); fi
     ip=
     if [ "$status" = "running" ]; then ip=172.30.0.2; fi
     container="$4"
-    printf '{"State":{"Status":"%s","Paused":false,"OOMKilled":%s,"ExitCode":%s},"HostConfig":{"Runtime":"runsc","RestartPolicy":{"Name":"on-failure","MaximumRetryCount":5}},"Mounts":[{"Type":"volume","Name":"%s-codex-home","Source":"/var/lib/docker/volumes/%s-codex-home/_data","Destination":"/root/.codex"}],"NetworkSettings":{"Networks":{"bridge":{"IPAddress":"%s","GlobalIPv6Address":""}}}}\\n' "$status" "$oom" "$exit_code" "$container" "$container" "$ip"
+    printf '{"State":{"Status":"%s","Paused":false,"OOMKilled":%s,"ExitCode":%s},"HostConfig":{"Runtime":"runsc","RestartPolicy":{"Name":"on-failure","MaximumRetryCount":%s}},"Mounts":[{"Type":"volume","Name":"%s-codex-home","Source":"/var/lib/docker/volumes/%s-codex-home/_data","Destination":"/root/.codex"}],"NetworkSettings":{"Networks":{"bridge":{"IPAddress":"%s","GlobalIPv6Address":""}}}}\\n' "$status" "$oom" "$exit_code" "$retries" "$container" "$container" "$ip"
     ;;
   run)
+    previous=
+    for arg in "$@"; do
+      if [ "$previous" = "--restart" ]; then
+        case "$arg" in
+          on-failure:*) printf '%s\\n' "\${arg#*:}" > "$restart_policy" ;;
+          on-failure) printf '0\\n' > "$restart_policy" ;;
+        esac
+        break
+      fi
+      previous="$arg"
+    done
     printf 'running\\n' > "$state"
     printf 'fake-container\\n'
+    ;;
+  update)
+    policy="$3"
+    case "$policy" in
+      on-failure:*) printf '%s\\n' "\${policy#*:}" > "$restart_policy" ;;
+      on-failure) printf '0\\n' > "$restart_policy" ;;
+    esac
     ;;
   exec)
     if [ "$3" = "tmux" ]; then
@@ -261,12 +286,13 @@ case "$1" in
     ;;
   rm)
     rm -f "$state"
+    rm -f "$restart_policy"
     rm -f "$tmux_session"
     ;;
 esac
 `, "utf8");
   await fs.chmod(binary, 0o755);
-  return { binary, log, state, tmuxSession };
+  return { binary, log, state, restartPolicy, tmuxSession };
 }
 
 async function fakeIptables(tmp, options = {}) {

@@ -88,7 +88,7 @@
     "cpu": "1000m",
     "memory": "1024Mi",
     "pull": "missing",
-    "restartPolicy": "on-failure:5",
+    "restartPolicy": "on-failure",
     "persistentVolumes": {},
     "managedTmux": {
       "enabled": false,

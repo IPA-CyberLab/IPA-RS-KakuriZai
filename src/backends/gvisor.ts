@@ -47,7 +47,7 @@ export class GVisorBackend {
       }
       this.assertPersistentVolumes(existing, persistentVolumes);
       if (existing.restartPolicy !== restartPolicy) {
-        await this.docker(docker, ["update", "--restart", restartPolicy, containerName]);
+        await this.docker(docker, ["update", "--restart", dockerRestartPolicyArgument(restartPolicy), containerName]);
       }
       if (existing.status !== "running") {
         await this.docker(docker, ["start", containerName]);
@@ -62,7 +62,7 @@ export class GVisorBackend {
         "-d",
         "--name", containerName,
         "--runtime", this.runtimeName(),
-        "--restart", restartPolicy,
+        "--restart", dockerRestartPolicyArgument(restartPolicy),
         "--label", `io.kakurizai.world=${world.id}`,
         "--label", "io.kakurizai.backend=gvisor",
         "--workdir", primaryMount(mounts)?.sandboxPath || this.runtime.workspacePath || "/workspace"
@@ -286,7 +286,7 @@ export class GVisorBackend {
     const state = await this.inspectState(docker, containerName);
     if (!state.exists) return { skipped: true, reason: "container is absent" };
     if (state.restartPolicy !== restartPolicy) {
-      await this.docker(docker, ["update", "--restart", restartPolicy, containerName]);
+      await this.docker(docker, ["update", "--restart", dockerRestartPolicyArgument(restartPolicy), containerName]);
       state.restartPolicy = restartPolicy;
     }
     if (state.status !== "running") return { skipped: true, reason: `container is ${state.status}` };
@@ -418,7 +418,7 @@ export class GVisorBackend {
   }
 
   restartPolicy() {
-    const value = String(this.runtime.restartPolicy || "on-failure:5").trim();
+    const value = String(this.runtime.restartPolicy || "on-failure").trim();
     if (!/^(?:no|always|unless-stopped|on-failure(?::\d+)?)$/.test(value)) {
       throw new Error(`invalid gvisor.restartPolicy: ${value}`);
     }
@@ -648,6 +648,10 @@ function dockerRestartPolicy(value) {
   const name = String(value?.Name || "no");
   const retries = Number(value?.MaximumRetryCount || 0);
   return name === "on-failure" && retries > 0 ? `${name}:${retries}` : name;
+}
+
+function dockerRestartPolicyArgument(value) {
+  return value === "on-failure" ? "on-failure:0" : value;
 }
 
 function normalizeIpv4Cidr(value) {
