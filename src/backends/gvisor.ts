@@ -99,6 +99,11 @@ export class GVisorBackend {
       await this.clearNetworkPolicy(world).catch(() => {});
       throw new Error(`gVisor network isolation failed closed: ${error.message || String(error)}`);
     }
+    const managedTmux = await this.ensureManagedTmux(docker, world).catch((error) => ({
+      enabled: true,
+      applied: false,
+      reason: error.message || String(error)
+    }));
     world.backendConfig.template = world.backendConfig?.template || this.runtime.image;
     world.backendConfig.workspaceStrategy = world.backendConfig?.hostMount ? "copy-on-write" : "none";
     world.backendConfig.gvisor = {
@@ -106,6 +111,7 @@ export class GVisorBackend {
       runtime: state.runtime,
       restartPolicy: state.restartPolicy,
       persistentVolumes,
+      managedTmux,
       dockerHost: this.runtime.dockerHost || null,
       networkPolicy
     };
@@ -284,12 +290,18 @@ export class GVisorBackend {
       state.restartPolicy = restartPolicy;
     }
     if (state.status !== "running") return { skipped: true, reason: `container is ${state.status}` };
+    let networkPolicy;
     try {
-      return await this.applyNetworkPolicy(world, state);
+      networkPolicy = await this.applyNetworkPolicy(world, state);
     } catch (error) {
       await this.stopUnsafeContainer(docker, containerName);
       throw new Error(`gVisor network isolation failed closed for ${world.id}: ${error.message || String(error)}`);
     }
+    const managedTmux = await this.ensureManagedTmux(docker, world);
+    return {
+      ...networkPolicy,
+      managedTmux
+    };
   }
 
   async applyNetworkPolicy(world, state = null) {
@@ -462,6 +474,90 @@ export class GVisorBackend {
         throw new Error(`existing container is missing persistent volume ${volume.name} at ${volume.target}; recreate the runtime without deleting the named volume`);
       }
     }
+  }
+
+  managedTmuxSpec() {
+    const configured = this.runtime.managedTmux;
+    if (configured == null) return null;
+    if (Array.isArray(configured) || typeof configured !== "object") {
+      throw new Error("gvisor.managedTmux must be an object");
+    }
+    if (configured.enabled !== true) return null;
+    const sessionName = String(configured.sessionName || "codex-0").trim();
+    const windowName = String(configured.windowName || "codex").trim();
+    for (const [label, value] of [["sessionName", sessionName], ["windowName", windowName]]) {
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,47}$/.test(value)) {
+        throw new Error(`invalid gvisor.managedTmux.${label}: ${value || "missing"}`);
+      }
+    }
+    const workdir = String(configured.workdir || this.runtime.workspacePath || "/workspace").trim();
+    if (!workdir.startsWith("/") || workdir === "/" || workdir.includes(",") || path.posix.normalize(workdir) !== workdir) {
+      throw new Error(`invalid gvisor.managedTmux.workdir: ${workdir || "missing"}`);
+    }
+    const command = configured.command == null ? [] : configured.command;
+    if (!Array.isArray(command) || command.some((entry) => typeof entry !== "string" || !entry.length || entry.includes("\0"))) {
+      throw new Error("gvisor.managedTmux.command must be an array of non-empty strings");
+    }
+    const fallbackShell = String(configured.fallbackShell || "bash").trim();
+    if (!/^(?:\/[^\0]+|[a-zA-Z0-9_.-]+)$/.test(fallbackShell)) {
+      throw new Error(`invalid gvisor.managedTmux.fallbackShell: ${fallbackShell || "missing"}`);
+    }
+    return {
+      sessionName,
+      windowName,
+      workdir,
+      command: command.map(String),
+      fallbackShell
+    };
+  }
+
+  async ensureManagedTmux(docker, world) {
+    const spec = this.managedTmuxSpec();
+    if (!spec) {
+      return {
+        enabled: false,
+        applied: false,
+        reason: "disabled"
+      };
+    }
+    const containerName = this.containerName(world);
+    const version = await this.docker(docker, ["exec", containerName, "tmux", "-V"], { allowFailure: true });
+    if (version.code !== 0) {
+      throw new Error(`managed tmux is enabled but tmux is unavailable in ${containerName}`);
+    }
+    const existing = await this.docker(docker, [
+      "exec", containerName, "tmux", "has-session", "-t", spec.sessionName
+    ], { allowFailure: true });
+    if (existing.code === 0) {
+      return {
+        enabled: true,
+        applied: false,
+        sessionName: spec.sessionName,
+        windowName: spec.windowName,
+        reason: "session is already running"
+      };
+    }
+    const args = [
+      "exec", containerName,
+      "tmux", "new-session",
+      "-d",
+      "-s", spec.sessionName,
+      "-n", spec.windowName,
+      "-c", spec.workdir
+    ];
+    if (spec.command.length) {
+      const command = spec.command.map(shellQuote).join(" ");
+      args.push(`${command}; status=$?; printf '\\n[managed command exited with status %s; shell retained]\\n' "$status"; exec ${shellQuote(spec.fallbackShell)}`);
+    }
+    await this.docker(docker, args);
+    return {
+      enabled: true,
+      applied: true,
+      sessionName: spec.sessionName,
+      windowName: spec.windowName,
+      resumedCommand: spec.command.length > 0,
+      reason: "session created"
+    };
   }
 
   containerName(world) {

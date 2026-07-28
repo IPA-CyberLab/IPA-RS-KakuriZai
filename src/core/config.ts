@@ -140,6 +140,14 @@ export function defaultConfig(home = defaultHome()) {
       pull: process.env.KAKURIZAI_GVISOR_PULL || "missing",
       restartPolicy: process.env.KAKURIZAI_GVISOR_RESTART_POLICY || "on-failure:5",
       persistentVolumes: {},
+      managedTmux: {
+        enabled: false,
+        sessionName: "codex-0",
+        windowName: "codex",
+        workdir: "/workspace",
+        command: [],
+        fallbackShell: "bash"
+      },
       createTimeoutMs: 300000,
       iptables: process.env.KAKURIZAI_GVISOR_IPTABLES || "iptables",
       firewallReconcileMs: Number(process.env.KAKURIZAI_GVISOR_FIREWALL_RECONCILE_MS || 60000)

@@ -90,6 +90,14 @@
     "pull": "missing",
     "restartPolicy": "on-failure:5",
     "persistentVolumes": {},
+    "managedTmux": {
+      "enabled": false,
+      "sessionName": "codex-0",
+      "windowName": "codex",
+      "workdir": "/workspace",
+      "command": [],
+      "fallbackShell": "bash"
+    },
     "iptables": "iptables",
     "firewallReconcileMs": 60000,
     "protectedCidrs": []

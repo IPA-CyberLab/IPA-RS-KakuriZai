@@ -27,6 +27,14 @@ test("gVisor backend drives Docker with the registered runsc runtime", async () 
     pull: "never",
     persistentVolumes: {
       "codex-home": "/root/.codex"
+    },
+    managedTmux: {
+      enabled: true,
+      sessionName: "codex-0",
+      windowName: "codex",
+      workdir: "/workspace",
+      command: ["codex", "resume", "--last", "--no-alt-screen"],
+      fallbackShell: "bash"
     }
   };
 
@@ -50,6 +58,10 @@ test("gVisor backend drives Docker with the registered runsc runtime", async () 
     name: `${world.backendConfig.gvisor.containerName}-codex-home`,
     target: "/root/.codex"
   }]);
+  assert.equal(world.backendConfig.gvisor.managedTmux.enabled, true);
+  assert.equal(world.backendConfig.gvisor.managedTmux.applied, true);
+  assert.equal(world.backendConfig.gvisor.managedTmux.sessionName, "codex-0");
+  assert.equal(world.backendConfig.gvisor.managedTmux.resumedCommand, true);
   assert.equal(world.backendConfig.gvisor.networkPolicy.ipv4, "172.30.0.2");
   assert.equal(world.backendConfig.gvisor.networkPolicy.hostAccess, "denied");
   assert.equal(world.backendConfig.gvisor.networkPolicy.internetAccess, true);
@@ -61,6 +73,12 @@ test("gVisor backend drives Docker with the registered runsc runtime", async () 
   assert.equal(stopped.skipped, true);
   assert.equal(stopped.reason, "container is exited");
   await fs.writeFile(runtime.state, "running\n", "utf8");
+  const retained = await new GVisorBackend(config).reconcileSecurity(world);
+  assert.equal(retained.managedTmux.applied, false);
+  assert.equal(retained.managedTmux.reason, "session is already running");
+  await fs.rm(runtime.tmuxSession, { force: true });
+  const reconciled = await new GVisorBackend(config).reconcileSecurity(world);
+  assert.equal(reconciled.managedTmux.applied, true);
 
   const executed = await execWorld(config, world.id, ["sh", "-lc", "echo ok"]);
   assert.match(executed.stdout, /GVisor fake exec OK/);
@@ -84,6 +102,7 @@ test("gVisor backend drives Docker with the registered runsc runtime", async () 
   assert.match(log, /--restart on-failure:5/);
   assert.match(log, new RegExp(`volume create .*${world.backendConfig.gvisor.containerName}-codex-home`));
   assert.match(log, new RegExp(`--mount type=volume,src=${world.backendConfig.gvisor.containerName}-codex-home,dst=/root/\\.codex`));
+  assert.match(log, /exec kz-gvisor-test-[^ ]+ tmux new-session -d -s codex-0 -n codex -c \/workspace .*codex.*resume.*--last.*--no-alt-screen/);
   assert.doesNotMatch(log, /volume rm/);
   assert.doesNotMatch(log, /^start kz-gvisor-test-/m);
   assert.match(log, /--label io\.kakurizai\.backend=gvisor/);
@@ -184,9 +203,11 @@ test("Fuchsia rejects host bind mounts before starting ffx", async () => {
 async function fakeDocker(tmp) {
   const binary = path.join(tmp, "docker");
   const state = path.join(tmp, "docker-state");
+  const tmuxSession = path.join(tmp, "tmux-session");
   const log = path.join(tmp, "docker.log");
   await fs.writeFile(binary, `#!/bin/sh
 state=${quote(state)}
+tmux_session=${quote(tmuxSession)}
 log=${quote(log)}
 printf '%s\\n' "$*" >> "$log"
 case "$1" in
@@ -213,6 +234,20 @@ case "$1" in
     printf 'fake-container\\n'
     ;;
   exec)
+    if [ "$3" = "tmux" ]; then
+      case "$4" in
+        -V)
+          printf 'tmux 3.4\\n'
+          ;;
+        has-session)
+          [ -f "$tmux_session" ]
+          ;;
+        new-session)
+          : > "$tmux_session"
+          ;;
+      esac
+      exit $?
+    fi
     printf 'GVisor fake exec OK\\n'
     ;;
   pause)
@@ -226,11 +261,12 @@ case "$1" in
     ;;
   rm)
     rm -f "$state"
+    rm -f "$tmux_session"
     ;;
 esac
 `, "utf8");
   await fs.chmod(binary, 0o755);
-  return { binary, log, state };
+  return { binary, log, state, tmuxSession };
 }
 
 async function fakeIptables(tmp, options = {}) {

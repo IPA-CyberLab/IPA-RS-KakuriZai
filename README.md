@@ -258,6 +258,26 @@ agctl exec guarded -- sh -lc 'uname -a; cat /proc/version'
 
 For a restart-safe Ubuntu image with Codex CLI and tmux preinstalled, build `deploy/gvisor-codex/Dockerfile` and use the resulting image as `gvisor.image` or the World template. Packages installed only into a running `runsc` root filesystem may not survive a runtime restart. To preserve Codex authentication and session history across container recreation, configure `"persistentVolumes": { "codex-home": "/root/.codex" }` under `gvisor`. KakuriZai creates a World-specific named volume and intentionally retains it when the container is removed.
 
+An OOM or runtime crash still destroys in-memory tmux processes. `managedTmux` recreates the named session after a container restart during the same fail-closed reconciliation loop used for the firewall. A command is optional; when present, KakuriZai starts it inside the session and retains an interactive shell after it exits. For example, this restores the latest persisted Codex rollout:
+
+```json
+{
+  "gvisor": {
+    "persistentVolumes": { "codex-home": "/root/.codex" },
+    "managedTmux": {
+      "enabled": true,
+      "sessionName": "codex-0",
+      "windowName": "codex",
+      "workdir": "/workspace",
+      "command": ["codex", "resume", "--last", "--no-alt-screen"],
+      "fallbackShell": "bash"
+    }
+  }
+}
+```
+
+Size `backendConfig.memory` for long-running Codex sessions; Docker restarts the container after a cgroup OOM, while the persistent rollout and managed tmux allow the interactive session to be recovered.
+
 For a host workspace, omit `--no-host-mount` and pass `--source`. The default `agctl-overlay` mode clones the source into the World upper directory before Docker starts. Changes remain private until `agctl apply`.
 
 The gVisor backend applies a fail-closed host firewall policy after create/resume and reconciles it while Studio is running. All traffic from the container to the host is rejected, and private, carrier-grade NAT, link-local, documentation, multicast, and other non-public IPv4 ranges are denied before user `allowOut` rules. Configured `denyOut`, `allowOut`, and `allowInternetAccess` are enforced in addition to those mandatory ranges. The Studio service therefore needs permission to run the configured `gvisor.iptables` command through non-interactive `sudo`; if the policy cannot be installed, KakuriZai stops the container. Containers default to Docker's `on-failure:5` restart policy for OOM/crash recovery. That policy intentionally does not auto-start containers after a Docker daemon restart; Studio leaves a stopped World stopped when there is no container address to secure, preserving fail-closed host startup.
