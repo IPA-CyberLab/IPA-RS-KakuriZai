@@ -35,7 +35,12 @@ import {
   Trash2,
   X
 } from "lucide-react";
+import { Badge } from "./components/ui/badge";
+import { Button } from "./components/ui/button";
+import { Card } from "./components/ui/card";
+import { Input } from "./components/ui/input";
 import "./styles.css";
+import "./modern.css";
 
 type AuthConfig = {
   provider: string;
@@ -532,7 +537,7 @@ function App() {
   const [token] = React.useState("");
   const [session, setSession] = React.useState<string | null>(null);
   const [, setCsrfToken] = React.useState(() => sessionStorage.getItem("kakurizai.csrf") || "");
-  const [theme, setTheme] = React.useState<ThemeMode>(() => localStorage.getItem("kakurizai.theme") === "light" ? "light" : "dark");
+  const [theme, setTheme] = React.useState<ThemeMode>(() => localStorage.getItem("kakurizai.theme") === "dark" ? "dark" : "light");
   const [worlds, setWorlds] = React.useState<World[]>([]);
   const [cube, setCube] = React.useState<CubeInspect | null>(null);
   const [clusterNodes, setClusterNodes] = React.useState<ClusterNode[]>([]);
@@ -1128,7 +1133,7 @@ function App() {
   if (authRequired && !session) {
     return (
       <div className="loginPage">
-        <section className="loginPanel">
+        <Card className="loginPanel">
           <div className="mark"><Shield size={22} /></div>
           <h1>KakuriZai Console</h1>
           <p>{status === "Sign in required" ? authConfig.label : status}</p>
@@ -1137,8 +1142,8 @@ function App() {
             <span>Issuer</span><strong>{authConfig.issuer || "-"}</strong>
             <span>Audience</span><strong>{authConfig.audience || "-"}</strong>
           </div>
-          <button className="primary wide" type="button" onClick={signIn} disabled={busy}><KeyRound size={16} /> Sign in with Keycloak</button>
-        </section>
+          <Button className="primary wide" onClick={signIn} disabled={busy}><KeyRound size={16} /> Sign in with Keycloak</Button>
+        </Card>
       </div>
     );
   }
@@ -1155,54 +1160,78 @@ function App() {
   return (
     <main className={`workbench ${isNetworkView || isObservabilityView ? "networkWorkbench" : ""}`}>
       <aside className="activityBar">
-        <button
+        <div className="brandLockup" aria-label="KakuriZai Console">
+          <span className="brandMark"><Shield size={18} /></span>
+          <span className="brandCopy">
+            <strong>KakuriZai</strong>
+            <small>Sandbox console</small>
+          </span>
+        </div>
+
+        <span className="navSectionLabel">Workspace</span>
+        <nav className="activityNav" aria-label="Primary navigation">
+          <Button
+            variant="ghost"
+            size="icon"
+            className={`activityButton ${activeView === "sandboxes" ? "active" : ""}`}
+            onClick={() => {
+              setActiveView("sandboxes");
+              setActionMenuOpen(false);
+              setLaunchMenuOpen(false);
+            }}
+            title="Sandboxes"
+          >
+            <Monitor size={19} />
+            <span>Sandboxes</span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className={`activityButton ${activeView === "network" ? "active" : ""}`}
+            onClick={() => {
+              setActiveView("network");
+              setActionMenuOpen(false);
+              setLaunchMenuOpen(false);
+            }}
+            title="Network"
+          >
+            <Network size={19} />
+            <span>Network</span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className={`activityButton ${activeView === "observability" ? "active" : ""}`}
+            onClick={() => {
+              setActiveView("observability");
+              setActionMenuOpen(false);
+              setLaunchMenuOpen(false);
+            }}
+            title="Observability"
+          >
+            <Activity size={19} />
+            <span>Observability</span>
+          </Button>
+        </nav>
+
+        <Button
           ref={activityMenuRef}
-          className={`activityButton ${actionMenuOpen || launchMenuOpen ? "active" : ""}`}
+          variant="outline"
+          className={`activityButton activityCreate ${actionMenuOpen || launchMenuOpen ? "active" : ""}`}
           onClick={() => {
             setLaunchMenuOpen(false);
             setActionMenuOpen((value) => !value);
           }}
           title="Menu"
-          type="button"
         >
-          <MoreHorizontal size={22} />
-        </button>
-        <button
-          className={`activityButton ${activeView === "sandboxes" ? "active" : ""}`}
-          onClick={() => {
-            setActiveView("sandboxes");
-            setActionMenuOpen(false);
-            setLaunchMenuOpen(false);
-          }}
-          title="Sandboxes"
-          type="button"
-        >
-          <Monitor size={21} />
-        </button>
-        <button
-          className={`activityButton ${activeView === "network" ? "active" : ""}`}
-          onClick={() => {
-            setActiveView("network");
-            setActionMenuOpen(false);
-            setLaunchMenuOpen(false);
-          }}
-          title="Network"
-          type="button"
-        >
-          <Network size={21} />
-        </button>
-        <button
-          className={`activityButton ${activeView === "observability" ? "active" : ""}`}
-          onClick={() => {
-            setActiveView("observability");
-            setActionMenuOpen(false);
-            setLaunchMenuOpen(false);
-          }}
-          title="Observability"
-          type="button"
-        >
-          <Activity size={21} />
-        </button>
+          <Plus size={17} />
+          <span>New sandbox</span>
+        </Button>
+
+        <div className="activityFooter">
+          <Badge variant="success"><span className="liveDot" />Control plane online</Badge>
+          <small>{session || "Local session"}</small>
+        </div>
       </aside>
 
       {actionMenuOpen ? (
@@ -1453,14 +1482,17 @@ function App() {
       {!isNetworkView && !isObservabilityView ? (
         <section className="sandboxPanel">
           <header className="panelHeader">
-            <span>Sandboxes</span>
-            <button className="iconButton ghost" onClick={() => void refresh()} title="Refresh" type="button" disabled={busy}>
+            <div>
+              <span>Sandboxes</span>
+              <small>{filteredInventory.length} of {inventory.length}</small>
+            </div>
+            <Button variant="ghost" size="icon" className="iconButton ghost" onClick={() => void refresh()} title="Refresh" disabled={busy}>
               <RefreshCcw size={15} />
-            </button>
+            </Button>
           </header>
           <div className="panelSearch">
             <Search size={14} />
-            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search sandbox, template, host" />
+            <Input aria-label="Search sandboxes" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search sandboxes…" />
           </div>
           <div className="stateFilters">
             {(["all", "running", "paused", "other"] as StateFilter[]).map((filter) => (
@@ -1474,7 +1506,12 @@ function App() {
               <button key={row.key} className={`sandboxItem ${row.key === selected?.key ? "selected" : ""}`} onClick={() => setSelectedId(row.key)} type="button">
                 <span className="sandboxTopLine">
                   <span className="sandboxName">{row.name}</span>
-                  <span className={`sandboxState ${statusTone(row.status)}`}>{row.status}</span>
+                  <Badge
+                    variant={statusTone(row.status) === "ok" ? "success" : statusTone(row.status) === "warn" ? "warning" : "secondary"}
+                    className={`sandboxState ${statusTone(row.status)}`}
+                  >
+                    {row.status}
+                  </Badge>
                 </span>
                 <span className="sandboxPath">{row.templateId || subtitleForSandbox(row)}</span>
                 <span className="sandboxMetaLine">
@@ -1491,61 +1528,71 @@ function App() {
 
       <section className="mainArea">
         <header className="titleBar">
-          <div>
-            <strong>{titleLabel}</strong>
-            <span>{subtitleLabel}</span>
+          <div className="titleHeading">
+            <span className="titleEyebrow">KakuriZai / {isObservabilityView ? "Observability" : isNetworkView ? "Network" : "Sandboxes"}</span>
+            <div className="titleNameRow">
+              <strong>{titleLabel}</strong>
+              {selected && !isObservabilityView ? (
+                <Badge variant={statusTone(selected.status) === "ok" ? "success" : statusTone(selected.status) === "warn" ? "warning" : "secondary"}>
+                  {selected.status}
+                </Badge>
+              ) : null}
+            </div>
+            <span className="titleSubtitle">{subtitleLabel}</span>
           </div>
           <div className="toolbarActions">
-            <button
+            <Button
+              variant="ghost"
+              size="icon"
               className="ghost iconButton"
               onClick={() => setTheme((value) => value === "dark" ? "light" : "dark")}
               title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-              type="button"
             >
               {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
-            </button>
-            <button className="ghost" onClick={() => void refresh()} title="Refresh" type="button" disabled={busy}>
+            </Button>
+            <Button variant="outline" className="ghost" onClick={() => void refresh()} title="Refresh" disabled={busy}>
               <RefreshCcw size={16} />
-            </button>
+              <span className="buttonLabel">Refresh</span>
+            </Button>
             {authRequired ? (
-              <button className="ghost iconButton" onClick={() => void signOut()} title="Sign out" type="button">
+              <Button variant="ghost" size="icon" className="ghost iconButton" onClick={() => void signOut()} title="Sign out">
                 <LogOut size={16} />
-              </button>
+              </Button>
             ) : null}
             {isObservabilityView ? (
-              <button className="ghost" onClick={() => void refresh()} title="Refresh metrics" type="button" disabled={busy}>
+              <Button variant="outline" className="ghost" onClick={() => void refresh()} title="Refresh metrics" disabled={busy}>
                 <Activity size={16} />
                 Metrics
-              </button>
+              </Button>
             ) : null}
             {!isNetworkView && !isObservabilityView && selected && isPausedStatus(selected.status) ? (
-              <button
+              <Button
+                variant="outline"
                 className="ghost"
                 onClick={() => void resumeSelected()}
                 title={cube?.capabilities?.resume ? "Resume sandbox" : "Resume is not available on this CubeSandbox runtime"}
-                type="button"
                 disabled={busy || !selected.sandboxId || !cube?.capabilities?.resume}
               >
                 <Play size={16} />
                 Resume
-              </button>
+              </Button>
             ) : !isNetworkView && !isObservabilityView && selected ? (
-              <button
+              <Button
+                variant="outline"
                 className="ghost"
                 onClick={() => void pauseSelected()}
                 title={cube?.capabilities?.pause ? "Pause sandbox" : "Pause is not available on this CubeSandbox runtime"}
-                type="button"
                 disabled={busy || !selected.sandboxId || !cube?.capabilities?.pause}
               >
                 <Pause size={16} />
                 Pause
-              </button>
+              </Button>
             ) : null}
             {!isNetworkView && !isObservabilityView && selected ? (
-              <button className="danger" onClick={() => void destroySelected()} type="button" disabled={busy || !selected.sandboxId && !selected.world}>
+              <Button variant="destructive" className="danger" onClick={() => void destroySelected()} disabled={busy || !selected.sandboxId && !selected.world}>
                 <Trash2 size={16} />
                 Delete
-              </button>
+              </Button>
             ) : null}
           </div>
         </header>
@@ -1676,13 +1723,13 @@ function App() {
 
 function DetailSection({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
   return (
-    <section className="detailSection">
+    <Card className="detailSection">
       <header>
         <span>{icon}</span>
         <strong>{title}</strong>
       </header>
       {children}
-    </section>
+    </Card>
   );
 }
 
@@ -3310,13 +3357,13 @@ function MermaidNetworkDiagram({ source }: { source: string }) {
 
 function Kpi({ icon, label, value, tone = "muted" }: { icon: React.ReactNode; label: string; value: string; tone?: "ok" | "warn" | "muted" }) {
   return (
-    <div className={`kpi ${tone}`}>
+    <Card className={`kpi ${tone}`}>
       <span>{icon}</span>
       <div>
         <small>{label}</small>
         <strong>{value}</strong>
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -3394,7 +3441,7 @@ function ReplicaList({ replicas }: { replicas: Array<Record<string, unknown>> })
 function buildInventory(worlds: World[], cube: CubeInspect | null): InventoryRow[] {
   const runtimes = cube?.sandboxes || [];
   const matchedRuntimeIds = new Set<string>();
-  const rows = worlds.map((world) => {
+  const rows: InventoryRow[] = worlds.map((world) => {
     const runtime = runtimes.find((candidate) => sameSandboxId(candidate.id, world.sandbox?.id));
     if (runtime) matchedRuntimeIds.add(runtime.id);
     const displayRuntime = runtime && world.sandbox?.sandboxIp ? { ...runtime, sandboxIp: world.sandbox.sandboxIp } : runtime;
