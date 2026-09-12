@@ -510,6 +510,20 @@ spec:
   assert.doesNotMatch(mainTf, /command = ""/);
 });
 
+test("sandbox manifests default to a VS Code-capable writable layer", () => {
+  const manifest = parseSandboxManifest(`
+apiVersion: kakurizai.dev/v1
+kind: Sandbox
+metadata:
+  name: default-disk
+spec:
+  hostMount: false
+`);
+
+  assert.equal(manifest.spec.resources.writableLayerSize, "2G");
+  assert.equal(manifestToCreateInput(manifest).writableLayerSize, "2G");
+});
+
 test("network config rejects unsupported CubeSandbox network types", () => {
   assert.throws(
     () => normalizeNetworkConfig({ type: "vlan", vlan: { enabled: true, vlanId: 100, hostInterface: "eth0" } }),

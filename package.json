@@ -11,12 +11,14 @@
     "build": "tsc -p tsconfig.json && vite build && chmod +x dist/bin/agctl.js",
     "start": "npm run build --silent && node ./dist/bin/agctl.js studio",
     "test": "npm run build --silent && node --test",
+    "test:deployment-e2e": "playwright test --config playwright.deployment.config.mjs",
     "test:responsive": "playwright test --config playwright.config.mjs"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "@node-rs/argon2": "^2.2.1",
     "@radix-ui/react-slot": "^1.3.3",
     "@vitejs/plugin-react": "^5.1.2",
     "@xterm/addon-fit": "^0.11.0",

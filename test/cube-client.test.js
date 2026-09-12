@@ -362,6 +362,59 @@ test("cube client opens web shell with colorized bash profile", () => {
   assert.match(shell.args[10], /exec bash --rcfile/);
 });
 
+test("cube client runs exec and interactive shell through configured passwordless sudo", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-sudo-"));
+  const cubecli = path.join(tmp, "cubecli");
+  const sudo = path.join(tmp, "sudo");
+  const argsFile = path.join(tmp, "sudo-args.txt");
+  await fs.writeFile(cubecli, "#!/bin/sh\nprintf 'cubelet socket: permission denied\\n' >&2\nexit 77\n", "utf8");
+  await fs.writeFile(sudo, `#!/bin/sh\nprintf '%s\\n' "$@" > "${argsFile}"\nexit 0\n`, "utf8");
+  await fs.chmod(cubecli, 0o755);
+  await fs.chmod(sudo, 0o755);
+  const client = new CubeSandboxClient({
+    cubecli,
+    namespace: "kakurizai",
+    workspacePath: "/workspace",
+    sudo: "required",
+    sudoCommand: sudo
+  });
+  const world = {
+    name: "cube",
+    sandbox: { id: "4fac1c9a074d49bf8e29ee1d90592b22" }
+  };
+
+  const result = await client.exec(world, ["printf", "hello world"]);
+  assert.equal(result.code, 0);
+  assert.equal(result.sudo, true);
+  const execArgs = (await fs.readFile(argsFile, "utf8")).trim().split("\n");
+  assert.deepEqual(execArgs.slice(0, 9), [
+    "-n",
+    cubecli,
+    "--namespace",
+    "kakurizai",
+    "exec",
+    "-w",
+    "/workspace",
+    "4fac1c9a074d",
+    "printf"
+  ]);
+
+  const shell = client.shellCommand(world);
+  assert.equal(shell.command, sudo);
+  assert.equal(shell.sudo, true);
+  assert.deepEqual(shell.args.slice(0, 9), [
+    "-n",
+    cubecli,
+    "--namespace",
+    "kakurizai",
+    "exec",
+    "-i",
+    "-t",
+    "-w",
+    "/workspace"
+  ]);
+});
+
 test("cube client opens direct replica shells through ssh lxc executor", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-direct-"));
   const ssh = path.join(tmp, "ssh");
@@ -463,6 +516,7 @@ test("cube client starts sandbox dev access services", async () => {
   assert.match(argsText, /--install-extension "\$extension_id" --force/);
   assert.match(argsText, /GitHub\.vscode-pull-request-github/);
   assert.match(argsText, /--auth password/);
+  assert.match(argsText, /--disable-workspace-trust/);
   assert.match(argsText, /HASHED_PASSWORD="\$vscode_hashed_password"/);
   assert.doesNotMatch(argsText, /PASSWORD="\$vscode_password"/);
   assert.match(argsText, /Port \$\{ssh_port\}/);

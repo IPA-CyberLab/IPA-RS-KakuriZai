@@ -7,6 +7,7 @@ import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket, WebSocketServer } from "ws";
+import { Algorithm, hashSync as hashArgon2Sync } from "@node-rs/argon2";
 import { createAuthProvider } from "./auth/providers.js";
 import { AccountStore, publicAccount } from "./core/accounts.js";
 import { checkpointFailoverReplicas, createJoinToken, joinNode, listClusterNodes, reconcileFailover, removeClusterNode, replicateWorld, startFailoverController } from "./core/cluster.js";
@@ -229,7 +230,14 @@ class DevAccessManager {
     world = await ensureWorldProvisioned(this.config, world.id);
     const needsVscode = options.vscode !== false;
     const needsSsh = options.ssh === true;
+    const sandboxId = world.sandbox?.containerId || world.sandbox?.id;
     let session = this.sessions.get(world.id);
+    if (session && session.sandboxId !== sandboxId) {
+      session.vscodeForward?.server.close();
+      session.sshForward?.server.close();
+      this.sessions.delete(world.id);
+      session = null;
+    }
     if (!session) {
       const client = new CubeSandboxClient(this.config.cube);
       const runtime = await client.inspectWorldSandbox(world);
@@ -238,6 +246,7 @@ class DevAccessManager {
       session = {
         worldId: world.id,
         worldName: world.name,
+        sandboxId,
         sandboxIp,
         workspace: null,
         vscodePort: 13337,
@@ -385,26 +394,13 @@ function postCodeServerLogin(options) {
 }
 
 function hashCodeServerPassword(password) {
-  if (typeof crypto.argon2Sync !== "function") {
-    throw new Error("Node.js crypto.argon2Sync is required for code-server password hashing");
-  }
-  const salt = crypto.randomBytes(16);
-  const memory = 4096;
-  const passes = 3;
-  const parallelism = 1;
-  const hash = crypto.argon2Sync("argon2id", {
-    message: password,
-    nonce: salt,
-    parallelism,
-    tagLength: 32,
-    memory,
-    passes
+  return hashArgon2Sync(password, {
+    algorithm: Algorithm.Argon2id,
+    memoryCost: 4096,
+    timeCost: 3,
+    parallelism: 1,
+    outputLen: 32
   });
-  return `$argon2id$v=19$m=${memory},t=${passes},p=${parallelism}$${phcBase64(salt)}$${phcBase64(hash)}`;
-}
-
-function phcBase64(value) {
-  return Buffer.from(value).toString("base64").replace(/=+$/g, "");
 }
 
 function listenTcpForward(options) {

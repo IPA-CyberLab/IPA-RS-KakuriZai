@@ -154,6 +154,20 @@ Studio's Terraform view turns each saved sandbox definition into an isolated Ter
 
 Apply is refused until a saved plan exists, and a plan becomes invalid if the sandbox definition changes. Destroy uses a separate saved destroy plan, requires `worlds:delete`, and requires typing the exact sandbox name. Runs for the same sandbox are serialized, can be canceled, and survive Studio restarts as inspectable history. Set `terraform.binary` to an absolute path when Terraform is not in the Studio service's `PATH`; set `terraform.enabled` to `false` to disable execution while retaining source preview.
 
+## Deployment E2E
+
+The deployment test uses Chromium to verify the Keycloak-to-GitHub login route, confirms that the supplied live session was issued by Keycloak, opens a real managed sandbox in VS Code Web, creates `/workspace/hello-world.sh` from the integrated terminal, executes it, and verifies the generated output file contains `hello world`.
+
+```sh
+STUDIO_URL=http://studio.example.test:38476 \
+KAKURIZAI_E2E_SESSION_FILE="$KAKURIZAI_HOME/auth/studio-sessions.json" \
+KAKURIZAI_E2E_WORLD=kakurizai-sandbox \
+npm run test:deployment-e2e
+```
+
+For a workstation runner, provide `KAKURIZAI_E2E_SESSION_ID` through the secret store instead. The session ID and browser state must never be committed.
+Set `KAKURIZAI_E2E_PROXY=socks5://127.0.0.1:39080` when the deployment is intentionally restricted to a private CIDR and Chromium must use an SSH SOCKS tunnel into that network.
+
 ## Cluster Replication And Observability
 
 KakuriZai can keep a joined-node registry and replicate a saved sandbox across those nodes. Issue a join token on the controller, then register nodes:

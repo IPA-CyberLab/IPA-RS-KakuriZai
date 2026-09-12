@@ -101,10 +101,13 @@ export function defaultConfig(home = defaultHome()) {
       mode: process.env.KAKURIZAI_CUBE_MODE || "auto",
       cubecli: process.env.KAKURIZAI_CUBECLI || "cubecli",
       mastercli: process.env.KAKURIZAI_CUBEMASTERCLI || "cubemastercli",
+      sudo: process.env.KAKURIZAI_CUBE_SUDO || "auto",
+      socketPath: process.env.KAKURIZAI_CUBE_SOCKET || "/data/cubelet/cubelet.sock",
       apiBaseUrl: process.env.KAKURIZAI_CUBE_API || null,
       template: process.env.KAKURIZAI_CUBE_TEMPLATE || "kakurizai-base",
       namespace: process.env.KAKURIZAI_CUBE_NAMESPACE || "kakurizai",
       workspacePath: "/workspace",
+      writableLayerSize: process.env.KAKURIZAI_CUBE_WRITABLE_LAYER_SIZE || "2G",
       bootstrapTools: {
         enabled: process.env.KAKURIZAI_CUBE_BOOTSTRAP_TOOLS !== "false",
         packages: [

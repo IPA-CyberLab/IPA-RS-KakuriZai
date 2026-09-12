@@ -600,7 +600,7 @@ function App() {
     mounts: [{ name: "project", sourcePath: "", mode: "agctl-overlay" }] as LaunchMount[],
     cpu: "2000m",
     memory: "2000Mi",
-    writableLayerSize: "1G",
+    writableLayerSize: "2G",
     networkType: "tap",
     networkMode: "tap",
     sandboxIp: "",
@@ -1434,7 +1434,7 @@ function App() {
           <div className="splitFields">
             <div>
               <label>Disk size</label>
-              <input value={launch.writableLayerSize} onChange={(event) => setLaunch({ ...launch, writableLayerSize: event.target.value })} placeholder="1G" />
+              <input value={launch.writableLayerSize} onChange={(event) => setLaunch({ ...launch, writableLayerSize: event.target.value })} placeholder="2G" />
             </div>
             <div>
               <label>Network type</label>
@@ -2293,7 +2293,7 @@ function HeteroNetworkLabPanel({
     doubleNatNodes: "1",
     cpu: "2000m",
     memory: "2000Mi",
-    writableLayerSize: "1G",
+    writableLayerSize: "2G",
     addressBase: "",
     addressStart: "20",
     portOffset: "0"
@@ -2669,7 +2669,7 @@ function DiskEditor({
   busy: boolean;
   onSave: (world: World, writableLayerSize: string, recreate?: boolean) => Promise<void>;
 }) {
-  const configuredSize = world?.backendConfig?.writableLayerSize || runtimeSize || "1G";
+  const configuredSize = world?.backendConfig?.writableLayerSize || runtimeSize || "2G";
   const minimumBytes = parseSizeToBytes(minimumSize);
   const initialParts = nextDiskInputParts(minimumSize || configuredSize);
   const [amount, setAmount] = React.useState(String(initialParts.amount));
@@ -3628,7 +3628,7 @@ function diskMinimumForSelection(selected: InventoryRow, template: CubeTemplate 
     selected.world?.backendConfig?.writableLayerSize,
     selected.runtime?.writableLayerSize,
     template?.writableLayerSize
-  ]) || "1G";
+  ]) || "2G";
 }
 
 function mountRowsForSelection(row: InventoryRow): CubeVolumeMount[] {

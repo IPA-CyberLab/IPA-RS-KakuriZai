@@ -1,4 +1,5 @@
 // @ts-nocheck
+import fssync from "node:fs";
 import fs from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
@@ -539,7 +540,7 @@ export class CubeSandboxClient {
         "--no-trunc",
         "kakurizai.world",
         world.id
-      ], parseSandboxIds);
+      ], parseSandboxIds, this.config);
       if (!result.ok) {
         return {
           checked: false,
@@ -597,8 +598,9 @@ export class CubeSandboxClient {
   async createSandboxViaCli(world, request, binary) {
     const requestPath = path.join(world.paths.logs, "cube-create-request.json");
     await fs.writeFile(requestPath, `${JSON.stringify(request, null, 2)}\n`, "utf8");
-    const result = await runCommand(binary, ["cubebox", "create", "--rm=false", requestPath], {
-      allowFailure: true
+    const result = await runCubeCliCommand(binary, ["cubebox", "create", "--rm=false", requestPath], {
+      allowFailure: true,
+      config: this.config
     });
     const output = `${result.stdout}\n${result.stderr}`;
     await fs.writeFile(path.join(world.paths.logs, "cube-create.log"), output, "utf8");
@@ -642,7 +644,7 @@ export class CubeSandboxClient {
       "if [ -d \"$workspace\" ]; then cp -a \"$workspace\"/. \"$target\"/; fi",
       "printf 'workspace=%s\\ntarget=%s\\n' \"$workspace\" \"$target\""
     ].join("; ");
-    const result = await runCommand(binary, [
+    const result = await runCubeCliCommand(binary, [
       ...cubeCliGlobalArgs(this.config),
       "exec",
       sandboxIdForCubeCli(sandboxId),
@@ -650,7 +652,8 @@ export class CubeSandboxClient {
       "-lc",
       script
     ], {
-      allowFailure: true
+      allowFailure: true,
+      config: this.config
     });
     const output = `${result.stdout}\n${result.stderr}`;
     await fs.writeFile(path.join(world.paths.logs, "cube-replication-materialize.log"), output, "utf8");
@@ -883,12 +886,12 @@ export class CubeSandboxClient {
     const cubecli = commandExists(this.config.cubecli || "cubecli");
     const mastercli = commandExists(this.config.mastercli || "cubemastercli");
     const [cubeVersion, masterTemplates, masterSandboxes, masterNodes, storageStatus, taskStatuses] = await Promise.all([
-      cubecli ? commandSummary(cubecli, ["--version"]) : Promise.resolve({ ok: false, reason: "cubecli not found" }),
+      cubecli ? cubeCliCommandSummary(cubecli, ["--version"], null, this.config) : Promise.resolve({ ok: false, reason: "cubecli not found" }),
       mastercli ? commandSummary(mastercli, ["tpl", "list"], parseTemplates) : Promise.resolve({ ok: false, reason: "cubemastercli not found" }),
       mastercli ? commandSummary(mastercli, ["list", "--all", "--wide"], parseSandboxesWide) : Promise.resolve({ ok: false, reason: "cubemastercli not found" }),
       mastercli ? commandSummary(mastercli, ["node", "list", "--json"], parseNodesJson) : Promise.resolve({ ok: false, reason: "cubemastercli not found" }),
       mastercli ? commandSummary(mastercli, ["storage", "status"], parseStorageStatus) : Promise.resolve({ ok: false, reason: "cubemastercli not found" }),
-      cubecli ? cubeCliCommandSummary(cubecli, [...cubeCliGlobalArgs(this.config), "containerd-ctr", "tasks", "list"], parseTaskStatuses) : Promise.resolve({ ok: false, reason: "cubecli not found" })
+      cubecli ? cubeCliCommandSummary(cubecli, [...cubeCliGlobalArgs(this.config), "containerd-ctr", "tasks", "list"], parseTaskStatuses, this.config) : Promise.resolve({ ok: false, reason: "cubecli not found" })
     ]);
     const templates = masterTemplates.ok ? masterTemplates.value : [];
     const templateDetails = mastercli
@@ -957,10 +960,10 @@ export class CubeSandboxClient {
         ? commandSummary(binaries.mastercli, ["info", "--sandboxid", sandbox.id], parseSandboxInfo)
         : Promise.resolve({ ok: false, reason: "cubemastercli not found" }),
       binaries.cubecli
-        ? commandSummary(binaries.cubecli, [...cubeCliGlobalArgs(this.config), "cubebox", "inspect", sandboxIdForCubeCli(sandbox.id)], parseJson)
+        ? cubeCliCommandSummary(binaries.cubecli, [...cubeCliGlobalArgs(this.config), "cubebox", "inspect", sandboxIdForCubeCli(sandbox.id)], parseJson, this.config)
         : Promise.resolve({ ok: false, reason: "cubecli not found" }),
       binaries.cubecli
-        ? commandSummary(binaries.cubecli, [...cubeCliGlobalArgs(this.config), "logs", "--tail", "80", sandboxIdForCubeCli(sandbox.id)])
+        ? cubeCliCommandSummary(binaries.cubecli, [...cubeCliGlobalArgs(this.config), "logs", "--tail", "80", sandboxIdForCubeCli(sandbox.id)], null, this.config)
         : Promise.resolve({ ok: false, reason: "cubecli not found" })
     ]);
     const inspect = rawInspect.ok ? rawInspect.value : null;
@@ -978,7 +981,7 @@ export class CubeSandboxClient {
     const cubecli = commandExists(this.config.cubecli || "cubecli");
     if (!cubecli) return { sandboxId, logs: "", error: "cubecli not found" };
     const tail = String(options.tail || 120);
-    const result = await commandSummary(cubecli, [...cubeCliGlobalArgs(this.config), "logs", "--tail", tail, sandboxIdForCubeCli(sandboxId)]);
+    const result = await cubeCliCommandSummary(cubecli, [...cubeCliGlobalArgs(this.config), "logs", "--tail", tail, sandboxIdForCubeCli(sandboxId)], null, this.config);
     return {
       sandboxId,
       logs: result.stdout || "",
@@ -1447,7 +1450,7 @@ export class CubeSandboxClient {
     }
     const status = this.available();
     if (!status.available || status.mode !== "cli") return { skipped: true, reason: status.reason };
-    return runCommand(status.binary, ["cubebox", "destroy", "--force", sandboxId], { allowFailure: true });
+    return runCubeCliCommand(status.binary, ["cubebox", "destroy", "--force", sandboxId], { allowFailure: true, config: this.config });
   }
 
   async exec(world, command, options = {}) {
@@ -1467,7 +1470,12 @@ export class CubeSandboxClient {
     const args = [...cubeCliGlobalArgs(this.config), "exec"];
     if (options.tty) args.push("-i", "-t");
     args.push("-w", this.config.workspacePath || "/workspace", sandboxIdForCubeCli(sandboxId), ...command);
-    return runCommand(binary, args, { inherit: options.inherit, allowFailure: options.allowFailure, timeoutMs: options.timeoutMs });
+    return runCubeCliCommand(binary, args, {
+      inherit: options.inherit,
+      allowFailure: options.allowFailure,
+      timeoutMs: options.timeoutMs,
+      config: this.config
+    });
   }
 
   shellCommand(world) {
@@ -1487,21 +1495,18 @@ export class CubeSandboxClient {
     if (direct) return direct;
     const binary = commandExists(this.config.cubecli || "cubecli");
     if (!binary) throw new Error("CubeSandbox is unavailable: cubecli not found");
-    return {
-      command: binary,
-      args: [
-        ...cubeCliGlobalArgs(this.config),
-        "exec",
-        "-i",
-        "-t",
-        "-w",
-        this.config.workspacePath || "/workspace",
-        sandboxIdForCubeCli(sandboxId),
-        "/bin/sh",
-        "-lc",
-        buildInteractiveShellScript()
-      ]
-    };
+    return cubeCliInvocation(binary, [
+      ...cubeCliGlobalArgs(this.config),
+      "exec",
+      "-i",
+      "-t",
+      "-w",
+      this.config.workspacePath || "/workspace",
+      sandboxIdForCubeCli(sandboxId),
+      "/bin/sh",
+      "-lc",
+      buildInteractiveShellScript()
+    ], this.config);
   }
 
   async inspectWorldSandbox(world) {
@@ -1514,7 +1519,7 @@ export class CubeSandboxClient {
         ? commandSummary(mastercli, ["info", "--sandboxid", sandboxId], parseSandboxInfo)
         : Promise.resolve({ ok: false, reason: "cubemastercli not found" }),
       cubecli
-        ? commandSummary(cubecli, [...cubeCliGlobalArgs(this.config), "cubebox", "inspect", sandboxIdForCubeCli(sandboxId)], parseJson)
+        ? cubeCliCommandSummary(cubecli, [...cubeCliGlobalArgs(this.config), "cubebox", "inspect", sandboxIdForCubeCli(sandboxId)], parseJson, this.config)
         : Promise.resolve({ ok: false, reason: "cubecli not found" })
     ]);
     return sandboxDetailFromRaw({
@@ -1543,7 +1548,7 @@ export class CubeSandboxClient {
       vscodeHashedPassword: options.vscodeHashedPassword || "",
       sshPassword: options.sshPassword || ""
     });
-    const result = await runCommand(binary, [
+    const result = await runCubeCliCommand(binary, [
       ...cubeCliGlobalArgs(this.config),
       "exec",
       sandboxIdForCubeCli(sandboxId),
@@ -1551,7 +1556,8 @@ export class CubeSandboxClient {
       "-lc",
       script
     ], {
-      allowFailure: true
+      allowFailure: true,
+      config: this.config
     });
     const output = `${result.stdout}\n${result.stderr}`;
     await fs.writeFile(path.join(world.paths.logs, "cube-dev-access.log"), output, "utf8");
@@ -1594,7 +1600,7 @@ export class CubeSandboxClient {
       "setup_mount() { name=$1; lower=$2; upper=$3; work=$4; target=$5; mkdir -p \"$lower\" \"$upper\" \"$work\" \"$target\"; if mountpoint -q \"$target\" && probe_mount \"$lower\" \"$upper\" \"$target\"; then printf '%s=%s\\n' \"$name\" mounted >> \"$driver_file\"; return 0; fi; if mountpoint -q \"$target\"; then umount -l \"$target\" || true; fi; if [ -L \"$target\" ]; then rm -f \"$target\"; fi; mkdir -p \"$target\"; if mount -t overlay overlay -o lowerdir=\"$lower\",upperdir=\"$upper\",workdir=\"$work\" \"$target\" 2>/tmp/kakurizai-overlay.err && probe_mount \"$lower\" \"$upper\" \"$target\"; then printf '%s=%s\\n' \"$name\" kernel-overlay >> \"$driver_file\"; return 0; fi; if mountpoint -q \"$target\"; then umount -l \"$target\" || true; fi; install_unionfs_fuse; if unionfs-fuse -o cow \"$upper=RW:$lower=RO\" \"$target\" && probe_mount \"$lower\" \"$upper\" \"$target\"; then printf '%s=%s\\n' \"$name\" unionfs-fuse >> \"$driver_file\"; return 0; fi; if mountpoint -q \"$target\"; then fusermount3 -uz \"$target\" || fusermount -uz \"$target\" || umount -l \"$target\" || true; fi; install_fuse_overlayfs; if fuse-overlayfs -o lowerdir=\"$lower\",upperdir=\"$upper\",workdir=\"$work\" \"$target\" && probe_mount \"$lower\" \"$upper\" \"$target\"; then printf '%s=%s\\n' \"$name\" fuse-overlayfs >> \"$driver_file\"; return 0; fi; if mountpoint -q \"$target\"; then fusermount3 -uz \"$target\" || fusermount -uz \"$target\" || umount -l \"$target\" || true; fi; echo \"KakuriZai agctl overlay mount failed for $name: no usable overlay driver could read, cd, and write $target\" >&2; return 1; }",
       setupCalls
     ].join("; ");
-    const result = await runCommand(binary, [
+    const result = await runCubeCliCommand(binary, [
       ...cubeCliGlobalArgs(this.config),
       "exec",
       sandboxIdForCubeCli(sandboxId),
@@ -1602,7 +1608,8 @@ export class CubeSandboxClient {
       "-lc",
       script
     ], {
-      allowFailure: true
+      allowFailure: true,
+      config: this.config
     });
     const output = `${result.stdout}\n${result.stderr}`;
     await fs.writeFile(path.join(world.paths.logs, "cube-overlay-setup.log"), output, "utf8");
@@ -1624,7 +1631,7 @@ export class CubeSandboxClient {
     const binary = commandExists(this.config.cubecli || "cubecli");
     if (!binary) return { skipped: true, reason: "cubecli not found" };
     const script = buildBootstrapToolsScript(config);
-    const result = await runCommand(binary, [
+    const result = await runCubeCliCommand(binary, [
       ...cubeCliGlobalArgs(this.config),
       "exec",
       sandboxIdForCubeCli(sandboxId),
@@ -1632,7 +1639,8 @@ export class CubeSandboxClient {
       "-lc",
       script
     ], {
-      allowFailure: true
+      allowFailure: true,
+      config: this.config
     });
     const output = `${result.stdout}\n${result.stderr}`;
     await fs.writeFile(path.join(world.paths.logs, "cube-terminal-bootstrap.log"), output, "utf8");
@@ -1788,7 +1796,7 @@ function buildDevAccessScript(options) {
     "[ \"$enable_ssh\" = \"0\" ] || command -v sshd >/dev/null 2>&1 || need_packages=1",
     "[ \"$need_packages\" = \"0\" ] || install_packages",
     "if [ \"$enable_ssh\" = \"1\" ]; then mkdir -p /run/sshd /root/.ssh; chmod 700 /root/.ssh; ssh-keygen -A >/tmp/kakurizai-dev-access/ssh-keygen.log 2>&1 || true; if [ -n \"$ssh_password\" ] && command -v chpasswd >/dev/null 2>&1; then printf 'root:%s\\n' \"$ssh_password\" | chpasswd; fi; cat > /tmp/kakurizai-dev-access/sshd_config <<KAKURIZAI_SSHD\nPort ${ssh_port}\nListenAddress 0.0.0.0\nPermitRootLogin yes\nPasswordAuthentication yes\nPubkeyAuthentication yes\nUsePAM no\nPidFile /tmp/kakurizai-dev-access/sshd.pid\nAuthorizedKeysFile .ssh/authorized_keys\nSubsystem sftp internal-sftp\nKAKURIZAI_SSHD\nsshd_binary=$(command -v sshd || printf /usr/sbin/sshd); sshd_pid_file=/tmp/kakurizai-dev-access/sshd.pid; sshd_running=0; if [ -f \"$sshd_pid_file\" ]; then sshd_pid=$(cat \"$sshd_pid_file\" 2>/dev/null || true); if [ -n \"$sshd_pid\" ] && kill -0 \"$sshd_pid\" 2>/dev/null; then sshd_running=1; fi; fi; if [ \"$sshd_running\" = \"0\" ]; then \"$sshd_binary\" -f /tmp/kakurizai-dev-access/sshd_config -E /tmp/kakurizai-dev-access/sshd.log; fi; fi",
-    "if [ \"$enable_vscode\" = \"1\" ]; then if [ -z \"$vscode_hashed_password\" ]; then echo 'missing code-server hashed password' >&2; exit 1; fi; install_code_server() { command -v code-server >/dev/null 2>&1 && return 0; if command -v npm >/dev/null 2>&1; then npm install -g code-server && return 0; fi; curl -fsSL https://code-server.dev/install.sh | sh; }; install_vscode_extensions() { mkdir -p /tmp/kakurizai-dev-access; for extension_id in " + vscodeExtensionArgs + "; do code-server --list-extensions 2>/dev/null | grep -Fqi \"$extension_id\" && continue; code-server --install-extension \"$extension_id\" --force >>/tmp/kakurizai-dev-access/extensions.log 2>&1 || true; done; }; stop_code_server() { code_pid_file=/tmp/kakurizai-dev-access/code-server.pid; if [ -f \"$code_pid_file\" ]; then code_pid=$(cat \"$code_pid_file\" 2>/dev/null || true); if [ -n \"$code_pid\" ] && kill -0 \"$code_pid\" 2>/dev/null; then kill \"$code_pid\" 2>/dev/null || true; fi; fi; if command -v fuser >/dev/null 2>&1; then fuser -k \"${vscode_port}/tcp\" >/dev/null 2>&1 || true; fi; if command -v lsof >/dev/null 2>&1; then lsof -ti tcp:\"$vscode_port\" | xargs -r kill 2>/dev/null || true; fi; if command -v ss >/dev/null 2>&1; then ss -ltnp 2>/dev/null | awk -v port=\":$vscode_port\" '$4 ~ port {print $NF}' | sed -n 's/.*pid=\\([0-9][0-9]*\\).*/\\1/p' | xargs -r kill 2>/dev/null || true; fi; if command -v ps >/dev/null 2>&1; then code_server_port=:$vscode_port; ps -eo pid=,comm=,args= 2>/dev/null | while read -r pid comm args; do if [ \"$comm\" = node ]; then case \"$args\" in *code-server*$code_server_port*) [ \"$pid\" = \"$$\" ] || kill \"$pid\" 2>/dev/null || true ;; esac; fi; done; fi; sleep 1; }; command -v code-server >/dev/null 2>&1 || install_code_server; install_vscode_extensions; stop_code_server; code_pid_file=/tmp/kakurizai-dev-access/code-server.pid; HASHED_PASSWORD=\"$vscode_hashed_password\" nohup code-server --bind-addr \"0.0.0.0:$vscode_port\" --auth password --disable-telemetry --disable-update-check \"$workspace\" >/tmp/kakurizai-dev-access/code-server.log 2>&1 & echo $! > \"$code_pid_file\"; fi",
+    "if [ \"$enable_vscode\" = \"1\" ]; then if [ -z \"$vscode_hashed_password\" ]; then echo 'missing code-server hashed password' >&2; exit 1; fi; install_code_server() { command -v code-server >/dev/null 2>&1 && return 0; if command -v npm >/dev/null 2>&1; then npm install -g code-server && return 0; fi; curl -fsSL https://code-server.dev/install.sh | sh; }; install_vscode_extensions() { mkdir -p /tmp/kakurizai-dev-access; for extension_id in " + vscodeExtensionArgs + "; do code-server --list-extensions 2>/dev/null | grep -Fqi \"$extension_id\" && continue; code-server --install-extension \"$extension_id\" --force >>/tmp/kakurizai-dev-access/extensions.log 2>&1 || true; done; }; stop_code_server() { code_pid_file=/tmp/kakurizai-dev-access/code-server.pid; if [ -f \"$code_pid_file\" ]; then code_pid=$(cat \"$code_pid_file\" 2>/dev/null || true); if [ -n \"$code_pid\" ] && kill -0 \"$code_pid\" 2>/dev/null; then kill \"$code_pid\" 2>/dev/null || true; fi; fi; if command -v fuser >/dev/null 2>&1; then fuser -k \"${vscode_port}/tcp\" >/dev/null 2>&1 || true; fi; if command -v lsof >/dev/null 2>&1; then lsof -ti tcp:\"$vscode_port\" | xargs -r kill 2>/dev/null || true; fi; if command -v ss >/dev/null 2>&1; then ss -ltnp 2>/dev/null | awk -v port=\":$vscode_port\" '$4 ~ port {print $NF}' | sed -n 's/.*pid=\\([0-9][0-9]*\\).*/\\1/p' | xargs -r kill 2>/dev/null || true; fi; if command -v ps >/dev/null 2>&1; then code_server_port=:$vscode_port; ps -eo pid=,comm=,args= 2>/dev/null | while read -r pid comm args; do if [ \"$comm\" = node ]; then case \"$args\" in *code-server*$code_server_port*) [ \"$pid\" = \"$$\" ] || kill \"$pid\" 2>/dev/null || true ;; esac; fi; done; fi; sleep 1; }; command -v code-server >/dev/null 2>&1 || install_code_server; install_vscode_extensions; stop_code_server; code_pid_file=/tmp/kakurizai-dev-access/code-server.pid; HASHED_PASSWORD=\"$vscode_hashed_password\" nohup code-server --bind-addr \"0.0.0.0:$vscode_port\" --auth password --disable-workspace-trust --disable-telemetry --disable-update-check \"$workspace\" >/tmp/kakurizai-dev-access/code-server.log 2>&1 & echo $! > \"$code_pid_file\"; fi",
     "sleep 1",
     "printf 'workspace=%s\\nvscode_port=%s\\nssh_port=%s\\n' \"$workspace\" \"$vscode_port\" \"$ssh_port\""
   ].join("\n");
@@ -1816,8 +1824,8 @@ async function commandSummary(command, args, parser = null) {
   return { ok: true, stdout, stderr, value: parser ? parser(stdout) : stdout };
 }
 
-async function cubeCliCommandSummary(command, args, parser = null) {
-  const result = await runCubeCliCommand(command, args, { allowFailure: true });
+async function cubeCliCommandSummary(command, args, parser = null, config = {}) {
+  const result = await runCubeCliCommand(command, args, { allowFailure: true, config });
   const stdout = result.stdout || "";
   const stderr = result.stderr || "";
   if (result.code !== 0) {
@@ -1827,12 +1835,46 @@ async function cubeCliCommandSummary(command, args, parser = null) {
 }
 
 async function runCubeCliCommand(command, args, options = {}) {
-  const result = await runCommand(command, args, { allowFailure: true, input: options.input });
-  if (result.code === 0 || !shouldRetryWithSudo(result)) return result;
+  const invocation = cubeCliInvocation(command, args, options.config || {});
+  const runOptions = {
+    ...options,
+    allowFailure: true
+  };
+  delete runOptions.config;
+  const result = await runCommand(invocation.command, invocation.args, runOptions);
+  if (invocation.sudo || result.code === 0 || !shouldRetryWithSudo(result)) {
+    return finalizeCubeCliResult(invocation.sudo ? { ...result, sudo: true } : result, command, args, options.allowFailure);
+  }
   const sudo = commandExists("sudo");
-  if (!sudo) return result;
-  const sudoResult = await runCommand(sudo, ["-n", command, ...args], { allowFailure: true, input: options.input });
-  return { ...sudoResult, sudo: true };
+  if (!sudo) return finalizeCubeCliResult(result, command, args, options.allowFailure);
+  const sudoResult = await runCommand(sudo, ["-n", command, ...args], runOptions);
+  return finalizeCubeCliResult({ ...sudoResult, sudo: true }, command, args, options.allowFailure);
+}
+
+function cubeCliInvocation(command, args, config = {}) {
+  const sudo = commandExists(config.sudoCommand || "sudo");
+  if (!sudo || !cubeCliNeedsSudo(config)) return { command, args };
+  return { command: sudo, args: ["-n", command, ...args], sudo: true };
+}
+
+function cubeCliNeedsSudo(config = {}) {
+  const mode = String(config.sudo ?? "auto").trim().toLowerCase();
+  if (["1", "true", "always", "required"].includes(mode)) return true;
+  if (["0", "false", "never", "disabled"].includes(mode)) return false;
+  const socketPath = config.socketPath || "/data/cubelet/cubelet.sock";
+  try {
+    fssync.accessSync(socketPath, fssync.constants.R_OK | fssync.constants.W_OK);
+    return false;
+  } catch (error) {
+    return error?.code === "EACCES" || error?.code === "EPERM";
+  }
+}
+
+function finalizeCubeCliResult(result, command, args, allowFailure) {
+  if (result.code === 0 || allowFailure) return result;
+  const error = new Error(`${command} ${args.join(" ")} failed with code ${result.code}`);
+  error.result = result;
+  throw error;
 }
 
 async function runHostNetworkCommand(script) {
