@@ -505,6 +505,9 @@ spec:
   const mainTf = await fs.readFile(path.join(tmp, "tf", "main.tf"), "utf8");
   assert.match(mainTf, /apply -f/);
   assert.match(mainTf, /remove/);
+  assert.match(mainTf, /command = <<-EOT\n\s+"\$KAKURIZAI_AGCTL" apply -f "\$KAKURIZAI_SPEC_FILE"\n\s+EOT/);
+  assert.match(mainTf, /"\$KAKURIZAI_AGCTL" remove "\$KAKURIZAI_NAME" --yes/);
+  assert.doesNotMatch(mainTf, /command = ""/);
 });
 
 test("network config rejects unsupported CubeSandbox network types", () => {

@@ -141,7 +141,9 @@ resource "terraform_data" "sandbox" {
       KAKURIZAI_AGCTL     = self.input.agctl
       KAKURIZAI_SPEC_FILE = "\${path.module}/\${self.input.spec_file}"
     }
-    command = "\"$KAKURIZAI_AGCTL\" apply -f \"$KAKURIZAI_SPEC_FILE\""
+    command = <<-EOT
+      "$KAKURIZAI_AGCTL" apply -f "$KAKURIZAI_SPEC_FILE"
+    EOT
   }
 
   provisioner "local-exec" {
@@ -150,7 +152,9 @@ resource "terraform_data" "sandbox" {
       KAKURIZAI_AGCTL = self.input.agctl
       KAKURIZAI_NAME  = self.input.name
     }
-    command = "\"$KAKURIZAI_AGCTL\" remove \"$KAKURIZAI_NAME\" --yes"
+    command = <<-EOT
+      "$KAKURIZAI_AGCTL" remove "$KAKURIZAI_NAME" --yes
+    EOT
   }
 }
 
