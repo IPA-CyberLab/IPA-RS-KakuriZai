@@ -6,13 +6,14 @@ import https from "node:https";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import pty from "node-pty";
 import { WebSocket, WebSocketServer } from "ws";
 import { createAuthProvider } from "./auth/providers.js";
+import { AccountStore, publicAccount } from "./core/accounts.js";
 import { checkpointFailoverReplicas, createJoinToken, joinNode, listClusterNodes, reconcileFailover, removeClusterNode, replicateWorld, startFailoverController } from "./core/cluster.js";
 import { collectMetrics, listTraces, prometheusText, recordTraceEvent, startTrace, stopTrace } from "./core/observability.js";
 import { applyWorld, changedPaths, createHeteroNetworkLab, createKubernetesLab, createWorld, ensureWorldProvisioned, execWorld, getWorld, listWorlds, openWorld, pauseWorld, removeWorld, resumeWorld, updateWorldConfig } from "./core/worlds.js";
 import { applyProbeChecks, buildNetworkProbePlan, buildProbeScript, parseProbeOutput } from "./core/probe.js";
+import { TerraformManager } from "./core/terraform.js";
 import { CubeSandboxClient } from "./cube/client.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -22,9 +23,9 @@ const OIDC_STATE_COOKIE = "kakurizai_oidc_state";
 const CSRF_HEADER = "x-csrf-token";
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 const DEFAULT_ROLES = {
-  viewer: ["studio:read", "worlds:read"],
-  operator: ["studio:read", "worlds:read", "worlds:write", "shell:open", "devaccess:open"],
-  admin: ["studio:read", "worlds:read", "worlds:write", "worlds:delete", "shell:open", "devaccess:open", "admin"]
+  viewer: ["studio:read", "worlds:read", "terraform:read"],
+  operator: ["studio:read", "worlds:read", "worlds:write", "shell:open", "devaccess:open", "terraform:read", "terraform:write"],
+  admin: ["studio:read", "worlds:read", "worlds:write", "worlds:delete", "shell:open", "devaccess:open", "terraform:read", "terraform:write", "users:read", "users:write", "admin"]
 };
 
 export async function startStudio(config) {
@@ -33,6 +34,10 @@ export async function startStudio(config) {
   enforceStudioSecurity(config, Boolean(tls));
   const sessions = new StudioSessionStore(config);
   await sessions.load();
+  const accounts = new AccountStore(config);
+  await accounts.load();
+  const terraform = new TerraformManager(config);
+  await terraform.load();
   const audit = new AuditLog(config);
   await audit.load();
   const devAccess = new DevAccessManager(config);
@@ -47,7 +52,7 @@ export async function startStudio(config) {
       sendError(request, response, error);
       return;
     }
-    route(config, auth, sessions, devAccess, request, response).catch((error) => sendError(request, response, error));
+    route(config, auth, sessions, accounts, terraform, devAccess, request, response).catch((error) => sendError(request, response, error));
   };
   const server = tls ? https.createServer(tls, listener) : http.createServer(listener);
   const protocol = tls ? "https" : "http";
@@ -62,7 +67,7 @@ export async function startStudio(config) {
       socket.destroy();
       return;
     }
-    handleUpgrade(config, auth, sessions, shellServer, request, socket, head).catch((error) => {
+    handleUpgrade(config, auth, sessions, accounts, shellServer, request, socket, head).catch((error) => {
       const status = error.statusCode || 500;
       socket.write(`HTTP/1.1 ${status} ${httpStatusText(status)}\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n${error.message || String(error)}\n`);
       socket.destroy();
@@ -72,7 +77,10 @@ export async function startStudio(config) {
     server.once("error", reject);
     server.listen(config.studio.port, config.studio.host, resolve);
   });
-  server.on("close", () => failoverController.stop());
+  server.on("close", () => {
+    failoverController.stop();
+    void terraform.close();
+  });
   const address = server.address();
   const boundPort = typeof address === "object" && address ? address.port : config.studio.port;
   const url = config.studio.publicUrl || `${protocol}://${config.studio.host}:${boundPort}/`;
@@ -88,14 +96,14 @@ async function loadTlsOptions(config) {
   return { cert, key };
 }
 
-async function handleUpgrade(config, auth, sessions, shellServer, request, socket, head) {
+async function handleUpgrade(config, auth, sessions, accounts, shellServer, request, socket, head) {
   const url = new URL(request.url, `http://${request.headers.host || "127.0.0.1"}`);
   const match = /^\/api\/worlds\/([^/]+)\/shell$/.exec(url.pathname);
   if (!match) {
     socket.destroy();
     return;
   }
-  const session = await authenticateRequest(config, auth, sessions, request, { requireCsrf: false });
+  const session = await authenticateRequest(config, auth, sessions, accounts, request, { requireCsrf: false });
   request.user = session.user;
   request.authSession = session.session;
   authorize(config, request, "shell:open");
@@ -104,13 +112,15 @@ async function handleUpgrade(config, auth, sessions, shellServer, request, socke
   void request.audit?.write(auditRecord(request, 101, { action: "shell.open", target: world.id }));
   shellServer.handleUpgrade(request, socket, head, (ws) => {
     shellServer.emit("connection", ws, request, world);
-    attachShell(world, ws, shell);
+    void attachShell(world, ws, shell);
   });
 }
 
-function attachShell(world, ws, shell) {
+async function attachShell(world, ws, shell) {
   let shellProcess;
   try {
+    const ptyModule = await import("node-pty");
+    const pty = ptyModule.default || ptyModule;
     shellProcess = pty.spawn(shell.command, shell.args, {
       name: "xterm-256color",
       cols: 100,
@@ -455,7 +465,13 @@ class StudioSessionStore {
       const now = Date.now();
       for (const session of sessions) {
         if (session?.id && session?.csrfToken && session?.user && session.expiresAt > now) {
-          this.sessions.set(session.id, session);
+          this.sessions.set(session.id, {
+            ...session,
+            createdAt: session.createdAt || new Date(now).toISOString(),
+            lastSeenAt: session.lastSeenAt || session.createdAt || new Date(now).toISOString(),
+            ip: session.ip || null,
+            userAgent: session.userAgent || null
+          });
         }
       }
     } catch (error) {
@@ -463,17 +479,27 @@ class StudioSessionStore {
     }
   }
 
-  create(user) {
+  create(user, request) {
     const id = crypto.randomBytes(32).toString("base64url");
     const csrfToken = crypto.randomBytes(32).toString("base64url");
     const expiresAt = Date.now() + this.ttlMs;
-    const session = { id, csrfToken, user, expiresAt };
+    const now = new Date().toISOString();
+    const session = {
+      id,
+      csrfToken,
+      user,
+      expiresAt,
+      createdAt: now,
+      lastSeenAt: now,
+      ip: request ? requestIp(request, this.config) : null,
+      userAgent: request?.headers?.["user-agent"] || null
+    };
     this.sessions.set(id, session);
     void this.save();
     return session;
   }
 
-  get(id) {
+  get(id, request) {
     if (!id) return null;
     const session = this.sessions.get(id);
     if (!session) return null;
@@ -481,6 +507,12 @@ class StudioSessionStore {
       this.sessions.delete(id);
       void this.save();
       return null;
+    }
+    if (request && Date.now() - Date.parse(session.lastSeenAt || 0) >= 60_000) {
+      session.lastSeenAt = new Date().toISOString();
+      session.ip = requestIp(request, this.config);
+      session.userAgent = request.headers?.["user-agent"] || session.userAgent || null;
+      void this.save();
     }
     return session;
   }
@@ -490,6 +522,47 @@ class StudioSessionStore {
       this.sessions.delete(id);
       void this.save();
     }
+  }
+
+  listForSubject(subject, currentId) {
+    const now = Date.now();
+    return [...this.sessions.values()]
+      .filter((session) => session.expiresAt > now && session.user?.subject === subject)
+      .map((session) => ({
+        id: sessionPublicId(session.id),
+        current: session.id === currentId,
+        createdAt: session.createdAt,
+        lastSeenAt: session.lastSeenAt,
+        expiresAt: new Date(session.expiresAt).toISOString(),
+        ip: session.ip || null,
+        userAgent: session.userAgent || null
+      }))
+      .sort((left, right) => String(right.lastSeenAt).localeCompare(String(left.lastSeenAt)));
+  }
+
+  destroyPublic(subject, publicId, currentId) {
+    for (const session of this.sessions.values()) {
+      if (session.user?.subject !== subject || sessionPublicId(session.id) !== publicId) continue;
+      const current = session.id === currentId;
+      this.sessions.delete(session.id);
+      void this.save();
+      return { destroyed: true, current };
+    }
+    const error = new Error("session not found");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  destroyOtherSessions(subject, currentId) {
+    let destroyed = 0;
+    for (const session of this.sessions.values()) {
+      if (session.user?.subject === subject && session.id !== currentId) {
+        this.sessions.delete(session.id);
+        destroyed += 1;
+      }
+    }
+    if (destroyed) void this.save();
+    return { destroyed };
   }
 
   save() {
@@ -560,6 +633,10 @@ class StudioSessionStore {
       if (record.expiresAt <= now) this.oidcStates.delete(state);
     }
   }
+}
+
+function sessionPublicId(id) {
+  return crypto.createHash("sha256").update(String(id)).digest("base64url").slice(0, 24);
 }
 
 class AuditLog {
@@ -788,7 +865,7 @@ function normalizeOrigin(value) {
   }
 }
 
-async function route(config, auth, sessions, devAccess, request, response) {
+async function route(config, auth, sessions, accounts, terraform, devAccess, request, response) {
   const url = new URL(request.url, `http://${request.headers.host || "127.0.0.1"}`);
   if (request.method === "GET" && url.pathname === "/api/auth/config") {
     return sendJson(request, response, {
@@ -803,10 +880,10 @@ async function route(config, auth, sessions, devAccess, request, response) {
     return beginOidcLogin(config, auth, sessions, request, response, url);
   }
   if (request.method === "GET" && url.pathname === "/api/auth/callback") {
-    return finishOidcLogin(config, auth, sessions, request, response, url);
+    return finishOidcLogin(config, auth, sessions, accounts, request, response, url);
   }
   if (request.method === "POST" && url.pathname === "/api/auth/logout") {
-    const session = await authenticateRequest(config, auth, sessions, request, { requireCsrf: auth.type !== "none" });
+    const session = await authenticateRequest(config, auth, sessions, accounts, request, { requireCsrf: auth.type !== "none" });
     request.user = session.user;
     request.authSession = session.session;
     const sessionId = cookieValue(request, SESSION_COOKIE);
@@ -820,12 +897,12 @@ async function route(config, auth, sessions, devAccess, request, response) {
     return;
   }
   if (url.pathname.startsWith("/api/")) {
-    const session = await authenticateRequest(config, auth, sessions, request, { requireCsrf: requiresCsrf(url, request) });
+    const session = await authenticateRequest(config, auth, sessions, accounts, request, { requireCsrf: requiresCsrf(url, request) });
     request.user = session.user;
     request.authSession = session.session;
     request.authMethod = session.method;
     request.query = url.searchParams;
-    return api(config, devAccess, request, response, url);
+    return api(config, devAccess, sessions, accounts, terraform, request, response, url);
   }
   return staticFile(request, response, url);
 }
@@ -856,7 +933,7 @@ async function beginOidcLogin(config, auth, sessions, request, response, url) {
   response.end("redirecting to identity provider\n");
 }
 
-async function finishOidcLogin(config, auth, sessions, request, response, url) {
+async function finishOidcLogin(config, auth, sessions, accounts, request, response, url) {
   if (auth.type === "none") {
     response.writeHead(302, {
       ...securityHeaders(request, "text/plain; charset=utf-8"),
@@ -898,8 +975,11 @@ async function finishOidcLogin(config, auth, sessions, request, response, url) {
     nonce: pending.nonce
   });
   verifyMfa(config, result.user);
+  const account = await accounts.touch(result.user, { force: true });
+  assertAccountActive(account);
+  result.user.account = account;
   sessions.resetLoginAttempts(`${requestIp(request, config)}:oidc`);
-  const session = sessions.create(result.user);
+  const session = sessions.create(result.user, request);
   request.user = result.user;
   request.authSession = session;
   const returnTo = safeReturnTo(pending.returnTo || "/");
@@ -917,18 +997,21 @@ async function finishOidcLogin(config, auth, sessions, request, response, url) {
   void request.audit?.write(audit);
 }
 
-async function authenticateRequest(config, auth, sessions, request, options = {}) {
+async function authenticateRequest(config, auth, sessions, accounts, request, options = {}) {
   const bearer = bearerHeader(request);
   if (bearer) {
     const user = await auth.verifyRequest({ headers: { authorization: bearer } });
     verifyBearerMfaPolicy(config, user);
+    user.account = await accounts.touch(user);
+    assertAccountActive(user.account);
     return { method: "bearer", user, session: null };
   }
   if (auth.type === "none") {
     const user = await auth.verifyRequest(request);
+    user.account = await accounts.touch(user);
     return { method: "none", user, session: null };
   }
-  const session = sessions.get(cookieValue(request, SESSION_COOKIE));
+  const session = sessions.get(cookieValue(request, SESSION_COOKIE), request);
   if (!session) {
     const error = new Error("missing or expired session");
     error.statusCode = 401;
@@ -942,7 +1025,16 @@ async function authenticateRequest(config, auth, sessions, request, options = {}
       throw error;
     }
   }
+  session.user.account = await accounts.touch(session.user);
+  assertAccountActive(session.user.account);
   return { method: "session", user: session.user, session };
+}
+
+function assertAccountActive(account) {
+  if (account?.status !== "suspended") return;
+  const error = new Error("account is suspended");
+  error.statusCode = 403;
+  throw error;
 }
 
 function requiresCsrf(url, request) {
@@ -1083,33 +1175,61 @@ function authorize(config, request, permission) {
 function permissionsForUser(config, user) {
   const permissions = new Set();
   if (!user) return permissions;
-  const rbac = config.auth?.rbac || {};
-  const roles = new Set();
+  const roles = rolesForUser(config, user);
   const claims = user.claims || {};
-
-  addValues(roles, claims.roles);
-  addValues(roles, claims.role);
-  addValues(roles, claims.groups);
   addValues(permissions, claims.permissions);
   addValues(permissions, claims.permission);
   addValues(permissions, claims.scope);
   addValues(permissions, claims.scp);
-
+  const rbac = config.auth?.rbac || {};
   const binding = rbac.users?.[user.subject] || rbac.users?.["*"];
-  if (binding) {
-    if (typeof binding === "string" || Array.isArray(binding)) addValues(roles, binding);
-    else {
-      addValues(roles, binding.roles || binding.role);
-      addValues(permissions, binding.permissions || binding.permission || binding.scope);
-    }
+  if (binding && typeof binding === "object" && !Array.isArray(binding)) {
+    addValues(permissions, binding.permissions || binding.permission || binding.scope);
   }
-  if (roles.size === 0 && permissions.size === 0 && rbac.defaultRole) roles.add(rbac.defaultRole);
-
   const roleDefinitions = { ...DEFAULT_ROLES, ...(rbac.roles || {}) };
   for (const role of roles) {
     addValues(permissions, roleDefinitions[role]);
   }
   return permissions;
+}
+
+function rolesForUser(config, user) {
+  const roles = new Set();
+  if (!user) return roles;
+  const rbac = config.auth?.rbac || {};
+  const claims = user.claims || {};
+  addValues(roles, claims.roles);
+  addValues(roles, claims.role);
+  addValues(roles, claims.groups);
+  addValues(roles, user.account?.roles);
+  const binding = rbac.users?.[user.subject] || rbac.users?.["*"];
+  if (binding) {
+    if (typeof binding === "string" || Array.isArray(binding)) addValues(roles, binding);
+    else addValues(roles, binding.roles || binding.role);
+  }
+  if (roles.size === 0 && rbac.defaultRole) roles.add(rbac.defaultRole);
+  return roles;
+}
+
+function publicUser(config, user) {
+  const account = user?.account;
+  if (!account) return { subject: user?.subject || null, provider: user?.provider || null };
+  const knownRoles = new Set(Object.keys({ ...DEFAULT_ROLES, ...(config.auth?.rbac?.roles || {}) }));
+  const roles = [...rolesForUser(config, user)].filter((role) => knownRoles.has(role));
+  return publicAccount(account, { roles });
+}
+
+function publicStoredAccount(config, account) {
+  const user = {
+    subject: account.subject,
+    provider: account.provider,
+    claims: { roles: account.identityRoles || [] },
+    account
+  };
+  return {
+    ...publicUser(config, user),
+    permissions: [...permissionsForUser(config, user)].sort()
+  };
 }
 
 function addValues(target, value) {
@@ -1239,15 +1359,94 @@ function targetFromPath(pathname) {
   return null;
 }
 
-async function api(config, devAccess, request, response, url) {
+async function api(config, devAccess, sessions, accounts, terraform, request, response, url) {
   if (request.method === "GET" && url.pathname === "/api/session") {
     authorize(config, request, "studio:read");
     return sendJson(request, response, {
-      user: request.user,
+      user: publicUser(config, request.user),
       auth: request.user.provider,
       permissions: request.permissions || [...permissionsForUser(config, request.user)],
-      csrfToken: request.authSession?.csrfToken || null
+      csrfToken: request.authSession?.csrfToken || null,
+      session: request.authSession ? {
+        id: sessionPublicId(request.authSession.id),
+        createdAt: request.authSession.createdAt,
+        lastSeenAt: request.authSession.lastSeenAt,
+        expiresAt: new Date(request.authSession.expiresAt).toISOString()
+      } : null
     });
+  }
+  if (request.method === "GET" && url.pathname === "/api/account") {
+    authorize(config, request, "studio:read");
+    return sendJson(request, response, publicUser(config, request.user));
+  }
+  if (request.method === "PATCH" && url.pathname === "/api/account") {
+    authorize(config, request, "studio:read");
+    request.user.account = await accounts.updateProfile(request.user.subject, await readBody(request));
+    return sendJson(request, response, publicUser(config, request.user));
+  }
+  if (request.method === "GET" && url.pathname === "/api/account/sessions") {
+    authorize(config, request, "studio:read");
+    const currentId = cookieValue(request, SESSION_COOKIE);
+    return sendJson(request, response, sessions.listForSubject(request.user.subject, currentId));
+  }
+  if (request.method === "DELETE" && url.pathname === "/api/account/sessions") {
+    authorize(config, request, "studio:read");
+    return sendJson(request, response, sessions.destroyOtherSessions(request.user.subject, cookieValue(request, SESSION_COOKIE)));
+  }
+  const accountSessionMatch = /^\/api\/account\/sessions\/([^/]+)$/.exec(url.pathname);
+  if (request.method === "DELETE" && accountSessionMatch) {
+    authorize(config, request, "studio:read");
+    const result = sessions.destroyPublic(request.user.subject, decodeURIComponent(accountSessionMatch[1]), cookieValue(request, SESSION_COOKIE));
+    return sendJson(request, response, result, 200, result.current ? { "set-cookie": expiredSessionCookie() } : {});
+  }
+  if (request.method === "GET" && url.pathname === "/api/users") {
+    authorize(config, request, "users:read");
+    return sendJson(request, response, accounts.list().map((account) => publicStoredAccount(config, account)));
+  }
+  const userMatch = /^\/api\/users\/([^/]+)$/.exec(url.pathname);
+  if (request.method === "PATCH" && userMatch) {
+    authorize(config, request, "users:write");
+    const knownRoles = Object.keys({ ...DEFAULT_ROLES, ...(config.auth?.rbac?.roles || {}) });
+    const account = await accounts.updateAdmin(decodeURIComponent(userMatch[1]), await readBody(request), {
+      currentSubject: request.user.subject,
+      knownRoles
+    });
+    return sendJson(request, response, publicStoredAccount(config, account));
+  }
+  if (request.method === "GET" && url.pathname === "/api/terraform") {
+    authorize(config, request, "terraform:read");
+    return sendJson(request, response, await terraform.overview(await listWorlds(config)));
+  }
+  const terraformProjectMatch = /^\/api\/terraform\/projects\/([^/]+)$/.exec(url.pathname);
+  if (request.method === "GET" && terraformProjectMatch) {
+    authorize(config, request, "terraform:read");
+    return sendJson(request, response, terraform.preview(await getWorld(config, decodeURIComponent(terraformProjectMatch[1]))));
+  }
+  const terraformPrepareMatch = /^\/api\/terraform\/projects\/([^/]+)\/prepare$/.exec(url.pathname);
+  if (request.method === "POST" && terraformPrepareMatch) {
+    authorize(config, request, "terraform:write");
+    return sendJson(request, response, await terraform.prepare(await getWorld(config, decodeURIComponent(terraformPrepareMatch[1]))));
+  }
+  const terraformRunCreateMatch = /^\/api\/terraform\/projects\/([^/]+)\/runs$/.exec(url.pathname);
+  if (request.method === "POST" && terraformRunCreateMatch) {
+    authorize(config, request, "terraform:write");
+    const body = await readBody(request);
+    if (body.action === "destroy") authorize(config, request, "worlds:delete");
+    const world = await getWorld(config, decodeURIComponent(terraformRunCreateMatch[1]));
+    return sendJson(request, response, await terraform.startRun(world, body.action, {
+      confirmation: body.confirmation,
+      subject: request.user.subject
+    }), 202);
+  }
+  const terraformRunMatch = /^\/api\/terraform\/runs\/([^/]+)$/.exec(url.pathname);
+  if (request.method === "GET" && terraformRunMatch) {
+    authorize(config, request, "terraform:read");
+    return sendJson(request, response, await terraform.getRun(decodeURIComponent(terraformRunMatch[1])));
+  }
+  const terraformCancelMatch = /^\/api\/terraform\/runs\/([^/]+)\/cancel$/.exec(url.pathname);
+  if (request.method === "POST" && terraformCancelMatch) {
+    authorize(config, request, "terraform:write");
+    return sendJson(request, response, await terraform.cancelRun(decodeURIComponent(terraformCancelMatch[1])));
   }
   if (request.method === "GET" && url.pathname === "/api/host/browse") {
     authorize(config, request, "worlds:write");
@@ -1562,7 +1761,7 @@ function securityHeaders(request, contentTypeValue) {
     "x-content-type-options": "nosniff",
     "referrer-policy": "no-referrer",
     "x-frame-options": "DENY",
-    "content-security-policy": "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+    "content-security-policy": "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
     "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
     "cross-origin-opener-policy": "same-origin",
     "cross-origin-resource-policy": "same-origin"

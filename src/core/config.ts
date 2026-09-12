@@ -53,6 +53,7 @@ export function defaultConfig(home = defaultHome()) {
       maxLoginAttempts: 12,
       persistSessions: true,
       sessionFile: path.join(home, "auth", "studio-sessions.json"),
+      accountFile: path.join(home, "auth", "accounts.json"),
       rbac: {
         enabled: true,
         defaultRole: null,
@@ -77,6 +78,15 @@ export function defaultConfig(home = defaultHome()) {
       retentionSamples: 288,
       traceEvents: 2000,
       tracing: true
+    },
+    terraform: {
+      enabled: true,
+      binary: process.env.KAKURIZAI_TERRAFORM || "terraform",
+      agctl: process.env.KAKURIZAI_TERRAFORM_AGCTL || null,
+      workDir: path.join(home, "terraform"),
+      pluginCacheDir: path.join(home, "terraform", "plugin-cache"),
+      commandTimeoutSeconds: 30 * 60,
+      maxLogBytes: 2 * 1024 * 1024
     },
     cluster: {
       failover: {
@@ -142,6 +152,7 @@ export function mergeConfig(base, override) {
   result.audit = { ...base.audit, ...(override?.audit || {}) };
   result.security = { ...base.security, ...(override?.security || {}) };
   result.observability = { ...base.observability, ...(override?.observability || {}) };
+  result.terraform = { ...base.terraform, ...(override?.terraform || {}) };
   result.cluster = { ...base.cluster, ...(override?.cluster || {}) };
   result.cluster.failover = { ...base.cluster?.failover, ...(override?.cluster?.failover || {}) };
   result.cube = { ...base.cube, ...(override?.cube || {}) };

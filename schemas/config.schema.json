@@ -72,7 +72,8 @@
           "type": "object",
           "required": ["provider"],
           "properties": {
-            "provider": { "const": "none" }
+            "provider": { "const": "none" },
+            "accountFile": { "type": "string" }
           },
           "additionalProperties": false
         },
@@ -105,6 +106,7 @@
             "maxLoginAttempts": { "type": "integer", "minimum": 1 },
             "persistSessions": { "type": "boolean" },
             "sessionFile": { "type": "string" },
+            "accountFile": { "type": "string" },
             "rbac": { "type": "object", "additionalProperties": true },
             "mfa": { "type": "object", "additionalProperties": true }
           },
@@ -138,6 +140,7 @@
             "maxLoginAttempts": { "type": "integer", "minimum": 1 },
             "persistSessions": { "type": "boolean" },
             "sessionFile": { "type": "string" },
+            "accountFile": { "type": "string" },
             "rbac": { "type": "object", "additionalProperties": true },
             "mfa": { "type": "object", "additionalProperties": true }
           },
@@ -169,6 +172,19 @@
         "retentionSamples": { "type": "integer", "minimum": 1 },
         "traceEvents": { "type": "integer", "minimum": 1 },
         "tracing": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "terraform": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "binary": { "type": "string" },
+        "agctl": { "type": ["string", "null"] },
+        "workDir": { "type": "string" },
+        "pluginCacheDir": { "type": "string" },
+        "commandTimeoutSeconds": { "type": "integer", "minimum": 10 },
+        "maxLogBytes": { "type": "integer", "minimum": 65536 }
       },
       "additionalProperties": false
     },

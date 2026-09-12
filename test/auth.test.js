@@ -108,8 +108,53 @@ test("studio signs in through keycloak code flow with session cookie, csrf, rbac
     assert.equal(session.status, 200);
     const sessionBody = await session.json();
     assert.equal(sessionBody.user.subject, "alice");
+    assert.equal(sessionBody.user.username, "alice");
     assert.ok(sessionBody.permissions.includes("admin"));
     assert.ok(sessionBody.csrfToken);
+
+    const accountResponse = await fetch(`${origin}/api/account`, { headers: { cookie: sessionCookie } });
+    assert.equal(accountResponse.status, 200);
+    const account = await accountResponse.json();
+    assert.equal(account.subject, "alice");
+    assert.equal(account.loginType, "keycloak");
+
+    const updatedAccountResponse = await fetch(`${origin}/api/account`, {
+      method: "PATCH",
+      headers: {
+        cookie: sessionCookie,
+        "content-type": "application/json",
+        "x-csrf-token": sessionBody.csrfToken
+      },
+      body: JSON.stringify({ username: "alice.dev", name: "Alice Dev", avatarUrl: "https://example.com/alice.png" })
+    });
+    assert.equal(updatedAccountResponse.status, 200);
+    const updatedAccount = await updatedAccountResponse.json();
+    assert.equal(updatedAccount.username, "alice.dev");
+    assert.equal(updatedAccount.name, "Alice Dev");
+
+    const browserSessionsResponse = await fetch(`${origin}/api/account/sessions`, { headers: { cookie: sessionCookie } });
+    assert.equal(browserSessionsResponse.status, 200);
+    const browserSessions = await browserSessionsResponse.json();
+    assert.equal(browserSessions.length, 1);
+    assert.equal(browserSessions[0].current, true);
+    assert.equal(browserSessions[0].id.includes(sessionCookie.split("=")[1]), false);
+
+    const usersResponse = await fetch(`${origin}/api/users`, { headers: { cookie: sessionCookie } });
+    assert.equal(usersResponse.status, 200);
+    const users = await usersResponse.json();
+    assert.equal(users.length, 1);
+    assert.ok(users[0].roles.includes("kakurizai-admin"));
+
+    const suspendSelf = await fetch(`${origin}/api/users/alice`, {
+      method: "PATCH",
+      headers: {
+        cookie: sessionCookie,
+        "content-type": "application/json",
+        "x-csrf-token": sessionBody.csrfToken
+      },
+      body: JSON.stringify({ status: "suspended" })
+    });
+    assert.equal(suspendSelf.status, 400);
 
     const rejected = await fetch(`${origin}/api/network/probe`, {
       method: "POST",
@@ -121,6 +166,9 @@ test("studio signs in through keycloak code flow with session cookie, csrf, rbac
     const sessionFile = JSON.parse(await waitForFile(path.join(tmp, "auth", "sessions.json")));
     assert.equal(sessionFile.sessions.length, 1);
     assert.equal(sessionFile.sessions[0].user.subject, "alice");
+
+    const accountFile = JSON.parse(await waitForFile(path.join(tmp, "auth", "accounts.json")));
+    assert.equal(accountFile.accounts[0].username, "alice.dev");
 
     const audit = await waitForFile(path.join(tmp, "audit", "studio.jsonl"), /"action":"auth.login"/);
     assert.match(audit, /"hash":"[a-f0-9]{64}"/);

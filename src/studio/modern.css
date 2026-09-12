@@ -553,36 +553,9 @@ button.activityCreate {
   box-shadow: var(--shadow-soft);
 }
 
-.activityFooter {
-  min-width: 0;
-  display: grid;
-  gap: 7px;
-  padding: 10px 8px 2px;
-}
-
-.activityFooter .uiBadge {
-  max-width: 100%;
-}
-
-.activityFooter > small {
-  overflow: hidden;
-  color: var(--muted-foreground);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.liveDot {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: currentColor;
-  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 14%, transparent);
-}
-
 .actionMenu {
   top: auto;
-  bottom: 102px;
+  bottom: 66px;
   left: 14px;
   width: 208px;
   border-color: var(--border);
@@ -939,6 +912,528 @@ button.activityCreate {
   text-transform: none;
 }
 
+/* Account management */
+.settingsWorkspace,
+.terraformWorkspace {
+  width: min(1240px, 100%);
+  min-height: 100%;
+  display: grid;
+  align-content: start;
+  gap: 18px;
+  margin: 0 auto;
+  padding: 28px 32px 72px;
+}
+
+.settingsPageIntro {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.settingsPageIntro > div:first-child {
+  min-width: 0;
+}
+
+.settingsPageIntro h1 {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 24px;
+  font-weight: 720;
+  letter-spacing: -0.035em;
+  line-height: 1.2;
+}
+
+.settingsPageIntro p {
+  margin: 6px 0 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
+.settingsNotice {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--secondary);
+  color: var(--foreground);
+  padding: 10px 12px;
+  font-size: 12px;
+}
+
+.settingsGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.settingsCard,
+.terraformControlCard,
+.terraformSourceCard,
+.terraformRunsCard,
+.terraformLogCard,
+.terraformDangerCard {
+  min-width: 0;
+  border-radius: var(--radius);
+  padding: 20px;
+}
+
+.settingsCardWide {
+  width: 100%;
+}
+
+.accountProfileCard > header {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.accountProfileCard > header > div:nth-child(2),
+.settingsCardHeading > div,
+.userIdentity > span:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.accountProfileCard > header strong,
+.settingsCardHeading strong,
+.terraformDangerCard strong {
+  color: var(--foreground);
+  font-size: 14px;
+  font-weight: 680;
+}
+
+.accountProfileCard > header span,
+.settingsCardHeading span,
+.terraformDangerCard span {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+
+.accountAvatar {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--secondary);
+  color: var(--muted-foreground);
+}
+
+.accountAvatar.small {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+}
+
+.accountAvatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.accountForm {
+  display: grid;
+  padding-top: 4px;
+}
+
+.accountForm label {
+  margin-top: 14px;
+}
+
+.formActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.settingsCardHeading {
+  min-height: 38px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.splitHeading {
+  justify-content: space-between;
+}
+
+.accountFacts {
+  display: grid;
+  gap: 0;
+  margin: 0;
+}
+
+.accountFacts > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 100px minmax(0, 1fr);
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.accountFacts dt {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.accountFacts dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--foreground);
+  font-size: 12px;
+  text-align: right;
+}
+
+.monoValue {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.roleList,
+.effectiveRoles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.roleList {
+  padding-top: 16px;
+}
+
+.mutedText {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.sessionList,
+.userAdminList,
+.terraformRunList {
+  display: grid;
+  gap: 0;
+}
+
+.sessionRow {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 36px minmax(220px, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 13px 0;
+  border-top: 1px solid var(--border);
+}
+
+.sessionIcon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--secondary);
+  color: var(--muted-foreground);
+}
+
+.sessionRow > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.sessionRow strong {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  font-size: 12px;
+}
+
+.sessionRow > div > span,
+.sessionExpiry {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.userAdminRow {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(220px, 1.2fr) minmax(130px, 0.8fr) 150px auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 13px 0;
+  border-top: 1px solid var(--border);
+}
+
+.userIdentity {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.userIdentity strong,
+.userIdentity small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.userIdentity strong {
+  font-size: 12px;
+}
+
+.userIdentity small {
+  color: var(--muted-foreground);
+  font-size: 10px;
+  text-overflow: ellipsis;
+}
+
+.userAdminRow select {
+  min-width: 0;
+}
+
+/* Terraform provisioner */
+.terraformRuntime {
+  max-width: 420px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.terraformRuntime > span {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terraformControlCard {
+  display: grid;
+  gap: 18px;
+}
+
+.terraformSelection {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(360px, 1.5fr);
+  gap: 22px;
+  align-items: end;
+}
+
+.terraformSelection label {
+  margin-top: 0;
+}
+
+.terraformSelection select {
+  width: 100%;
+}
+
+.terraformSelection dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.terraformSelection dl > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--secondary);
+  padding: 9px 10px;
+}
+
+.terraformSelection dt {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+
+.terraformSelection dd {
+  overflow: hidden;
+  margin: 0;
+  color: var(--foreground);
+  font-size: 11px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terraformActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.terraformMainGrid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(300px, 0.65fr);
+  gap: 18px;
+  align-items: stretch;
+}
+
+.terraformSourceCard,
+.terraformRunsCard {
+  height: 480px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  padding: 0;
+}
+
+.terraformSourceCard > header,
+.terraformRunsCard > header {
+  min-width: 0;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 8px 12px;
+}
+
+.fileTabs {
+  min-width: 0;
+  display: flex;
+  gap: 3px;
+}
+
+.fileTabs button {
+  min-height: 32px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted-foreground);
+  padding: 0 10px;
+  font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.fileTabs button.active {
+  background: var(--secondary);
+  color: var(--foreground);
+}
+
+.terraformSource,
+.terraformLogCard > pre {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  background: var(--terminal-bg);
+  color: #e4e4e7;
+  padding: 16px;
+  font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre;
+}
+
+.terraformRunList {
+  align-content: start;
+  overflow: auto;
+  padding: 8px;
+}
+
+.terraformRunItem {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  border-color: transparent;
+  background: transparent;
+  padding: 9px;
+  text-align: left;
+}
+
+.terraformRunItem.selected {
+  border-color: var(--border);
+  background: var(--secondary);
+}
+
+.terraformRunItem > span:nth-child(2) {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.terraformRunItem strong,
+.terraformRunItem small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terraformRunItem strong {
+  color: var(--foreground);
+  font-size: 12px;
+}
+
+.terraformRunItem small {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+
+.runState {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--secondary);
+  color: var(--muted-foreground);
+}
+
+.runState.succeeded {
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
+.runState.failed {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+.terraformLogCard {
+  display: grid;
+  grid-template-rows: auto minmax(180px, 36vh);
+  overflow: hidden;
+  padding: 0;
+}
+
+.terraformLogCard > header {
+  margin: 0;
+  padding: 14px 16px;
+}
+
+.terraformDangerCard {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto minmax(180px, 260px) auto;
+  gap: 10px;
+  align-items: center;
+  border-color: var(--danger-border);
+}
+
+.terraformDangerCard > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
 .metricStrip,
 .metricStrip.compact {
   gap: 9px;
@@ -1086,6 +1581,19 @@ button.activityCreate {
   .replicationGrid {
     grid-template-columns: repeat(2, minmax(140px, 1fr));
   }
+
+  .userAdminRow {
+    grid-template-columns: minmax(210px, 1fr) minmax(120px, 0.7fr) 140px auto auto;
+    overflow-x: auto;
+  }
+
+  .terraformDangerCard {
+    grid-template-columns: minmax(220px, 1fr) auto;
+  }
+
+  .terraformDangerCard input {
+    grid-column: 1;
+  }
 }
 
 @media (max-width: 900px) {
@@ -1121,8 +1629,7 @@ button.activityCreate {
     padding: 0 6px 0 2px;
   }
 
-  .navSectionLabel,
-  .activityFooter {
+  .navSectionLabel {
     display: none;
   }
 
@@ -1206,8 +1713,19 @@ button.activityCreate {
   }
 
   .sandboxDashboard,
-  .networkWorkspace {
+  .networkWorkspace,
+  .settingsWorkspace,
+  .terraformWorkspace {
     padding: 18px 18px 56px;
+  }
+
+  .settingsGrid,
+  .terraformMainGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .terraformSelection {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .overviewGrid {
@@ -1249,7 +1767,7 @@ button.activityCreate {
     border-radius: 9px;
   }
 
-  .brandCopy small,
+  .brandCopy,
   button.activityButton > span {
     display: none;
   }
@@ -1317,9 +1835,90 @@ button.activityCreate {
   }
 
   .sandboxDashboard,
-  .networkWorkspace {
+  .networkWorkspace,
+  .settingsWorkspace,
+  .terraformWorkspace {
     gap: 13px;
     padding: 13px 12px 44px;
+  }
+
+  .settingsPageIntro {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .settingsPageIntro h1 {
+    font-size: 21px;
+  }
+
+  .settingsCard,
+  .terraformControlCard,
+  .terraformDangerCard {
+    padding: 15px;
+  }
+
+  .accountProfileCard > header {
+    grid-template-columns: 42px minmax(0, 1fr);
+  }
+
+  .accountProfileCard > header > .uiBadge {
+    grid-column: 2;
+  }
+
+  .accountAvatar {
+    width: 42px;
+    height: 42px;
+  }
+
+  .sessionRow {
+    grid-template-columns: 34px minmax(0, 1fr) auto;
+  }
+
+  .sessionExpiry {
+    display: none;
+  }
+
+  .sessionRow > button {
+    grid-column: 2 / -1;
+    justify-self: start;
+  }
+
+  .userAdminRow {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 9px;
+    overflow: visible;
+  }
+
+  .userAdminRow .effectiveRoles {
+    justify-content: flex-end;
+  }
+
+  .userAdminRow select {
+    grid-column: 1 / -1;
+  }
+
+  .terraformRuntime {
+    max-width: none;
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .terraformSelection dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .terraformSourceCard,
+  .terraformRunsCard {
+    height: 400px;
+  }
+
+  .terraformDangerCard {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .terraformDangerCard input {
+    grid-column: auto;
   }
 
   .overviewGrid {

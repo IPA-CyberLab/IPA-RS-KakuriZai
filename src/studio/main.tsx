@@ -11,6 +11,7 @@ import {
   Cpu,
   Database,
   ExternalLink,
+  FileCode2,
   Folder,
   FolderOpen,
   Globe2,
@@ -33,12 +34,14 @@ import {
   Sun,
   Terminal,
   Trash2,
+  Users,
   X
 } from "lucide-react";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Card } from "./components/ui/card";
 import { Input } from "./components/ui/input";
+import { AccountsWorkspace, TerraformWorkspace } from "./management";
 import "./styles.css";
 import "./modern.css";
 
@@ -53,6 +56,37 @@ type AuthConfig = {
   supportsBearer?: boolean;
   mfaRequired?: boolean;
   csrfHeader?: string;
+  accountUrl?: string;
+};
+
+type AccountUser = {
+  subject: string;
+  username: string;
+  name: string;
+  email: string;
+  avatarUrl: string;
+  provider: string;
+  loginType: string;
+  status: "active" | "suspended";
+  roles: string[];
+  assignedRoles: string[];
+  permissions?: string[];
+  createdAt: string;
+  updatedAt: string;
+  lastSeenAt: string;
+};
+
+type SessionResponse = {
+  user: AccountUser;
+  auth: string;
+  permissions: string[];
+  csrfToken?: string | null;
+  session?: {
+    id: string;
+    createdAt: string;
+    lastSeenAt: string;
+    expiresAt: string;
+  } | null;
 };
 
 type World = {
@@ -497,7 +531,7 @@ type InventoryRow = {
 };
 
 type StateFilter = "all" | "running" | "paused" | "other";
-type AppView = "sandboxes" | "network" | "observability";
+type AppView = "sandboxes" | "network" | "observability" | "terraform" | "accounts";
 type ThemeMode = "dark" | "light";
 type DnsPresetKey = "default" | "cloudflare" | "google" | "quad9" | "custom";
 
@@ -536,6 +570,7 @@ function App() {
   const [authConfig, setAuthConfig] = React.useState<AuthConfig | null>(null);
   const [token] = React.useState("");
   const [session, setSession] = React.useState<string | null>(null);
+  const [sessionDetails, setSessionDetails] = React.useState<SessionResponse | null>(null);
   const [, setCsrfToken] = React.useState(() => sessionStorage.getItem("kakurizai.csrf") || "");
   const [theme, setTheme] = React.useState<ThemeMode>(() => localStorage.getItem("kakurizai.theme") === "dark" ? "dark" : "light");
   const [worlds, setWorlds] = React.useState<World[]>([]);
@@ -648,7 +683,7 @@ function App() {
     setBusy(true);
     try {
       const [sessionResult, worldsResult, cubeResult, nodesResult, metricsResult, tracesResult] = await Promise.all([
-        api<{ user: { subject: string } }>("/api/session", { token }),
+        api<SessionResponse>("/api/session", { token }),
         api<World[]>("/api/worlds", { token }),
         api<CubeInspect>("/api/cube/inspect", { token }),
         api<ClusterNode[]>("/api/cluster/nodes", { token }),
@@ -662,6 +697,7 @@ function App() {
       }
       const nextInventory = buildInventory(worldsResult, cubeResult);
       setSession(sessionResult.user.subject);
+      setSessionDetails(sessionResult);
       setWorlds(worldsResult);
       setCube(cubeResult);
       setClusterNodes(nodesResult);
@@ -672,6 +708,7 @@ function App() {
     } catch (error) {
       if (authConfig?.requiresRedirect) {
         setSession(null);
+        setSessionDetails(null);
         setCsrfToken("");
         sessionStorage.removeItem("kakurizai.csrf");
       }
@@ -693,6 +730,7 @@ function App() {
       sessionStorage.removeItem("kakurizai.csrf");
       setCsrfToken("");
       setSession(null);
+      setSessionDetails(null);
       setWorlds([]);
       setCube(null);
       setStatus("Sign in required");
@@ -1150,15 +1188,32 @@ function App() {
 
   const isNetworkView = activeView === "network";
   const isObservabilityView = activeView === "observability";
-  const titleLabel = isObservabilityView ? "Observability" : isNetworkView ? "Network" : selected ? selected.name : "No sandbox selected";
+  const isTerraformView = activeView === "terraform";
+  const isAccountsView = activeView === "accounts";
+  const isSandboxView = activeView === "sandboxes";
+  const isFullWidthView = !isSandboxView;
+  const sectionLabel = isAccountsView ? "Accounts" : isTerraformView ? "Terraform" : isObservabilityView ? "Observability" : isNetworkView ? "Network" : "Sandboxes";
+  const titleLabel = isAccountsView
+    ? "Accounts"
+    : isTerraformView
+      ? "Terraform"
+      : isObservabilityView
+        ? "Observability"
+        : isNetworkView
+          ? "Network"
+          : selected ? selected.name : "No sandbox selected";
   const subtitleLabel = isObservabilityView
     ? `${observability?.sample.summary.nodes || 0} nodes / ${observability?.sample.summary.replicas || 0} replicas`
+    : isTerraformView
+    ? "Plan and apply reproducible sandbox definitions"
+    : isAccountsView
+    ? "Profile, access, roles, and active sessions"
     : isNetworkView
     ? selected ? `${selected.name} / ${selected.runtime?.sandboxIp || selected.sandboxId || subtitleForSandbox(selected)}` : status
     : selected ? subtitleForSandbox(selected) : status;
 
   return (
-    <main className={`workbench ${isNetworkView || isObservabilityView ? "networkWorkbench" : ""}`}>
+    <main className={`workbench ${isFullWidthView ? "networkWorkbench" : ""}`}>
       <aside className="activityBar">
         <div className="brandLockup" aria-label="KakuriZai Console">
           <span className="brandMark"><Shield size={18} /></span>
@@ -1214,6 +1269,38 @@ function App() {
           </Button>
         </nav>
 
+        <span className="navSectionLabel">Manage</span>
+        <nav className="activityNav" aria-label="Management navigation">
+          <Button
+            variant="ghost"
+            size="icon"
+            className={`activityButton ${activeView === "terraform" ? "active" : ""}`}
+            onClick={() => {
+              setActiveView("terraform");
+              setActionMenuOpen(false);
+              setLaunchMenuOpen(false);
+            }}
+            title="Terraform"
+          >
+            <FileCode2 size={19} />
+            <span>Terraform</span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className={`activityButton ${activeView === "accounts" ? "active" : ""}`}
+            onClick={() => {
+              setActiveView("accounts");
+              setActionMenuOpen(false);
+              setLaunchMenuOpen(false);
+            }}
+            title="Accounts"
+          >
+            <Users size={19} />
+            <span>Accounts</span>
+          </Button>
+        </nav>
+
         <Button
           ref={activityMenuRef}
           variant="outline"
@@ -1228,10 +1315,6 @@ function App() {
           <span>New sandbox</span>
         </Button>
 
-        <div className="activityFooter">
-          <Badge variant="success"><span className="liveDot" />Control plane online</Badge>
-          <small>{session || "Local session"}</small>
-        </div>
       </aside>
 
       {actionMenuOpen ? (
@@ -1479,7 +1562,7 @@ function App() {
         </form>
       ) : null}
 
-      {!isNetworkView && !isObservabilityView ? (
+      {isSandboxView ? (
         <section className="sandboxPanel">
           <header className="panelHeader">
             <div>
@@ -1529,10 +1612,10 @@ function App() {
       <section className="mainArea">
         <header className="titleBar">
           <div className="titleHeading">
-            <span className="titleEyebrow">KakuriZai / {isObservabilityView ? "Observability" : isNetworkView ? "Network" : "Sandboxes"}</span>
+            <span className="titleEyebrow">KakuriZai / {sectionLabel}</span>
             <div className="titleNameRow">
               <strong>{titleLabel}</strong>
-              {selected && !isObservabilityView ? (
+              {selected && (isSandboxView || isNetworkView) ? (
                 <Badge variant={statusTone(selected.status) === "ok" ? "success" : statusTone(selected.status) === "warn" ? "warning" : "secondary"}>
                   {selected.status}
                 </Badge>
@@ -1565,7 +1648,7 @@ function App() {
                 Metrics
               </Button>
             ) : null}
-            {!isNetworkView && !isObservabilityView && selected && isPausedStatus(selected.status) ? (
+            {isSandboxView && selected && isPausedStatus(selected.status) ? (
               <Button
                 variant="outline"
                 className="ghost"
@@ -1576,7 +1659,7 @@ function App() {
                 <Play size={16} />
                 Resume
               </Button>
-            ) : !isNetworkView && !isObservabilityView && selected ? (
+            ) : isSandboxView && selected ? (
               <Button
                 variant="outline"
                 className="ghost"
@@ -1588,7 +1671,7 @@ function App() {
                 Pause
               </Button>
             ) : null}
-            {!isNetworkView && !isObservabilityView && selected ? (
+            {isSandboxView && selected ? (
               <Button variant="destructive" className="danger" onClick={() => void destroySelected()} disabled={busy || !selected.sandboxId && !selected.world}>
                 <Trash2 size={16} />
                 Delete
@@ -1598,7 +1681,16 @@ function App() {
         </header>
 
         <section className="editorPane">
-          {isObservabilityView ? (
+          {isAccountsView ? (
+            <AccountsWorkspace
+              initialSession={sessionDetails}
+              authConfig={authConfig}
+              apiClient={api}
+              onSignOut={signOut}
+            />
+          ) : isTerraformView ? (
+            <TerraformWorkspace worlds={worlds} apiClient={api} />
+          ) : isObservabilityView ? (
             <ObservabilityWorkspace
               selected={selected}
               nodes={clusterNodes}

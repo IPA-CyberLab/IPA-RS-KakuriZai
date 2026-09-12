@@ -41,6 +41,7 @@ export class OidcAuthProvider {
       clientId: this.config.clientId,
       loginUrl: "/api/auth/login",
       logoutUrl: "/api/auth/logout",
+      accountUrl: `${this.config.issuer}/account`,
       requiresRedirect: true,
       supportsBearer: true
     };

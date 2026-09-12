@@ -164,6 +164,103 @@ const observability = {
   history: []
 };
 
+const account = {
+  subject: "responsive-test",
+  username: "mizuamedesu",
+  name: "Mizuame",
+  email: "mizuame@example.com",
+  avatarUrl: "",
+  provider: "keycloak",
+  loginType: "keycloak",
+  status: "active",
+  roles: ["admin"],
+  assignedRoles: ["admin"],
+  createdAt: "2026-06-20T00:00:00.000Z",
+  updatedAt: "2026-06-28T00:00:00.000Z",
+  lastSeenAt: "2026-06-28T00:00:00.000Z"
+};
+
+const accountSessions = [
+  {
+    id: "session-current",
+    current: true,
+    createdAt: "2026-06-28T00:00:00.000Z",
+    lastSeenAt: "2026-06-28T00:00:00.000Z",
+    expiresAt: "2026-07-05T00:00:00.000Z",
+    ip: "100.64.0.10",
+    userAgent: "Mozilla/5.0 (X11; Linux x86_64) Chrome/140.0"
+  },
+  {
+    id: "session-other",
+    current: false,
+    createdAt: "2026-06-27T00:00:00.000Z",
+    lastSeenAt: "2026-06-27T23:00:00.000Z",
+    expiresAt: "2026-07-04T00:00:00.000Z",
+    ip: "100.64.0.11",
+    userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X) Safari/605.1.15"
+  }
+];
+
+const terraformOverview = {
+  terraform: {
+    installed: true,
+    binary: "/usr/local/bin/terraform",
+    version: "1.13.3",
+    platform: "linux_amd64"
+  },
+  workDir: "/var/lib/kakurizai/terraform",
+  stages: ["init", "validate", "plan", "apply"],
+  projects: [
+    {
+      projectId: "world-a",
+      worldId: "world-a",
+      worldName: "kakurizai-mobile-validation-sandbox-with-a-long-name",
+      sourceHash: "0123456789abcdef",
+      createdAt: "2026-06-28T00:00:00.000Z",
+      updatedAt: "2026-06-28T00:00:00.000Z",
+      worldExists: true,
+      statePresent: true,
+      lockPresent: true,
+      plan: {
+        kind: "apply",
+        sourceHash: "0123456789abcdef",
+        runId: "tfr-plan-a",
+        hasChanges: true,
+        createdAt: "2026-06-28T00:00:00.000Z"
+      }
+    }
+  ],
+  runs: [
+    {
+      id: "tfr-plan-a",
+      projectId: "world-a",
+      worldId: "world-a",
+      worldName: "kakurizai-mobile-validation-sandbox-with-a-long-name",
+      action: "plan",
+      status: "succeeded",
+      stage: "complete",
+      subject: "responsive-test",
+      createdAt: "2026-06-28T00:00:00.000Z",
+      startedAt: "2026-06-28T00:00:01.000Z",
+      finishedAt: "2026-06-28T00:00:04.000Z",
+      error: null,
+      exitCode: 0,
+      log: "Terraform initialized.\nPlan: 1 to add, 0 to change, 0 to destroy."
+    }
+  ]
+};
+
+const terraformPreview = {
+  projectId: "world-a",
+  worldId: "world-a",
+  worldName: "kakurizai-mobile-validation-sandbox-with-a-long-name",
+  sourceHash: "0123456789abcdef",
+  files: {
+    "main.tf": "terraform {\n  required_version = \">= 1.5.0\"\n}\n\nresource \"terraform_data\" \"sandbox\" {}\n",
+    "sandbox.yaml": "apiVersion: kakurizai.io/v1alpha1\nkind: Sandbox\nmetadata:\n  name: kakurizai-mobile-validation-sandbox-with-a-long-name\n"
+  }
+};
+
 const mainViewports = [
   { name: "phone-320", width: 320, height: 568 },
   { name: "phone-390", width: 390, height: 844 },
@@ -227,6 +324,31 @@ test.describe("Studio responsive layout", () => {
       console.log(JSON.stringify(report.summary));
       expect(report.failures).toEqual([]);
     });
+
+    test(`accounts view fits at ${viewport.name}`, async ({ page }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await mockApi(page);
+      await page.goto(baseURL);
+      await page.waitForSelector(".workbench");
+      await page.getByTitle("Accounts").click();
+      await page.waitForSelector(".settingsWorkspace");
+      const report = await auditLayout(page, `${viewport.name}-accounts`);
+      console.log(JSON.stringify(report.summary));
+      expect(report.failures).toEqual([]);
+    });
+
+    test(`terraform view fits at ${viewport.name}`, async ({ page }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await mockApi(page);
+      await page.goto(baseURL);
+      await page.waitForSelector(".workbench");
+      await page.getByTitle("Terraform").click();
+      await page.waitForSelector(".terraformWorkspace");
+      await expect(page.getByText("Terraform 1.13.3")).toBeVisible();
+      const report = await auditLayout(page, `${viewport.name}-terraform`);
+      console.log(JSON.stringify(report.summary));
+      expect(report.failures).toEqual([]);
+    });
   }
 
   for (const viewport of terminalViewports) {
@@ -251,9 +373,20 @@ async function mockApi(page) {
   await page.route("**/api/auth/config", (route) => json(route, {
     provider: "none",
     label: "Local development",
-    requiresRedirect: false
+    requiresRedirect: false,
+    accountUrl: "https://identity.example.com/account"
   }));
-  await page.route("**/api/session", (route) => json(route, { user: { subject: "responsive-test" } }));
+  await page.route("**/api/session", (route) => json(route, {
+    user: account,
+    auth: "keycloak",
+    permissions: ["admin", "users:read", "users:write", "terraform:read", "terraform:write"],
+    csrfToken: "responsive-csrf"
+  }));
+  await page.route("**/api/account/sessions", (route) => json(route, accountSessions));
+  await page.route("**/api/account", (route) => json(route, account));
+  await page.route("**/api/users", (route) => json(route, [account]));
+  await page.route("**/api/terraform/projects/*", (route) => json(route, terraformPreview));
+  await page.route("**/api/terraform", (route) => json(route, terraformOverview));
   await page.route("**/api/cube/inspect", (route) => json(route, cube));
   await page.route("**/api/cluster/nodes", (route) => json(route, [
     { id: "node-a", nodeId: "node-a", name: "node-a", status: "ready", ip: "10.0.0.10", roles: ["worker"] }
@@ -376,7 +509,17 @@ async function auditLayout(page, label) {
       ".titleBar",
       ".terminalTopbar",
       ".terminalFrame",
-      ".sandboxPanel"
+      ".sandboxPanel",
+      ".settingsWorkspace",
+      ".terraformWorkspace",
+      ".settingsCard",
+      ".terraformControlCard",
+      ".terraformSourceCard",
+      ".terraformRunsCard",
+      ".terraformLogCard",
+      ".terraformDangerCard",
+      ".sessionRow",
+      ".userAdminRow"
     ];
 
     for (const selector of scrollSelectors) {

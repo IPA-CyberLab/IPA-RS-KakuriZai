@@ -39,6 +39,7 @@
     "maxLoginAttempts": 12,
     "persistSessions": true,
     "sessionFile": ".kakurizai/auth/studio-sessions.json",
+    "accountFile": ".kakurizai/auth/accounts.json",
     "rbac": {
       "enabled": true,
       "defaultRole": null,
@@ -63,6 +64,15 @@
     "retentionSamples": 288,
     "traceEvents": 2000,
     "tracing": true
+  },
+  "terraform": {
+    "enabled": true,
+    "binary": "terraform",
+    "agctl": null,
+    "workDir": ".kakurizai/terraform",
+    "pluginCacheDir": ".kakurizai/terraform/plugin-cache",
+    "commandTimeoutSeconds": 1800,
+    "maxLogBytes": 2097152
   },
   "cube": {
     "mode": "auto",

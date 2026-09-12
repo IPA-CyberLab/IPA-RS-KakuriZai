@@ -38,6 +38,8 @@ Every Studio operation has a CLI equivalent:
 | Agent button | `agctl agent <sandbox>` or `agctl open <sandbox> agent` |
 | Apply button | `agctl apply <sandbox>` |
 | Remove button | `agctl remove <sandbox>` with interactive confirmation, or `agctl remove <sandbox> --yes` |
+| Prepare Terraform source | `agctl terraform export <sandbox> --out ./terraform` |
+| Terraform plan/apply/destroy | `terraform plan`, `terraform apply`, and `terraform destroy` in the exported directory |
 
 Automation can use `--json` on `list`, `show`, `changed`, `apply`, `lab kubernetes`, and `remove`.
 
@@ -93,11 +95,13 @@ For Keycloak, map `mfa` to the desired ACR/LoA level and add the AMR protocol ma
 
 Built-in KakuriZai roles are:
 
-- `viewer`: read-only Studio/world access.
-- `operator`: create/update/pause/resume/apply/shell/dev-access.
-- `admin`: operator permissions plus delete/admin.
+- `viewer`: read-only Studio, world, and Terraform access.
+- `operator`: create/update/pause/resume/apply/shell/dev-access plus Terraform plan/apply.
+- `admin`: operator permissions plus sandbox deletion and account/role management.
 
-Studio sessions are persisted in `$KAKURIZAI_HOME/auth/studio-sessions.json` by default. Audit logs are JSONL at `$KAKURIZAI_HOME/audit/studio.jsonl`; write operations are logged by default, reads can be enabled with `"audit": { "logReads": true }`, and audit entries include a hash chain by default.
+Studio's Accounts view separates identity from application authorization: Keycloak remains the source of login identity, while KakuriZai stores editable display fields, local role assignments, suspension state, and browser-session metadata in `$KAKURIZAI_HOME/auth/accounts.json`. Administrators can inspect effective roles, assign `viewer`/`operator`/`admin`, suspend other accounts, and users can revoke their own sessions. Studio sessions remain in `$KAKURIZAI_HOME/auth/studio-sessions.json`; the UI only receives one-way-derived session IDs, never the cookie token itself.
+
+Audit logs are JSONL at `$KAKURIZAI_HOME/audit/studio.jsonl`; write operations are logged by default, reads can be enabled with `"audit": { "logReads": true }`, and audit entries include a hash chain by default.
 
 The default listener is loopback-only. To make Studio reachable from another device:
 
@@ -137,6 +141,18 @@ Use a reverse proxy with HTTPS or configure built-in TLS:
 ```
 
 An example lives in `config/keycloak.example.json`.
+
+## Managed Terraform Runs
+
+Studio's Terraform view turns each saved sandbox definition into an isolated Terraform working directory. It retains `terraform.tfstate`, `terraform.tfplan`, `.terraform.lock.hcl`, and bounded run logs under `$KAKURIZAI_HOME/terraform`, and executes the same explicit stages used by a normal Terraform workflow:
+
+1. `terraform init`
+2. `terraform validate`
+3. `terraform plan -out=terraform.tfplan`
+4. review the rendered saved plan
+5. `terraform apply terraform.tfplan`
+
+Apply is refused until a saved plan exists, and a plan becomes invalid if the sandbox definition changes. Destroy uses a separate saved destroy plan, requires `worlds:delete`, and requires typing the exact sandbox name. Runs for the same sandbox are serialized, can be canceled, and survive Studio restarts as inspectable history. Set `terraform.binary` to an absolute path when Terraform is not in the Studio service's `PATH`; set `terraform.enabled` to `false` to disable execution while retaining source preview.
 
 ## Cluster Replication And Observability
 
