@@ -5,17 +5,17 @@ import { Terminal as XTerminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import {
   Activity,
+  ArrowLeft,
   Box,
+  ChevronRight,
   Code2,
   Copy,
-  Cpu,
   Database,
   ExternalLink,
   FileCode2,
   Folder,
   FolderOpen,
   Globe2,
-  HardDrive,
   KeyRound,
   Layers,
   LogOut,
@@ -532,6 +532,7 @@ type InventoryRow = {
 
 type StateFilter = "all" | "running" | "paused" | "other";
 type AppView = "sandboxes" | "network" | "observability" | "terraform" | "accounts";
+type SandboxPage = "list" | "detail";
 type ThemeMode = "dark" | "light";
 type DnsPresetKey = "default" | "cloudflare" | "google" | "quad9" | "custom";
 
@@ -584,6 +585,7 @@ function App() {
   const [probeBusy, setProbeBusy] = React.useState(false);
   const [networkProbe, setNetworkProbe] = React.useState<NetworkProbePlan | null>(null);
   const [activeView, setActiveView] = React.useState<AppView>("sandboxes");
+  const [sandboxPage, setSandboxPage] = React.useState<SandboxPage>("list");
   const [actionMenuOpen, setActionMenuOpen] = React.useState(false);
   const [launchMenuOpen, setLaunchMenuOpen] = React.useState(false);
   const activityMenuRef = React.useRef<HTMLButtonElement | null>(null);
@@ -632,7 +634,6 @@ function App() {
   );
   const selected = inventory.find((row) => row.key === selectedId) || filteredInventory[0] || inventory[0] || null;
   const selectedTemplate = findTemplateForSandbox(cube, selected);
-  const selectedNode = findNodeForSandbox(cube, selected);
 
   React.useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -857,6 +858,7 @@ function App() {
       });
       setLaunchMenuOpen(false);
       setSelectedId(`world:${world.id}`);
+      setSandboxPage("detail");
       await refresh();
     } catch (error) {
       setFormMessage(error instanceof Error ? error.message : String(error));
@@ -1172,15 +1174,9 @@ function App() {
     return (
       <div className="loginPage">
         <Card className="loginPanel">
-          <div className="mark"><Shield size={22} /></div>
-          <h1>KakuriZai Console</h1>
-          <p>{status === "Sign in required" ? authConfig.label : status}</p>
-          <div className="authMeta">
-            <span>Provider</span><strong>{authConfig.provider}</strong>
-            <span>Issuer</span><strong>{authConfig.issuer || "-"}</strong>
-            <span>Audience</span><strong>{authConfig.audience || "-"}</strong>
-          </div>
-          <Button className="primary wide" onClick={signIn} disabled={busy}><KeyRound size={16} /> Sign in with Keycloak</Button>
+          <h1>KakuriZai</h1>
+          <p>{status !== "Starting" && status !== "Sign in required" ? status : "Sign in to manage your sandboxes."}</p>
+          <Button aria-label="Sign in with Keycloak" className="primary wide" onClick={signIn} disabled={busy}><KeyRound size={16} /> Continue with GitHub</Button>
         </Card>
       </div>
     );
@@ -1192,7 +1188,6 @@ function App() {
   const isAccountsView = activeView === "accounts";
   const isSandboxView = activeView === "sandboxes";
   const isFullWidthView = !isSandboxView;
-  const sectionLabel = isAccountsView ? "Accounts" : isTerraformView ? "Terraform" : isObservabilityView ? "Observability" : isNetworkView ? "Network" : "Sandboxes";
   const titleLabel = isAccountsView
     ? "Accounts"
     : isTerraformView
@@ -1210,20 +1205,17 @@ function App() {
     ? "Profile, access, roles, and active sessions"
     : isNetworkView
     ? selected ? `${selected.name} / ${selected.runtime?.sandboxIp || selected.sandboxId || subtitleForSandbox(selected)}` : status
-    : selected ? subtitleForSandbox(selected) : status;
+    : selected ? `Created ${formatDate(selected.createdAt)}` : status;
 
   return (
     <main className={`workbench ${isFullWidthView ? "networkWorkbench" : ""}`}>
       <aside className="activityBar">
         <div className="brandLockup" aria-label="KakuriZai Console">
-          <span className="brandMark"><Shield size={18} /></span>
           <span className="brandCopy">
             <strong>KakuriZai</strong>
-            <small>Sandbox console</small>
           </span>
         </div>
 
-        <span className="navSectionLabel">Workspace</span>
         <nav className="activityNav" aria-label="Primary navigation">
           <Button
             variant="ghost"
@@ -1231,6 +1223,7 @@ function App() {
             className={`activityButton ${activeView === "sandboxes" ? "active" : ""}`}
             onClick={() => {
               setActiveView("sandboxes");
+              setSandboxPage("list");
               setActionMenuOpen(false);
               setLaunchMenuOpen(false);
             }}
@@ -1269,7 +1262,6 @@ function App() {
           </Button>
         </nav>
 
-        <span className="navSectionLabel">Manage</span>
         <nav className="activityNav" aria-label="Management navigation">
           <Button
             variant="ghost"
@@ -1338,6 +1330,12 @@ function App() {
           <label>Name</label>
           <input value={launch.name} onChange={(event) => setLaunch({ ...launch, name: event.target.value })} autoFocus />
 
+          <details className="formDisclosure">
+            <summary>
+              <span>Customize</span>
+              <small>Resources, mounts, and network</small>
+            </summary>
+            <div className="formDisclosureBody">
           <div className="toggleRow">
             <label className="checkRow">
               <input
@@ -1552,6 +1550,8 @@ function App() {
             rules={launch.egressRules}
             onChange={(egressRules) => setLaunch({ ...launch, egressRules })}
           />
+            </div>
+          </details>
 
           {formMessage ? <div className="formMessage">{formMessage}</div> : null}
 
@@ -1562,46 +1562,60 @@ function App() {
         </form>
       ) : null}
 
-      {isSandboxView ? (
+      {isSandboxView && sandboxPage === "list" ? (
         <section className="sandboxPanel">
           <header className="panelHeader">
             <div>
               <span>Sandboxes</span>
-              <small>{filteredInventory.length} of {inventory.length}</small>
+              <small>{inventory.length} {inventory.length === 1 ? "sandbox" : "sandboxes"}</small>
             </div>
             <Button variant="ghost" size="icon" className="iconButton ghost" onClick={() => void refresh()} title="Refresh" disabled={busy}>
               <RefreshCcw size={15} />
             </Button>
           </header>
-          <div className="panelSearch">
-            <Search size={14} />
-            <Input aria-label="Search sandboxes" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search sandboxes…" />
-          </div>
-          <div className="stateFilters">
-            {(["all", "running", "paused", "other"] as StateFilter[]).map((filter) => (
-              <button key={filter} className={stateFilter === filter ? "active" : ""} onClick={() => setStateFilter(filter)} type="button">
-                {filter}
-              </button>
-            ))}
-          </div>
+          {inventory.length > 4 ? (
+            <div className="sandboxListTools">
+              <div className="panelSearch">
+                <Search size={14} />
+                <Input aria-label="Search sandboxes" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search" />
+              </div>
+              <div className="stateFilters">
+                {(["all", "running", "paused", "other"] as StateFilter[]).map((filter) => (
+                  <button key={filter} className={stateFilter === filter ? "active" : ""} onClick={() => setStateFilter(filter)} type="button">
+                    {filter}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
           <div className="sandboxList">
             {filteredInventory.map((row) => (
-              <button key={row.key} className={`sandboxItem ${row.key === selected?.key ? "selected" : ""}`} onClick={() => setSelectedId(row.key)} type="button">
-                <span className="sandboxTopLine">
-                  <span className="sandboxName">{row.name}</span>
-                  <Badge
-                    variant={statusTone(row.status) === "ok" ? "success" : statusTone(row.status) === "warn" ? "warning" : "secondary"}
-                    className={`sandboxState ${statusTone(row.status)}`}
-                  >
-                    {row.status}
-                  </Badge>
+              <button
+                key={row.key}
+                className="sandboxItem"
+                onClick={() => {
+                  setSelectedId(row.key);
+                  setSandboxPage("detail");
+                }}
+                type="button"
+              >
+                <span className={`sandboxStatusDot ${statusTone(row.status)}`} aria-hidden="true" />
+                <span className="sandboxItemBody">
+                  <span className="sandboxTopLine">
+                    <span className="sandboxName">{row.name}</span>
+                    <Badge
+                      variant={statusTone(row.status) === "ok" ? "success" : statusTone(row.status) === "warn" ? "warning" : "secondary"}
+                      className={`sandboxState ${statusTone(row.status)}`}
+                    >
+                      {row.status}
+                    </Badge>
+                  </span>
+                  <span className="sandboxMetaLine">
+                    <span>{row.cpu || "-"} CPU</span>
+                    <span>{row.memory || "-"} memory</span>
+                  </span>
                 </span>
-                <span className="sandboxPath">{row.templateId || subtitleForSandbox(row)}</span>
-                <span className="sandboxMetaLine">
-                  <span>{row.cpu || "-"}</span>
-                  <span>{row.memory || "-"}</span>
-                  <span>{row.host || "-"}</span>
-                </span>
+                <ChevronRight className="sandboxChevron" size={18} aria-hidden="true" />
               </button>
             ))}
             {filteredInventory.length === 0 ? <div className="emptyList">No sandboxes</div> : null}
@@ -1609,20 +1623,39 @@ function App() {
         </section>
       ) : null}
 
-      <section className="mainArea">
+      {!isSandboxView || sandboxPage === "detail" ? <section className="mainArea">
         <header className="titleBar">
-          <div className="titleHeading">
-            <span className="titleEyebrow">KakuriZai / {sectionLabel}</span>
-            <div className="titleNameRow">
-              <strong>{titleLabel}</strong>
-              {selected && (isSandboxView || isNetworkView) ? (
-                <Badge variant={statusTone(selected.status) === "ok" ? "success" : statusTone(selected.status) === "warn" ? "warning" : "secondary"}>
-                  {selected.status}
-                </Badge>
-              ) : null}
+          <div className="titleLeading">
+            {isSandboxView ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="ghost iconButton backButton"
+                onClick={() => setSandboxPage("list")}
+                title="Back to sandboxes"
+              >
+                <ArrowLeft size={18} />
+              </Button>
+            ) : null}
+            <div className="titleHeading">
+              <div className="titleNameRow">
+                <strong>{titleLabel}</strong>
+                {selected && (isSandboxView || isNetworkView) ? (
+                  <Badge variant={statusTone(selected.status) === "ok" ? "success" : statusTone(selected.status) === "warn" ? "warning" : "secondary"}>
+                    {selected.status}
+                  </Badge>
+                ) : null}
+              </div>
+              <span className="titleSubtitle">{subtitleLabel}</span>
             </div>
-            <span className="titleSubtitle">{subtitleLabel}</span>
           </div>
+          {isSandboxView && selected ? (
+            <div className="titleFacts" aria-label="Sandbox resources">
+              <QuickFact label="CPU" value={selected.cpu || selectedTemplate?.cpu || "-"} />
+              <QuickFact label="Memory" value={selected.memory || selectedTemplate?.memory || "-"} />
+              <QuickFact label="Disk" value={selected.runtime?.writableLayerSize || selected.world?.backendConfig?.writableLayerSize || selectedTemplate?.writableLayerSize || "-"} />
+            </div>
+          ) : null}
           <div className="toolbarActions">
             <Button
               variant="ghost"
@@ -1633,9 +1666,8 @@ function App() {
             >
               {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
             </Button>
-            <Button variant="outline" className="ghost" onClick={() => void refresh()} title="Refresh" disabled={busy}>
+            <Button variant="ghost" size="icon" className="ghost iconButton" onClick={() => void refresh()} title="Refresh" disabled={busy}>
               <RefreshCcw size={16} />
-              <span className="buttonLabel">Refresh</span>
             </Button>
             {authRequired ? (
               <Button variant="ghost" size="icon" className="ghost iconButton" onClick={() => void signOut()} title="Sign out">
@@ -1648,34 +1680,32 @@ function App() {
                 Metrics
               </Button>
             ) : null}
-            {isSandboxView && selected && isPausedStatus(selected.status) ? (
-              <Button
-                variant="outline"
-                className="ghost"
-                onClick={() => void resumeSelected()}
-                title={cube?.capabilities?.resume ? "Resume sandbox" : "Resume is not available on this CubeSandbox runtime"}
-                disabled={busy || !selected.sandboxId || !cube?.capabilities?.resume}
-              >
-                <Play size={16} />
-                Resume
-              </Button>
-            ) : isSandboxView && selected ? (
-              <Button
-                variant="outline"
-                className="ghost"
-                onClick={() => void pauseSelected()}
-                title={cube?.capabilities?.pause ? "Pause sandbox" : "Pause is not available on this CubeSandbox runtime"}
-                disabled={busy || !selected.sandboxId || !cube?.capabilities?.pause}
-              >
-                <Pause size={16} />
-                Pause
-              </Button>
-            ) : null}
             {isSandboxView && selected ? (
-              <Button variant="destructive" className="danger" onClick={() => void destroySelected()} disabled={busy || !selected.sandboxId && !selected.world}>
-                <Trash2 size={16} />
-                Delete
-              </Button>
+              <details className="sandboxActionMenu">
+                <summary aria-label="Sandbox actions" title="More actions"><MoreHorizontal size={18} /></summary>
+                <div>
+                  {isPausedStatus(selected.status) ? (
+                    <button
+                      onClick={() => void resumeSelected()}
+                      disabled={busy || !selected.sandboxId || !cube?.capabilities?.resume}
+                      type="button"
+                    >
+                      <Play size={15} /> Resume
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => void pauseSelected()}
+                      disabled={busy || !selected.sandboxId || !cube?.capabilities?.pause}
+                      type="button"
+                    >
+                      <Pause size={15} /> Pause
+                    </button>
+                  )}
+                  <button className="destructiveMenuItem" onClick={() => void destroySelected()} disabled={busy || !selected.sandboxId && !selected.world} type="button">
+                    <Trash2 size={15} /> Delete
+                  </button>
+                </div>
+              </details>
             ) : null}
           </div>
         </header>
@@ -1723,36 +1753,31 @@ function App() {
             />
           ) : selected ? (
             <div className="sandboxDashboard">
-              <div className="overviewGrid">
-                <Kpi icon={<Activity size={16} />} label="Status" value={selected.status} tone={statusTone(selected.status)} />
-                <Kpi icon={<Cpu size={16} />} label="CPU" value={selected.cpu || selectedTemplate?.cpu || "-"} />
-                <Kpi icon={<HardDrive size={16} />} label="Memory" value={selected.memory || selectedTemplate?.memory || "-"} />
-                <Kpi icon={<Database size={16} />} label="Disk size" value={selected.runtime?.writableLayerSize || selected.world?.backendConfig?.writableLayerSize || selectedTemplate?.writableLayerSize || "-"} />
-                <Kpi icon={<Server size={16} />} label="Node" value={selected.host || "-"} tone={selectedNode?.healthy === false ? "warn" : "ok"} />
-                <Kpi icon={<Network size={16} />} label="Network" value={selectedTemplate?.networkType || cube?.config?.networkType || "-"} />
-              </div>
+              {statusTone(selected.status) === "warn" && (selected.world?.sandbox?.reason || selected.runtime?.inspectError) ? (
+                <div className="sandboxAlert">{selected.world?.sandbox?.reason || selected.runtime?.inspectError}</div>
+              ) : null}
 
-              <DetailSection icon={<Box size={16} />} title="Sandbox">
-                <div className="metricStrip">
+              <DetailSection icon={<Terminal size={16} />} title="Connect">
+                <SandboxAccessLauncher world={selected.world} />
+              </DetailSection>
+
+              <div className="disclosureStack">
+              <DisclosureSection icon={<Box size={16} />} title="Runtime details" hint="IDs, runtime, and placement">
+                <div className="metricStrip compact">
                   <Metric label="Origin" value={selected.origin} />
                   <Metric label="Runtime" value={cube?.mode || "-"} />
                   <Metric label="Namespace" value={selected.runtime?.namespace || cube?.namespace || "-"} />
-                  <Metric label="Created" value={formatDate(selected.createdAt)} />
+                  <Metric label="Node" value={selected.host || "-"} />
                   <Metric label="Host mount" value={hasHostMount(selected) ? "enabled" : "disabled"} />
                   <Metric label="Terminal tools" value={formatBootstrapStatus(selected.world?.sandbox?.bootstrap)} />
                   <Metric label="Replication memory" value={replicationMemoryText(selected.world)} />
                   <Metric label="Sandbox ID" value={selected.sandboxId || "-"} wide />
                   <Metric label="Source" value={hasHostMount(selected) ? selected.world?.sourcePath || selected.sourcePath || "-" : "-"} wide />
-                  <Metric label="Base template" value={selected.templateId || selected.world?.sandbox?.baseId || cube?.template || "-"} wide />
                   <Metric label="Reason" value={selected.world?.sandbox?.reason || selected.runtime?.inspectError || "-"} wide />
                 </div>
-              </DetailSection>
+              </DisclosureSection>
 
-              <DetailSection icon={<Terminal size={16} />} title="Terminal">
-                <SandboxAccessLauncher world={selected.world} />
-              </DetailSection>
-
-              <DetailSection icon={<Database size={16} />} title="Storage and Mounts">
+              <DisclosureSection icon={<Database size={16} />} title="Storage and mounts" hint="Disk sizing and host folders">
                 <div className="metricStrip compact">
                   <Metric label="Disk size" value={selected.runtime?.writableLayerSize || selected.world?.backendConfig?.writableLayerSize || selectedTemplate?.writableLayerSize || "-"} />
                   <Metric label="System disk" value={selected.runtime?.systemDiskSize || "-"} />
@@ -1769,9 +1794,9 @@ function App() {
                   onSave={saveDiskSize}
                 />
                 <MountTable row={selected} mounts={mountRowsForSelection(selected)} />
-              </DetailSection>
+              </DisclosureSection>
 
-              <DetailSection icon={<Layers size={16} />} title="Template">
+              <DisclosureSection icon={<Layers size={16} />} title="Template" hint="Image and replica metadata">
                 {selectedTemplate ? (
                   <>
                     <div className="metricStrip compact">
@@ -1789,9 +1814,9 @@ function App() {
                 ) : (
                   <div className="sectionEmpty">No template detail available.</div>
                 )}
-              </DetailSection>
+              </DisclosureSection>
 
-              <DetailSection icon={<Globe2 size={16} />} title="Gateway and Policy">
+              <DisclosureSection icon={<Globe2 size={16} />} title="Gateway and policy" hint="API and outbound network policy">
                 <div className="metricStrip compact">
                   <Metric label="API endpoint" value={cube?.config?.apiEndpoint || "-"} wide />
                   <Metric label="Auth" value={cube?.config?.authEnabled ? "enabled" : "disabled"} />
@@ -1799,7 +1824,8 @@ function App() {
                   <Metric label="Default network" value={cube?.config?.networkType || "-"} />
                   <Metric label="Outbound internet" value={formatBool(selectedTemplate?.allowInternetAccess)} />
                 </div>
-              </DetailSection>
+              </DisclosureSection>
+              </div>
             </div>
           ) : (
             <div className="emptyState">
@@ -1808,7 +1834,7 @@ function App() {
             </div>
           )}
         </section>
-      </section>
+      </section> : null}
     </main>
   );
 }
@@ -1822,6 +1848,41 @@ function DetailSection({ icon, title, children }: { icon: React.ReactNode; title
       </header>
       {children}
     </Card>
+  );
+}
+
+function QuickFact({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="quickFact">
+      <strong>{value}</strong>
+      <small>{label}</small>
+    </span>
+  );
+}
+
+function DisclosureSection({
+  icon,
+  title,
+  hint,
+  children
+}: {
+  icon: React.ReactNode;
+  title: string;
+  hint: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <details className="disclosureCard">
+      <summary>
+        <span className="disclosureIcon">{icon}</span>
+        <span className="disclosureCopy">
+          <strong>{title}</strong>
+          <small>{hint}</small>
+        </span>
+        <ChevronRight className="disclosureChevron" size={18} aria-hidden="true" />
+      </summary>
+      <div className="disclosureBody">{children}</div>
+    </details>
   );
 }
 
@@ -1859,17 +1920,14 @@ function ObservabilityWorkspace({
   const sample = metrics?.sample;
   const [joinToken, setJoinToken] = React.useState("");
   return (
-    <div className="sandboxDashboard">
-      <div className="overviewGrid">
+    <div className="sandboxDashboard observabilityWorkspace">
+      <div className="overviewGrid quietOverview">
         <Kpi icon={<Server size={16} />} label="Nodes" value={String(sample?.summary.nodes ?? nodes.length)} />
         <Kpi icon={<Activity size={16} />} label="Healthy" value={String(sample?.summary.healthyNodes ?? "-")} tone="ok" />
         <Kpi icon={<Box size={16} />} label="Worlds" value={String(sample?.summary.worlds ?? "-")} />
-        <Kpi icon={<Layers size={16} />} label="Replicas" value={String(sample?.summary.replicas ?? "-")} />
-        <Kpi icon={<Database size={16} />} label="Samples" value={String(metrics?.history?.length || 0)} />
-        <Kpi icon={<Route size={16} />} label="Traces" value={String(traces.length)} />
       </div>
 
-      <DetailSection icon={<Activity size={16} />} title="Cluster Actions">
+      <DisclosureSection icon={<Activity size={16} />} title="Cluster actions" hint="Refresh, trace, checkpoint, and failover">
         <div className="actionStrip">
           <button className="ghost" onClick={() => void onRefresh()} type="button" disabled={busy}>
             <RefreshCcw size={15} />
@@ -1892,9 +1950,9 @@ function ObservabilityWorkspace({
             Failover
           </button>
         </div>
-      </DetailSection>
+      </DisclosureSection>
 
-      <DetailSection icon={<Server size={16} />} title="Node Management">
+      <DisclosureSection icon={<Server size={16} />} title="Node management" hint={`${nodes.length} registered ${nodes.length === 1 ? "node" : "nodes"}`}>
         <NodeManagement
           nodes={nodes}
           busy={busy}
@@ -1906,18 +1964,18 @@ function ObservabilityWorkspace({
           onRegisterNode={onRegisterNode}
           onRemoveNode={onRemoveNode}
         />
-      </DetailSection>
+      </DisclosureSection>
 
-      <DetailSection icon={<Layers size={16} />} title="Replication">
+      <DisclosureSection icon={<Layers size={16} />} title="Replication" hint="Create stateful or portable replicas">
         <ReplicationLauncher
           selected={selected}
           nodes={nodes}
           busy={busy}
           onReplicate={onReplicate}
         />
-      </DetailSection>
+      </DisclosureSection>
 
-      <DetailSection icon={<Server size={16} />} title="Nodes">
+      <DisclosureSection icon={<Server size={16} />} title="Node metrics" hint="Placement, utilization, and replica count">
         <div className="dataTable">
           <div className="dataRow head">
             <span>Node</span>
@@ -1934,9 +1992,9 @@ function ObservabilityWorkspace({
             </div>
           ))}
         </div>
-      </DetailSection>
+      </DisclosureSection>
 
-      <DetailSection icon={<Box size={16} />} title="World Metrics">
+      <DisclosureSection icon={<Box size={16} />} title="Sandbox metrics" hint="Status, placement, and overlay usage">
         <div className="dataTable">
           <div className="dataRow head">
             <span>World</span>
@@ -1953,9 +2011,9 @@ function ObservabilityWorkspace({
             </div>
           ))}
         </div>
-      </DetailSection>
+      </DisclosureSection>
 
-      <DetailSection icon={<Route size={16} />} title="Traces">
+      <DisclosureSection icon={<Route size={16} />} title="Traces" hint={`${traces.length} trace ${traces.length === 1 ? "session" : "sessions"}`}>
         <TraceLauncher selected={selected} busy={busy} onStartTrace={onStartTrace} />
         <div className="dataTable">
           <div className="dataRow head">
@@ -1977,7 +2035,7 @@ function ObservabilityWorkspace({
             </div>
           ))}
         </div>
-      </DetailSection>
+      </DisclosureSection>
     </div>
   );
 }
@@ -2240,7 +2298,10 @@ function NetworkWorkspace({
             <span>{networkProbe ? `Updated ${formatDate(networkProbe.generatedAt)}` : "No live probe yet"}</span>
           </div>
         </header>
-        {selected ? (
+      </section>
+
+      {selected ? (
+        <DisclosureSection icon={<Route size={16} />} title="Topology" hint="Addresses, paths, and port forwards">
           <SwitchNetworkPanel
             selected={selected}
             rows={rows}
@@ -2248,16 +2309,14 @@ function NetworkWorkspace({
             probe={networkProbe}
             onSelect={onSelectSandbox}
           />
-        ) : (
-          <div className="sectionEmpty">No sandbox network metadata.</div>
-        )}
-      </section>
+        </DisclosureSection>
+      ) : null}
 
-      <DetailSection icon={<Globe2 size={16} />} title="Experiments">
+      <DisclosureSection icon={<Globe2 size={16} />} title="Experiments" hint="Create a heterogeneous network lab">
         <HeteroNetworkLabPanel busy={busy} onCreate={onCreateHeteroNetworkLab} />
-      </DetailSection>
+      </DisclosureSection>
 
-      <DetailSection icon={<Network size={16} />} title="Settings">
+      <DisclosureSection icon={<Network size={16} />} title="Settings" hint="DNS, routes, NAT, VLAN, and policy">
         {selected ? (
           <NetworkEditor
             world={selected.world}
@@ -2269,12 +2328,12 @@ function NetworkWorkspace({
         ) : (
           <div className="sectionEmpty">Select a sandbox to edit network settings.</div>
         )}
-      </DetailSection>
+      </DisclosureSection>
 
-      <DetailSection icon={<Layers size={16} />} title="Reachability">
+      <DisclosureSection icon={<Layers size={16} />} title="Reachability" hint="Probe results and connectivity matrix">
         <NetworkTopologyDiagram rows={rows} probe={networkProbe} />
         <ConnectivityMatrix rows={rows} probe={networkProbe} />
-      </DetailSection>
+      </DisclosureSection>
     </div>
   );
 }

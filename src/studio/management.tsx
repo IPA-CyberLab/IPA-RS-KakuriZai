@@ -3,6 +3,7 @@ import {
   Activity,
   Ban,
   CheckCircle2,
+  ChevronRight,
   ExternalLink,
   FileCode2,
   LogOut,
@@ -110,6 +111,31 @@ type TerraformPreview = {
 };
 
 type WorldSummary = { id: string; name: string };
+
+function ManagementDisclosure({
+  icon,
+  title,
+  hint,
+  children,
+  danger = false
+}: {
+  icon: React.ReactNode;
+  title: string;
+  hint: string;
+  children: React.ReactNode;
+  danger?: boolean;
+}) {
+  return (
+    <details className={`disclosureCard managementDisclosure ${danger ? "dangerDisclosure" : ""}`}>
+      <summary>
+        <span className="disclosureIcon">{icon}</span>
+        <span className="disclosureCopy"><strong>{title}</strong><small>{hint}</small></span>
+        <ChevronRight className="disclosureChevron" size={18} aria-hidden="true" />
+      </summary>
+      <div className="disclosureBody">{children}</div>
+    </details>
+  );
+}
 
 export function AccountsWorkspace({
   initialSession,
@@ -242,6 +268,8 @@ export function AccountsWorkspace({
             </div>
             <Badge variant={account?.status === "suspended" ? "destructive" : "secondary"}>{account?.status || "active"}</Badge>
           </header>
+          <details className="inlineDisclosure">
+            <summary>Edit profile</summary>
           <form className="accountForm" onSubmit={saveProfile}>
             <label htmlFor="account-email">Email</label>
             <Input id="account-email" value={account?.email || ""} disabled />
@@ -256,15 +284,10 @@ export function AccountsWorkspace({
               <Button type="button" variant="outline" onClick={() => void onSignOut()} disabled={busy}><LogOut size={15} /> Sign out</Button>
             </div>
           </form>
+          </details>
         </Card>
 
-        <Card className="settingsCard">
-          <header className="settingsCardHeading">
-            <div>
-              <strong>Access</strong>
-              <span>Authentication and effective KakuriZai roles.</span>
-            </div>
-          </header>
+        <ManagementDisclosure icon={<Activity size={16} />} title="Access" hint="Identity and effective roles">
           <dl className="accountFacts">
             <div><dt>Provider</dt><dd>{account?.provider || initialSession?.auth || "-"}</dd></div>
             <div><dt>Login type</dt><dd>{account?.loginType || "-"}</dd></div>
@@ -275,19 +298,15 @@ export function AccountsWorkspace({
             {(account?.roles || []).map((role) => <Badge key={role} variant="secondary">{role}</Badge>)}
             {!account?.roles?.length ? <span className="mutedText">No application roles</span> : null}
           </div>
-        </Card>
+        </ManagementDisclosure>
       </div>
 
-      <Card className="settingsCard settingsCardWide">
-        <header className="settingsCardHeading splitHeading">
-          <div>
-            <strong>Sessions</strong>
-            <span>Review browsers that currently have access to this account.</span>
-          </div>
+      <ManagementDisclosure icon={<Monitor size={16} />} title="Sessions" hint={`${sessions.length} signed-in ${sessions.length === 1 ? "device" : "devices"}`}>
+          <div className="disclosureToolbar">
           <Button variant="outline" size="sm" onClick={() => void revokeOtherSessions()} disabled={busy || sessions.every((item) => item.current)}>
             Revoke other sessions
           </Button>
-        </header>
+          </div>
         <div className="sessionList">
           {sessions.map((item) => (
             <div className="sessionRow" key={item.id}>
@@ -306,23 +325,17 @@ export function AccountsWorkspace({
           ))}
           {!sessions.length ? <div className="sectionEmpty">No active browser sessions.</div> : null}
         </div>
-      </Card>
+      </ManagementDisclosure>
 
       {canManageUsers ? (
-        <Card className="settingsCard settingsCardWide">
-          <header className="settingsCardHeading">
-            <div>
-              <strong>Users</strong>
-              <span>Accounts appear after an allowed identity signs in. Local assignments are additive to identity-provider and config roles.</span>
-            </div>
-          </header>
+        <ManagementDisclosure icon={<UserRound size={16} />} title="Users" hint={`${users.length} ${users.length === 1 ? "account" : "accounts"}`}>
           <div className="userAdminList">
             {users.map((user) => (
               <ManagedUserRow key={user.subject} user={user} current={user.subject === account?.subject} busy={busy} onUpdate={updateUser} />
             ))}
             {!users.length ? <div className="sectionEmpty">No accounts have signed in yet.</div> : null}
           </div>
-        </Card>
+        </ManagementDisclosure>
       ) : null}
     </div>
   );
@@ -516,6 +529,7 @@ export function TerraformWorkspace({ worlds, apiClient }: { worlds: WorldSummary
         )}
       </Card>
 
+      <ManagementDisclosure icon={<FileCode2 size={16} />} title="Source and runs" hint="Generated files and execution history">
       <div className="terraformMainGrid">
         <Card className="terraformSourceCard">
           <header>
@@ -547,7 +561,9 @@ export function TerraformWorkspace({ worlds, apiClient }: { worlds: WorldSummary
           </div>
         </Card>
       </div>
+      </ManagementDisclosure>
 
+      <ManagementDisclosure icon={<Activity size={16} />} title="Run log" hint={selectedRun ? `${terraformActionLabel(selectedRun.action)} · ${selectedRun.status}` : "No run selected"}>
       <Card className="terraformLogCard">
         <header className="settingsCardHeading splitHeading">
           <div>
@@ -558,7 +574,9 @@ export function TerraformWorkspace({ worlds, apiClient }: { worlds: WorldSummary
         </header>
         <pre>{selectedRun?.log || "No run selected."}</pre>
       </Card>
+      </ManagementDisclosure>
 
+      <ManagementDisclosure icon={<Ban size={16} />} title="Destroy" hint="Plan and remove this sandbox" danger>
       <Card className="terraformDangerCard">
         <div>
           <strong>Destroy through Terraform</strong>
@@ -568,6 +586,7 @@ export function TerraformWorkspace({ worlds, apiClient }: { worlds: WorldSummary
         <Input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={selectedWorld?.name || "sandbox name"} aria-label="Destroy confirmation" />
         <Button variant="destructive" onClick={() => void startRun("destroy")} disabled={busy || !terraformReady || Boolean(activeRun) || project?.plan?.kind !== "destroy" || confirmation !== selectedWorld?.name}>Apply destroy plan</Button>
       </Card>
+      </ManagementDisclosure>
     </div>
   );
 }

@@ -319,6 +319,7 @@ test.describe("Studio responsive layout", () => {
       await page.goto(baseURL);
       await page.waitForSelector(".workbench");
       await page.getByTitle("Observability").click();
+      await page.getByText("Traces", { exact: true }).click();
       await page.waitForSelector(".traceLauncher");
       const report = await auditLayout(page, `${viewport.name}-observability`);
       console.log(JSON.stringify(report.summary));
@@ -350,6 +351,27 @@ test.describe("Studio responsive layout", () => {
       expect(report.failures).toEqual([]);
     });
   }
+
+  test("sandbox details reveal technical information progressively", async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await mockApi(page);
+    await page.goto(baseURL);
+    await page.waitForSelector(".sandboxItem");
+
+    await expect(page.locator(".sandboxPanel")).toBeVisible();
+    await expect(page.locator(".titleNameRow")).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath("sandbox-list.png"), fullPage: true });
+
+    await page.locator(".sandboxItem").first().click();
+    await expect(page.locator(".titleNameRow")).toContainText(worlds[0].name);
+    await expect(page.getByText("Connect", { exact: true })).toBeVisible();
+    await expect(page.locator(".disclosureCard")).toHaveCount(4);
+    await expect(page.getByText("Sandbox ID", { exact: true })).toBeHidden();
+
+    const openStates = await page.locator(".disclosureCard").evaluateAll((elements) => elements.map((element) => element.open));
+    expect(openStates).toEqual([false, false, false, false]);
+    await page.screenshot({ path: testInfo.outputPath("sandbox-detail.png"), fullPage: true });
+  });
 
   for (const viewport of terminalViewports) {
     test(`terminal is measurable and non-overlapping at ${viewport.name}`, async ({ page }) => {

@@ -2027,3 +2027,925 @@ button.activityCreate {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/*
+ * Quiet shell
+ *
+ * The interface deliberately reveals one level at a time: navigation, a list,
+ * then a selected resource. Technical metadata stays behind disclosures.
+ */
+body {
+  background: var(--background);
+}
+
+.workbench,
+.workbench.networkWorkbench {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 72px minmax(0, 1fr);
+  background: var(--background);
+}
+
+.activityBar {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  height: 72px;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  overflow: visible;
+  border-right: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+  padding: 0 max(24px, calc((100vw - 1120px) / 2));
+}
+
+.brandLockup {
+  flex: 0 0 auto;
+  height: auto;
+  padding: 0;
+}
+
+.brandCopy strong {
+  color: var(--foreground);
+  font-size: 25px;
+  font-weight: 780;
+  letter-spacing: -0.055em;
+}
+
+.navSectionLabel,
+.brandMark,
+.brandCopy small {
+  display: none;
+}
+
+.activityNav {
+  display: flex;
+  gap: 2px;
+}
+
+.brandLockup + .activityNav {
+  margin-left: auto;
+}
+
+button.activityButton {
+  width: auto;
+  min-width: 0;
+  height: 38px;
+  min-height: 38px;
+  justify-content: center;
+  gap: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted-foreground);
+  padding: 0 11px;
+}
+
+button.activityButton svg {
+  display: none;
+}
+
+button.activityButton span {
+  font-size: 13px;
+  font-weight: 560;
+}
+
+button.activityButton:hover,
+button.activityButton.active {
+  border-color: transparent;
+  background: var(--secondary);
+  color: var(--foreground);
+}
+
+button.activityCreate {
+  margin: 0 0 0 10px;
+  border: 1px solid var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  box-shadow: none;
+  padding-inline: 14px;
+}
+
+button.activityCreate svg {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  margin-right: 7px;
+}
+
+button.activityCreate:hover,
+button.activityCreate.active {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 88%, transparent);
+  color: var(--primary-foreground);
+}
+
+.actionMenu {
+  position: fixed;
+  top: 62px;
+  right: max(24px, calc((100vw - 1120px) / 2));
+  bottom: auto;
+  left: auto;
+  width: 190px;
+}
+
+.sandboxPanel {
+  grid-column: 1;
+  grid-row: 2;
+  justify-self: center;
+  align-self: start;
+  width: min(1120px, calc(100% - 48px));
+  max-height: calc(100dvh - 168px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  margin: 48px 24px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--card);
+  box-shadow: 0 2px 6px rgba(24, 24, 27, 0.06), 0 16px 40px rgba(24, 24, 27, 0.04);
+}
+
+.panelHeader {
+  flex: 0 0 auto;
+  height: auto;
+  min-height: 96px;
+  border-bottom: 1px solid var(--border);
+  padding: 24px 28px;
+}
+
+.panelHeader > div {
+  gap: 3px;
+}
+
+.panelHeader > div > span {
+  font-size: 20px;
+  font-weight: 720;
+  letter-spacing: -0.035em;
+  text-transform: none;
+}
+
+.panelHeader small {
+  font-size: 12px;
+}
+
+.sandboxListTools {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  border-bottom: 1px solid var(--border);
+  padding: 12px 20px;
+}
+
+.panelSearch {
+  width: min(360px, 100%);
+  height: auto;
+  border: 0;
+  padding: 0;
+}
+
+.stateFilters {
+  height: auto;
+  border: 0;
+  padding: 0;
+}
+
+.stateFilters button {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding-inline: 10px;
+}
+
+.sandboxList {
+  min-height: 0;
+  display: block;
+  overflow: auto;
+  padding: 0;
+}
+
+.sandboxItem {
+  width: 100%;
+  min-height: 88px;
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 15px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--card);
+  padding: 18px 28px;
+  text-align: left;
+}
+
+.sandboxItem:first-child {
+  border-top: 0;
+}
+
+.sandboxItem:hover,
+.sandboxItem.selected {
+  border-left-color: transparent;
+  background: var(--secondary);
+  box-shadow: none;
+}
+
+.sandboxStatusDot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--muted-dim);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--muted-dim) 12%, transparent);
+}
+
+.sandboxStatusDot.ok {
+  background: var(--green);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--green) 13%, transparent);
+}
+
+.sandboxStatusDot.warn {
+  background: var(--warning);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--warning) 13%, transparent);
+}
+
+.sandboxItemBody {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+}
+
+.sandboxTopLine {
+  justify-content: flex-start;
+}
+
+.sandboxName {
+  font-size: 15px;
+  font-weight: 680;
+}
+
+.sandboxState {
+  min-height: 22px;
+  font-size: 10px;
+}
+
+.sandboxMetaLine {
+  gap: 13px;
+  color: var(--muted-foreground);
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.sandboxMetaLine span + span::before {
+  content: "·";
+  margin-right: 13px;
+  color: var(--muted-dim);
+}
+
+.sandboxChevron {
+  color: var(--muted-dim);
+  transition: transform 140ms ease, color 140ms ease;
+}
+
+.sandboxItem:hover .sandboxChevron {
+  color: var(--foreground);
+  transform: translateX(2px);
+}
+
+.mainArea {
+  grid-column: 1;
+  grid-row: 2;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow-x: hidden;
+  overflow-y: hidden;
+  background: var(--background);
+  padding: 48px 24px 0;
+}
+
+.titleBar {
+  width: min(1120px, 100%);
+  min-height: 156px;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto auto;
+  align-items: center;
+  gap: 36px;
+  margin: 0 auto 28px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--card);
+  padding: 32px 36px;
+  box-shadow: 0 2px 6px rgba(24, 24, 27, 0.06), 0 16px 40px rgba(24, 24, 27, 0.04);
+  backdrop-filter: none;
+}
+
+.titleLeading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.backButton {
+  flex: 0 0 auto;
+}
+
+.titleHeading {
+  gap: 7px;
+}
+
+.titleBar .titleNameRow > strong {
+  font-size: 24px;
+  font-weight: 740;
+}
+
+.titleBar .titleSubtitle {
+  color: var(--muted-foreground);
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.titleFacts {
+  display: flex;
+  align-items: center;
+  gap: 30px;
+}
+
+.quickFact {
+  min-width: 66px;
+  display: grid;
+  gap: 2px;
+}
+
+.quickFact strong {
+  color: var(--foreground);
+  font-size: 15px;
+  font-weight: 690;
+  line-height: 1.2;
+}
+
+.quickFact span,
+.quickFact small {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 450;
+}
+
+.toolbarActions {
+  flex-wrap: nowrap;
+}
+
+.sandboxActionMenu {
+  position: relative;
+}
+
+.sandboxActionMenu > summary {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  list-style: none;
+}
+
+.sandboxActionMenu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.sandboxActionMenu > summary:hover,
+.sandboxActionMenu[open] > summary {
+  background: var(--secondary);
+  color: var(--foreground);
+}
+
+.sandboxActionMenu > div {
+  position: absolute;
+  top: 43px;
+  right: 0;
+  z-index: 20;
+  width: 150px;
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--popover);
+  box-shadow: var(--shadow-strong);
+  padding: 5px;
+}
+
+.sandboxActionMenu button {
+  min-height: 36px;
+  justify-content: flex-start;
+  gap: 9px;
+  border: 0;
+  background: transparent;
+  padding: 7px 9px;
+}
+
+.sandboxActionMenu .destructiveMenuItem {
+  color: var(--danger-text);
+}
+
+.editorPane {
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: transparent;
+  padding-bottom: 80px;
+}
+
+.sandboxDashboard,
+.networkWorkspace,
+.settingsWorkspace,
+.terraformWorkspace {
+  width: min(1120px, 100%);
+  min-height: 0;
+  gap: 16px;
+  margin: 0 auto;
+  padding: 0;
+}
+
+.sandboxDashboard {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.sandboxAlert {
+  border: 1px solid var(--warning-border);
+  border-radius: 12px;
+  background: var(--warning-bg);
+  color: var(--warning);
+  padding: 12px 14px;
+  overflow-wrap: anywhere;
+}
+
+.detailSection {
+  gap: 18px;
+  border-radius: 16px;
+  padding: 24px 28px;
+  box-shadow: 0 1px 3px rgba(24, 24, 27, 0.05);
+}
+
+.detailSection > header span {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.detailSection > header strong {
+  font-size: 15px;
+}
+
+.terminalLauncher.accessLauncher {
+  gap: 9px;
+}
+
+.detailSection .accessPanel {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.disclosureStack {
+  display: grid;
+  gap: 10px;
+}
+
+.disclosureCard {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card);
+  box-shadow: 0 1px 2px rgba(24, 24, 27, 0.035);
+}
+
+.disclosureCard > summary {
+  min-height: 74px;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 13px;
+  padding: 14px 18px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.disclosureCard > summary::-webkit-details-marker {
+  display: none;
+}
+
+.disclosureCard > summary:hover {
+  background: var(--secondary);
+}
+
+.disclosureCard[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+
+.disclosureCard[open] .sandboxChevron,
+.disclosureCard[open] .disclosureChevron {
+  transform: rotate(90deg);
+}
+
+.disclosureIcon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--secondary);
+  color: var(--foreground);
+}
+
+.disclosureCopy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.disclosureCopy strong {
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 660;
+}
+
+.disclosureCopy small {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.disclosureChevron {
+  color: var(--muted-dim);
+  transition: transform 160ms ease;
+}
+
+.disclosureBody {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+}
+
+.disclosureBody .metric {
+  background: var(--secondary);
+}
+
+.settingsPageIntro {
+  justify-content: flex-end;
+}
+
+.settingsPageIntro > div:first-child {
+  display: none;
+}
+
+.managementDisclosure {
+  align-self: start;
+}
+
+.disclosureToolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.inlineDisclosure {
+  margin-top: 16px;
+  border-top: 1px solid var(--border);
+  padding-top: 4px;
+}
+
+.inlineDisclosure > summary {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 620;
+  cursor: pointer;
+  list-style: none;
+}
+
+.inlineDisclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.inlineDisclosure > summary::after {
+  content: "+";
+  margin-left: auto;
+  color: var(--muted-dim);
+  font-size: 17px;
+  font-weight: 400;
+}
+
+.inlineDisclosure[open] > summary::after {
+  content: "−";
+}
+
+.managementDisclosure .terraformMainGrid {
+  width: 100%;
+}
+
+.managementDisclosure .terraformLogCard,
+.managementDisclosure .terraformDangerCard {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.dangerDisclosure {
+  border-color: var(--danger-border);
+}
+
+.quietOverview {
+  grid-template-columns: repeat(3, minmax(150px, 1fr));
+}
+
+.formDisclosure {
+  margin-top: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--secondary);
+}
+
+.formDisclosure > summary {
+  min-height: 58px;
+  display: grid;
+  gap: 2px;
+  padding: 11px 14px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.formDisclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.formDisclosure > summary span {
+  color: var(--foreground);
+  font-weight: 650;
+}
+
+.formDisclosure > summary small {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.formDisclosure[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+
+.formDisclosureBody {
+  padding: 2px 14px 16px;
+}
+
+.loginPage {
+  background: var(--background);
+}
+
+.loginPanel {
+  width: min(420px, calc(100% - 32px));
+  gap: 12px;
+  border-radius: 18px;
+  padding: 36px;
+  box-shadow: 0 2px 8px rgba(24, 24, 27, 0.06), 0 20px 56px rgba(24, 24, 27, 0.07);
+}
+
+.loginPanel h1 {
+  font-size: 27px;
+  font-weight: 780;
+  letter-spacing: -0.055em;
+}
+
+.loginPanel p {
+  margin-bottom: 12px;
+}
+
+@media (max-width: 900px) {
+  .workbench,
+  .workbench.networkWorkbench {
+    grid-template-rows: 64px minmax(0, 1fr);
+  }
+
+  .activityBar {
+    grid-row: 1;
+    height: 64px;
+    padding: 0 12px;
+  }
+
+  .brandCopy strong {
+    font-size: 20px;
+  }
+
+  .brandLockup + .activityNav {
+    margin-left: auto;
+  }
+
+  button.activityButton {
+    width: 38px;
+    min-width: 38px;
+    padding: 0;
+  }
+
+  button.activityButton svg {
+    display: block;
+  }
+
+  button.activityButton span {
+    display: none;
+  }
+
+  button.activityCreate {
+    margin-left: 4px;
+  }
+
+  button.activityCreate svg {
+    margin: 0;
+  }
+
+  .actionMenu {
+    top: 57px;
+    right: 10px;
+  }
+
+  .sandboxPanel {
+    grid-row: 2;
+    width: calc(100% - 24px);
+    max-height: calc(100dvh - 88px);
+    margin: 12px;
+    border-radius: 14px;
+  }
+
+  .panelHeader {
+    min-height: 78px;
+    padding: 18px;
+  }
+
+  .sandboxListTools {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    padding: 10px 12px;
+  }
+
+  .panelSearch {
+    width: 100%;
+  }
+
+  .stateFilters {
+    display: flex;
+    overflow-x: auto;
+  }
+
+  .sandboxList {
+    display: block;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 0;
+  }
+
+  .sandboxItem {
+    width: 100%;
+    min-height: 82px;
+    padding: 15px 18px;
+  }
+
+  .mainArea,
+  .workbench.networkWorkbench .mainArea {
+    grid-row: 2;
+    padding: 18px 12px 0;
+  }
+
+  .titleBar {
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 20px;
+    margin-bottom: 16px;
+    border-radius: 14px;
+    padding: 22px 20px;
+  }
+
+  .titleFacts {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-content: space-between;
+    gap: 14px;
+    border-top: 1px solid var(--border);
+    padding-top: 18px;
+  }
+
+  .quickFact {
+    min-width: 0;
+  }
+
+  .toolbarActions {
+    align-self: start;
+  }
+
+  .sandboxDashboard,
+  .networkWorkspace,
+  .settingsWorkspace,
+  .terraformWorkspace {
+    gap: 12px;
+    padding: 0;
+  }
+
+  .detailSection {
+    gap: 14px;
+    border-radius: 14px;
+    padding: 18px;
+  }
+
+  .terminalLauncher.accessLauncher {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .terminalLauncher.accessLauncher button {
+    width: 100%;
+  }
+
+  .disclosureCard > summary {
+    min-height: 68px;
+    padding: 12px 14px;
+  }
+
+  .disclosureBody {
+    padding: 14px;
+  }
+
+  .newSandboxMenu {
+    top: 8px;
+    width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
+  }
+}
+
+@media (max-width: 520px) {
+  .activityBar {
+    gap: 0;
+    padding-inline: 8px;
+  }
+
+  .brandCopy strong {
+    font-size: 17px;
+  }
+
+  .activityNav {
+    gap: 0;
+  }
+
+  button.activityButton {
+    width: 31px;
+    min-width: 31px;
+  }
+
+  button.activityCreate {
+    margin-left: 2px;
+  }
+
+  .titleBar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 18px 14px;
+  }
+
+  .titleLeading {
+    gap: 8px;
+  }
+
+  .titleBar .titleNameRow > strong {
+    font-size: 19px;
+  }
+
+  .titleBar .titleSubtitle {
+    max-width: 190px;
+  }
+
+  .titleFacts {
+    gap: 10px;
+  }
+
+  .toolbarActions > button:first-child {
+    display: none;
+  }
+
+  .sandboxActionMenu > div {
+    position: fixed;
+    top: 120px;
+    right: 20px;
+  }
+
+  .sandboxMetaLine span + span::before {
+    margin-right: 8px;
+  }
+
+  .sandboxMetaLine {
+    gap: 8px;
+  }
+
+  .loginPanel {
+    padding: 28px 22px;
+  }
+}
