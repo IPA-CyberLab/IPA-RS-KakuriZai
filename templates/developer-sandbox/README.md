@@ -14,4 +14,6 @@ agctl templates push developer-sandbox \
 ```
 
 Every root `variable` is shown in Studio when a user creates a sandbox. The
-`name` string variable is required and is supplied by KakuriZai.
+`name` string variable is required and is supplied by KakuriZai. Leaving
+`base_template` empty selects the CubeSandbox template configured on the
+deployment, so this example remains portable between control planes.

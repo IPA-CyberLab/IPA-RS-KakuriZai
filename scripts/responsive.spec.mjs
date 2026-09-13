@@ -375,6 +375,7 @@ test.describe("Studio responsive layout", () => {
       await page.waitForSelector(".terraformWorkspace");
       await expect(page.getByText("Terraform 1.13.3")).toBeVisible();
       await expect(page.locator(".templateSummary strong")).toHaveText("Developer sandbox");
+      await expect(page.locator("#template-instance-name")).toHaveValue("developer-sandbox-1");
       const report = await auditLayout(page, `${viewport.name}-terraform`);
       console.log(JSON.stringify(report.summary));
       expect(report.failures).toEqual([]);

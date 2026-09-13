@@ -163,7 +163,7 @@ variable "cpu" {
 module "sandbox" {
   source        = "./.kakurizai/modules/sandbox"
   name          = var.name
-  base_template = "kakurizai-base"
+  base_template = "" # use the control plane's configured CubeSandbox template
   cpu           = var.cpu
   memory        = "2000Mi"
   disk_size     = "2G"

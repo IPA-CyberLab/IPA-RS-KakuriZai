@@ -443,7 +443,7 @@ export function TerraformWorkspace({
   const [selectedTemplateId, setSelectedTemplateId] = React.useState("");
   const [templateDetail, setTemplateDetail] = React.useState<TerraformTemplateDetail | null>(null);
   const [templateValues, setTemplateValues] = React.useState<Record<string, unknown>>({});
-  const [instanceName, setInstanceName] = React.useState("kakurizai-sandbox");
+  const [instanceName, setInstanceName] = React.useState("");
   const [editor, setEditor] = React.useState<null | { name: string; displayName: string; description: string; mainTf: string }>(null);
   const [selectedWorldId, setSelectedWorldId] = React.useState(worlds[0]?.id || "");
   const [preview, setPreview] = React.useState<TerraformPreview | null>(null);
@@ -502,11 +502,18 @@ export function TerraformWorkspace({
         setTemplateValues(Object.fromEntries(next.parameters
           .filter((parameter) => parameter.name !== "name")
           .map((parameter) => [parameter.name, templateInputDefault(parameter)])));
+        setInstanceName((current) => current || nextTemplateInstanceName(next.slug, worlds));
         setPreviewFile("main.tf");
       })
       .catch((error) => { if (!canceled) setMessage(`Error: ${error.message}`); });
     return () => { canceled = true; };
   }, [apiClient, selectedTemplateId]);
+
+  React.useEffect(() => {
+    if (!selectedTemplateId || !instanceName || !worlds.some((world) => world.name === instanceName)) return;
+    const template = templates.find((candidate) => candidate.id === selectedTemplateId);
+    if (template) setInstanceName(nextTemplateInstanceName(template.slug, worlds));
+  }, [selectedTemplateId, worldKey]);
 
   React.useEffect(() => {
     let canceled = false;
@@ -712,7 +719,7 @@ export function TerraformWorkspace({
               <div className="templatePickerRow">
                 <div>
                   <label htmlFor="terraform-template">Template</label>
-                  <select id="terraform-template" value={selectedTemplateId} onChange={(event) => { setSelectedTemplateId(event.target.value); setSelectedRunId(""); }}>
+                  <select id="terraform-template" value={selectedTemplateId} onChange={(event) => { setSelectedTemplateId(event.target.value); setInstanceName(""); setSelectedRunId(""); }}>
                     {templates.map((template) => <option value={template.id} key={template.id}>{template.displayName}</option>)}
                   </select>
                 </div>
@@ -887,6 +894,16 @@ function templateInputDefault(parameter: TerraformTemplateParameter) {
   if (parameter.default === undefined) return parameter.type.replace(/\s+/g, "") === "bool" ? false : "";
   if (typeof parameter.default === "string" || typeof parameter.default === "number" || typeof parameter.default === "boolean") return parameter.default;
   return JSON.stringify(parameter.default, null, 2);
+}
+
+function nextTemplateInstanceName(slug: string, worlds: WorldSummary[]) {
+  const existing = new Set(worlds.map((world) => world.name));
+  const base = String(slug || "sandbox").replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "sandbox";
+  for (let index = 1; index < 10_000; index += 1) {
+    const candidate = `${base}-${index}`;
+    if (!existing.has(candidate)) return candidate;
+  }
+  return `${base}-${Date.now().toString(36)}`;
 }
 
 function terraformActionLabel(action: TerraformRun["action"]) {

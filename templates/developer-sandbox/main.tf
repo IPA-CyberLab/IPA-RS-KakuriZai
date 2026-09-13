@@ -8,9 +8,9 @@ variable "name" {
 }
 
 variable "base_template" {
-  description = "CubeSandbox AppSnapshot template"
+  description = "CubeSandbox AppSnapshot template; empty uses the KakuriZai default"
   type        = string
-  default     = "kakurizai-base"
+  default     = ""
 }
 
 variable "cpu" {

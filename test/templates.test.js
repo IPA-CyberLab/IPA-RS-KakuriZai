@@ -43,6 +43,12 @@ test("Terraform sandbox templates are versioned and expose standard variables", 
     () => store.push({ name: "escape", files: { "../main.tf": "" } }),
     /unsafe template path/
   );
+
+  const portable = await store.push({
+    name: "portable-example",
+    directory: path.resolve("templates/developer-sandbox")
+  });
+  assert.equal(portable.parameters.find((item) => item.name === "base_template").default, "");
 });
 
 test("CLI initializes and pushes a Coder-style Terraform template directory", async () => {
