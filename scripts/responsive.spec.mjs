@@ -373,6 +373,28 @@ test.describe("Studio responsive layout", () => {
     await page.screenshot({ path: testInfo.outputPath("sandbox-detail.png"), fullPage: true });
   });
 
+  test("signed-out screen keeps an expected expired session message quiet", async ({ page }) => {
+    await mockApi(page);
+    await page.unroute("**/api/auth/config");
+    await page.unroute("**/api/session");
+    await page.route("**/api/auth/config", (route) => json(route, {
+      provider: "keycloak",
+      label: "Keycloak",
+      requiresRedirect: true,
+      loginUrl: "/api/auth/login"
+    }));
+    await page.route("**/api/session", (route) => route.fulfill({
+      status: 401,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "missing or expired session" })
+    }));
+
+    await page.goto(baseURL);
+    await expect(page.getByText("Sign in to manage your sandboxes.")).toBeVisible();
+    await expect(page.getByText(/401:|missing or expired session/i)).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Sign in with Keycloak" })).toContainText("Continue with GitHub");
+  });
+
   for (const viewport of terminalViewports) {
     test(`terminal is measurable and non-overlapping at ${viewport.name}`, async ({ page }) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });

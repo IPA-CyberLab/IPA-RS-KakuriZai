@@ -1171,11 +1171,14 @@ function App() {
   const authRequired = Boolean(authConfig?.requiresRedirect);
 
   if (authRequired && !session) {
+    const expectedSignedOutState = status === "Starting"
+      || status === "Sign in required"
+      || /(?:401|missing or expired session)/i.test(status);
     return (
       <div className="loginPage">
         <Card className="loginPanel">
           <h1>KakuriZai</h1>
-          <p>{status !== "Starting" && status !== "Sign in required" ? status : "Sign in to manage your sandboxes."}</p>
+          <p>{expectedSignedOutState ? "Sign in to manage your sandboxes." : status}</p>
           <Button aria-label="Sign in with Keycloak" className="primary wide" onClick={signIn} disabled={busy}><KeyRound size={16} /> Continue with GitHub</Button>
         </Card>
       </div>
