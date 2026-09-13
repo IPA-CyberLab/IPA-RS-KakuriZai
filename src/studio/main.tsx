@@ -4,39 +4,39 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal as XTerminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import {
-  Activity,
+  Pulse as Activity,
   ArrowLeft,
-  Box,
-  ChevronRight,
-  Code2,
+  Cube as Box,
+  CaretRight as ChevronRight,
+  Code as Code2,
   Copy,
   Database,
-  ExternalLink,
-  FileCode2,
+  ArrowSquareOut as ExternalLink,
+  FileCode as FileCode2,
   Folder,
   FolderOpen,
-  Globe2,
-  KeyRound,
-  Layers,
-  LogOut,
+  Globe as Globe2,
+  Key as KeyRound,
+  Stack as Layers,
+  SignOut as LogOut,
   Monitor,
   Moon,
-  MoreHorizontal,
+  DotsThree as MoreHorizontal,
   Network,
   Pause,
   Plus,
   Play,
-  RefreshCcw,
-  Route,
-  Search,
-  Server,
+  ArrowsClockwise as RefreshCcw,
+  Path as Route,
+  MagnifyingGlass as Search,
+  HardDrives as Server,
   Shield,
   Sun,
   Terminal,
-  Trash2,
+  Trash as Trash2,
   Users,
   X
-} from "lucide-react";
+} from "@phosphor-icons/react";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Card } from "./components/ui/card";
@@ -1203,7 +1203,7 @@ function App() {
   const subtitleLabel = isObservabilityView
     ? `${observability?.sample.summary.nodes || 0} nodes / ${observability?.sample.summary.replicas || 0} replicas`
     : isTerraformView
-    ? "Plan and apply reproducible sandbox definitions"
+    ? "Define and launch reusable sandbox templates"
     : isAccountsView
     ? "Profile, access, roles, and active sessions"
     : isNetworkView
@@ -1232,7 +1232,7 @@ function App() {
             }}
             title="Sandboxes"
           >
-            <Monitor size={19} />
+            <Monitor size={19} weight={activeView === "sandboxes" ? "fill" : "regular"} />
             <span>Sandboxes</span>
           </Button>
           <Button
@@ -1246,7 +1246,7 @@ function App() {
             }}
             title="Network"
           >
-            <Network size={19} />
+            <Network size={19} weight={activeView === "network" ? "fill" : "regular"} />
             <span>Network</span>
           </Button>
           <Button
@@ -1260,7 +1260,7 @@ function App() {
             }}
             title="Observability"
           >
-            <Activity size={19} />
+            <Activity size={19} weight={activeView === "observability" ? "fill" : "regular"} />
             <span>Observability</span>
           </Button>
         </nav>
@@ -1277,7 +1277,7 @@ function App() {
             }}
             title="Terraform"
           >
-            <FileCode2 size={19} />
+            <FileCode2 size={19} weight={activeView === "terraform" ? "fill" : "regular"} />
             <span>Terraform</span>
           </Button>
           <Button
@@ -1291,7 +1291,7 @@ function App() {
             }}
             title="Accounts"
           >
-            <Users size={19} />
+            <Users size={19} weight={activeView === "accounts" ? "fill" : "regular"} />
             <span>Accounts</span>
           </Button>
         </nav>
@@ -1306,7 +1306,7 @@ function App() {
           }}
           title="Menu"
         >
-          <Plus size={17} />
+          <Plus size={17} weight="bold" />
           <span>New sandbox</span>
         </Button>
 
@@ -1722,7 +1722,7 @@ function App() {
               onSignOut={signOut}
             />
           ) : isTerraformView ? (
-            <TerraformWorkspace worlds={worlds} apiClient={api} />
+            <TerraformWorkspace worlds={worlds} apiClient={api} onSandboxesChanged={refresh} />
           ) : isObservabilityView ? (
             <ObservabilityWorkspace
               selected={selected}

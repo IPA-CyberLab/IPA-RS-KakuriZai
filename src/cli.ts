@@ -16,6 +16,11 @@ import {
   writeTerraformBundle
 } from "./core/spec.js";
 import {
+  instantiateSandboxTemplate,
+  SandboxTemplateStore,
+  starterSandboxTemplate
+} from "./core/templates.js";
+import {
   applyWorld,
   changedPaths,
   createHeteroNetworkLab,
@@ -60,6 +65,7 @@ export async function main(argv) {
   if (command === "trace" || command === "traces") return trace(config, argv.slice(1));
   if (command === "export" || command === "manifest") return manifest(config, argv.slice(1));
   if (command === "terraform") return terraform(config, argv.slice(1));
+  if (command === "template" || command === "templates") return templates(config, argv.slice(1));
   if (command === "auth") return auth(config, argv.slice(1));
   if (command === "studio") return studio(config, argv.slice(1));
   if (command === "exec" || command === "shell") {
@@ -79,6 +85,11 @@ Sandbox commands:
   agctl apply -f sandbox.yaml [--json]
   agctl export <sandbox> --yaml
   agctl terraform export <sandbox|--file sandbox.yaml> --out ./terraform
+  agctl templates init [--directory ./template]
+  agctl templates push <name> --directory ./template
+  agctl templates list
+  agctl templates show <name> [--source]
+  agctl templates delete <name> --yes
   agctl list [--json]
   agctl show <sandbox> [--json]
   agctl open <sandbox> <file|terminal|vscode|agent>
@@ -666,6 +677,86 @@ async function terraform(config, args) {
   }
   console.log(`wrote ${result.outDir}`);
   for (const filePath of result.files) console.log(filePath);
+}
+
+async function templates(config, args) {
+  const subcommand = args.shift() || "list";
+  const store = new SandboxTemplateStore(config);
+  await store.init();
+  if (subcommand === "init") {
+    const force = takeFlag(args, "--force");
+    const directory = path.resolve(takeOption(args, "--directory") || takeOption(args, "-d") || args.find((arg) => !arg.startsWith("-")) || "kakurizai-template");
+    const mainFile = path.join(directory, "main.tf");
+    await fs.mkdir(directory, { recursive: true });
+    try {
+      await fs.access(mainFile);
+      if (!force) throw new Error(`${mainFile} already exists; pass --force to replace it`);
+    } catch (error) {
+      if (error?.code !== "ENOENT" && !force) throw error;
+    }
+    await fs.writeFile(mainFile, starterSandboxTemplate({
+      baseTemplate: config.cube?.template,
+      cpu: config.cube?.cpu,
+      memory: config.cube?.memory,
+      writableLayerSize: config.cube?.writableLayerSize
+    }), "utf8");
+    console.log(`wrote ${mainFile}`);
+    return;
+  }
+  if (subcommand === "push") {
+    const json = takeFlag(args, "--json");
+    const directory = takeOption(args, "--directory") || takeOption(args, "-d") || ".";
+    const displayName = takeOption(args, "--display-name");
+    const description = takeOption(args, "--description");
+    const name = args.find((arg) => !arg.startsWith("-"));
+    if (!name) throw new Error("templates push requires <name>");
+    const template = await store.push({ name, displayName, description, directory });
+    if (json) console.log(JSON.stringify(template, null, 2));
+    else console.log(`pushed ${template.slug}@${template.activeVersion}`);
+    return;
+  }
+  if (subcommand === "list" || subcommand === "ls") {
+    const list = await store.list();
+    if (takeFlag(args, "--json")) console.log(JSON.stringify(list, null, 2));
+    else if (!list.length) console.log("no templates");
+    else for (const template of list) console.log(`${template.slug}\t${template.activeVersion}\t${template.displayName}`);
+    return;
+  }
+  if (subcommand === "show" || subcommand === "inspect") {
+    const source = takeFlag(args, "--source");
+    const json = takeFlag(args, "--json");
+    const ref = args.find((arg) => !arg.startsWith("-"));
+    if (!ref) throw new Error("templates show requires <name>");
+    const template = source ? await store.getWithSource(ref) : await store.get(ref);
+    if (json || source) console.log(JSON.stringify(template, null, 2));
+    else {
+      console.log(`Name\t${template.displayName}`);
+      console.log(`Slug\t${template.slug}`);
+      console.log(`Version\t${template.activeVersion}`);
+      console.log(`Parameters\t${template.parameters.length}`);
+    }
+    return;
+  }
+  if (subcommand === "delete" || subcommand === "remove" || subcommand === "rm") {
+    const yes = takeFlag(args, "--yes");
+    const ref = args.find((arg) => !arg.startsWith("-"));
+    if (!ref) throw new Error("templates delete requires <name>");
+    if (!yes) throw new Error("templates delete requires --yes");
+    const removed = await store.remove(ref);
+    console.log(`deleted ${removed.slug}`);
+    return;
+  }
+  if (subcommand === "instantiate") {
+    const environmentName = takeOption(args, "--input-env") || "KAKURIZAI_TEMPLATE_INPUT";
+    if (!/^[A-Z_][A-Z0-9_]*$/.test(environmentName)) throw new Error("--input-env must be an environment variable name");
+    const raw = process.env[environmentName];
+    if (!raw) throw new Error(`${environmentName} is empty`);
+    const result = await instantiateSandboxTemplate(config, JSON.parse(raw));
+    if (args.includes("--json")) console.log(JSON.stringify(result, null, 2));
+    else console.log(`${result.action} ${result.world.name}`);
+    return;
+  }
+  throw new Error("templates supports: init, push, list, show, delete");
 }
 
 async function auth(config, args) {

@@ -2949,3 +2949,227 @@ button.activityCreate.active {
     padding: 28px 22px;
   }
 }
+
+/* Terraform template library */
+.terraformModeTabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.terraformModeTabs button {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 620;
+}
+
+.terraformModeTabs button.active {
+  border-bottom-color: var(--foreground);
+  color: var(--foreground);
+}
+
+.templateControlCard {
+  min-height: 188px;
+}
+
+.templatePickerRow {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.templatePickerRow > div {
+  width: min(420px, 100%);
+}
+
+.templatePickerRow select {
+  width: 100%;
+}
+
+.templateLaunchLayout {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.72fr) minmax(320px, 1.28fr);
+  gap: 28px;
+  border-top: 1px solid var(--border);
+  padding-top: 18px;
+}
+
+.templateSummary {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 5px;
+}
+
+.templateSummary strong {
+  color: var(--foreground);
+  font-size: 15px;
+}
+
+.templateSummary span,
+.templateSummary small {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.templateSummary small {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.templateLaunchForm,
+.templateEditor,
+.templateParameterGrid {
+  display: grid;
+  gap: 14px;
+}
+
+.templateLaunchForm > button {
+  justify-self: start;
+}
+
+.templateParameters {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--secondary);
+}
+
+.templateParameters > summary {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 11px;
+  color: var(--foreground);
+  font-size: 11px;
+  font-weight: 620;
+  cursor: pointer;
+  list-style: none;
+}
+
+.templateParameters > summary::-webkit-details-marker {
+  display: none;
+}
+
+.templateParameters > summary span {
+  min-width: 20px;
+  border-radius: 999px;
+  background: var(--background);
+  color: var(--muted-foreground);
+  padding: 2px 6px;
+  text-align: center;
+}
+
+.templateParameterGrid {
+  border-top: 1px solid var(--border);
+  background: var(--card);
+  padding: 14px;
+}
+
+.templateParameterField {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.templateParameterField > small,
+.templateBooleanField small {
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+
+.templateParameterField textarea {
+  width: 100%;
+  min-height: 94px;
+  resize: vertical;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.templateBooleanField {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.templateBooleanField > span {
+  display: grid;
+  gap: 2px;
+}
+
+.templateEmptyState {
+  min-height: 112px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 5px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  text-align: center;
+}
+
+.templateEmptyState strong {
+  color: var(--foreground);
+  font-size: 13px;
+}
+
+.templateEmptyState code {
+  color: var(--foreground);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.templateMetadataFields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.templateSourceEditor {
+  width: 100%;
+  height: min(440px, 48vh);
+  resize: vertical;
+  border-color: #303038;
+  background: var(--terminal-bg);
+  color: #e4e4e7;
+  padding: 14px;
+  font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  tab-size: 2;
+}
+
+@media (max-width: 760px) {
+  .templateLaunchLayout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  .templatePickerRow {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .templatePickerRow > div,
+  .templatePickerRow > button,
+  .templateLaunchForm > button {
+    width: 100%;
+  }
+
+  .templateMetadataFields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .terraformModeTabs button {
+    flex: 1;
+    justify-content: center;
+    padding-inline: 7px;
+  }
+}

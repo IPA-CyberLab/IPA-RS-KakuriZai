@@ -145,6 +145,36 @@ test("studio signs in through keycloak code flow with session cookie, csrf, rbac
     assert.equal(users.length, 1);
     assert.ok(users[0].roles.includes("kakurizai-admin"));
 
+    const starterResponse = await fetch(`${origin}/api/terraform/templates/starter`, { headers: { cookie: sessionCookie } });
+    assert.equal(starterResponse.status, 200);
+    assert.match((await starterResponse.json()).files["main.tf"], /module "sandbox"/);
+
+    const createTemplateResponse = await fetch(`${origin}/api/terraform/templates`, {
+      method: "POST",
+      headers: {
+        cookie: sessionCookie,
+        "content-type": "application/json",
+        "x-csrf-token": sessionBody.csrfToken
+      },
+      body: JSON.stringify({
+        name: "test-template",
+        displayName: "Test template",
+        files: { "main.tf": "variable \"name\" {\n  type = string\n}\n" }
+      })
+    });
+    const createTemplateBody = await createTemplateResponse.text();
+    assert.equal(createTemplateResponse.status, 201, createTemplateBody);
+    const createdTemplate = JSON.parse(createTemplateBody);
+    assert.equal(createdTemplate.slug, "test-template");
+
+    const templatesResponse = await fetch(`${origin}/api/terraform/templates`, { headers: { cookie: sessionCookie } });
+    assert.equal(templatesResponse.status, 200);
+    assert.equal((await templatesResponse.json())[0].activeVersion, createdTemplate.activeVersion);
+
+    const templateSourceResponse = await fetch(`${origin}/api/terraform/templates/${createdTemplate.id}`, { headers: { cookie: sessionCookie } });
+    assert.equal(templateSourceResponse.status, 200);
+    assert.match((await templateSourceResponse.json()).files["main.tf"], /variable "name"/);
+
     const suspendSelf = await fetch(`${origin}/api/users/alice`, {
       method: "PATCH",
       headers: {

@@ -15,6 +15,7 @@ import { collectMetrics, listTraces, prometheusText, recordTraceEvent, startTrac
 import { applyWorld, changedPaths, createHeteroNetworkLab, createKubernetesLab, createWorld, ensureWorldProvisioned, execWorld, getWorld, listWorlds, openWorld, pauseWorld, removeWorld, resumeWorld, updateWorldConfig } from "./core/worlds.js";
 import { applyProbeChecks, buildNetworkProbePlan, buildProbeScript, parseProbeOutput } from "./core/probe.js";
 import { TerraformManager } from "./core/terraform.js";
+import { SandboxTemplateStore, starterSandboxTemplate } from "./core/templates.js";
 import { CubeSandboxClient } from "./cube/client.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -39,6 +40,8 @@ export async function startStudio(config) {
   await accounts.load();
   const terraform = new TerraformManager(config);
   await terraform.load();
+  const templates = new SandboxTemplateStore(config);
+  await templates.init();
   const audit = new AuditLog(config);
   await audit.load();
   const devAccess = new DevAccessManager(config);
@@ -53,7 +56,7 @@ export async function startStudio(config) {
       sendError(request, response, error);
       return;
     }
-    route(config, auth, sessions, accounts, terraform, devAccess, request, response).catch((error) => sendError(request, response, error));
+    route(config, auth, sessions, accounts, terraform, templates, devAccess, request, response).catch((error) => sendError(request, response, error));
   };
   const server = tls ? https.createServer(tls, listener) : http.createServer(listener);
   const protocol = tls ? "https" : "http";
@@ -861,7 +864,7 @@ function normalizeOrigin(value) {
   }
 }
 
-async function route(config, auth, sessions, accounts, terraform, devAccess, request, response) {
+async function route(config, auth, sessions, accounts, terraform, templates, devAccess, request, response) {
   const url = new URL(request.url, `http://${request.headers.host || "127.0.0.1"}`);
   if (request.method === "GET" && url.pathname === "/api/auth/config") {
     return sendJson(request, response, {
@@ -898,7 +901,7 @@ async function route(config, auth, sessions, accounts, terraform, devAccess, req
     request.authSession = session.session;
     request.authMethod = session.method;
     request.query = url.searchParams;
-    return api(config, devAccess, sessions, accounts, terraform, request, response, url);
+    return api(config, devAccess, sessions, accounts, terraform, templates, request, response, url);
   }
   return staticFile(request, response, url);
 }
@@ -1355,7 +1358,7 @@ function targetFromPath(pathname) {
   return null;
 }
 
-async function api(config, devAccess, sessions, accounts, terraform, request, response, url) {
+async function api(config, devAccess, sessions, accounts, terraform, templates, request, response, url) {
   if (request.method === "GET" && url.pathname === "/api/session") {
     authorize(config, request, "studio:read");
     return sendJson(request, response, {
@@ -1408,6 +1411,44 @@ async function api(config, devAccess, sessions, accounts, terraform, request, re
       knownRoles
     });
     return sendJson(request, response, publicStoredAccount(config, account));
+  }
+  if (request.method === "GET" && url.pathname === "/api/terraform/templates") {
+    authorize(config, request, "terraform:read");
+    return sendJson(request, response, await templates.list());
+  }
+  if (request.method === "GET" && url.pathname === "/api/terraform/templates/starter") {
+    authorize(config, request, "terraform:read");
+    return sendJson(request, response, {
+      files: {
+        "main.tf": starterSandboxTemplate({
+          baseTemplate: config.cube?.template,
+          cpu: config.cube?.cpu,
+          memory: config.cube?.memory,
+          writableLayerSize: config.cube?.writableLayerSize
+        })
+      }
+    });
+  }
+  if ((request.method === "POST" || request.method === "PUT") && url.pathname === "/api/terraform/templates") {
+    authorize(config, request, "admin");
+    return sendJson(request, response, await templates.push(await readBody(request)), 201);
+  }
+  const terraformTemplateDeploymentMatch = /^\/api\/terraform\/templates\/([^/]+)\/deployments$/.exec(url.pathname);
+  if (request.method === "POST" && terraformTemplateDeploymentMatch) {
+    authorize(config, request, "terraform:write");
+    const template = await templates.get(decodeURIComponent(terraformTemplateDeploymentMatch[1]));
+    return sendJson(request, response, await terraform.startTemplateDeployment(templates, template, await readBody(request), {
+      subject: request.user.subject
+    }), 202);
+  }
+  const terraformTemplateMatch = /^\/api\/terraform\/templates\/([^/]+)$/.exec(url.pathname);
+  if (request.method === "GET" && terraformTemplateMatch) {
+    authorize(config, request, "terraform:read");
+    return sendJson(request, response, await templates.getWithSource(decodeURIComponent(terraformTemplateMatch[1])));
+  }
+  if (request.method === "DELETE" && terraformTemplateMatch) {
+    authorize(config, request, "admin");
+    return sendJson(request, response, await templates.remove(decodeURIComponent(terraformTemplateMatch[1])));
   }
   if (request.method === "GET" && url.pathname === "/api/terraform") {
     authorize(config, request, "terraform:read");

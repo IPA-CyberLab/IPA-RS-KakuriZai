@@ -40,6 +40,8 @@ Every Studio operation has a CLI equivalent:
 | Remove button | `agctl remove <sandbox>` with interactive confirmation, or `agctl remove <sandbox> --yes` |
 | Prepare Terraform source | `agctl terraform export <sandbox> --out ./terraform` |
 | Terraform plan/apply/destroy | `terraform plan`, `terraform apply`, and `terraform destroy` in the exported directory |
+| Initialize a sandbox template | `agctl templates init --directory ./template` |
+| Publish a sandbox template | `agctl templates push <name> --directory ./template` |
 
 Automation can use `--json` on `list`, `show`, `changed`, `apply`, `lab kubernetes`, and `remove`.
 
@@ -144,7 +146,39 @@ An example lives in `config/keycloak.example.json`.
 
 ## Managed Terraform Runs
 
-Studio's Terraform view turns each saved sandbox definition into an isolated Terraform working directory. It retains `terraform.tfstate`, `terraform.tfplan`, `.terraform.lock.hcl`, and bounded run logs under `$KAKURIZAI_HOME/terraform`, and executes the same explicit stages used by a normal Terraform workflow:
+KakuriZai sandbox templates are Terraform source directories, like Coder templates. Root `variable` blocks become launch parameters in Studio, and a template calls the KakuriZai runtime module to define its sandbox:
+
+```hcl
+variable "name" {
+  description = "Sandbox name"
+  type        = string
+}
+
+variable "cpu" {
+  description = "CPU allocation"
+  type        = string
+  default     = "2000m"
+}
+
+module "sandbox" {
+  source        = "./.kakurizai/modules/sandbox"
+  name          = var.name
+  base_template = "kakurizai-base"
+  cpu           = var.cpu
+  memory        = "2000Mi"
+  disk_size     = "2G"
+}
+```
+
+Create and publish a directory with the Coder-style workflow:
+
+```sh
+agctl templates init --directory ./my-template
+agctl templates push my-template --directory ./my-template
+agctl templates list
+```
+
+Each push is content-addressed and retained as a template version. Studio can also publish `main.tf`, renders standard Terraform variables as a minimal launch form, and materializes every launched sandbox into its own working directory. KakuriZai injects `.kakurizai/modules/sandbox`, writes `terraform.auto.tfvars.json`, and executes:
 
 1. `terraform init`
 2. `terraform validate`
@@ -152,7 +186,9 @@ Studio's Terraform view turns each saved sandbox definition into an isolated Ter
 4. review the rendered saved plan
 5. `terraform apply terraform.tfplan`
 
-Apply is refused until a saved plan exists, and a plan becomes invalid if the sandbox definition changes. Destroy uses a separate saved destroy plan, requires `worlds:delete`, and requires typing the exact sandbox name. Runs for the same sandbox are serialized, can be canceled, and survive Studio restarts as inspectable history. Set `terraform.binary` to an absolute path when Terraform is not in the Studio service's `PATH`; set `terraform.enabled` to `false` to disable execution while retaining source preview.
+Template source, version metadata, state, dependency locks, plans, and bounded run logs are retained below `$KAKURIZAI_HOME`. Runs for the same sandbox name are serialized, can be canceled, and survive Studio restarts as inspectable history. Publishing template source requires `admin` because Terraform providers and provisioners execute with the Studio service account's authority. Set `terraform.binary` to an absolute path when Terraform is not in the Studio service's `PATH`; set `terraform.enabled` to `false` to disable execution while retaining source preview.
+
+The complete example is in [`templates/developer-sandbox`](templates/developer-sandbox).
 
 ## Deployment E2E
 

@@ -11,6 +11,7 @@ import {
   worldToManifest,
   writeTerraformBundle
 } from "./spec.js";
+import { terraformSandboxRuntimeModule } from "./templates.js";
 
 const execFileAsync = promisify(execFile);
 const RUN_ACTIONS = new Set(["validate", "plan", "apply", "destroy-plan", "destroy"]);
@@ -45,7 +46,7 @@ export class TerraformManager {
       if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
       try {
         const job = JSON.parse(await fs.readFile(path.join(this.runsRoot, entry.name), "utf8"));
-        if (!job?.id || !job?.worldId) continue;
+        if (!job?.id || (!job?.worldId && !job?.projectId)) continue;
         if (ACTIVE_STATUSES.has(job.status)) {
           job.status = "failed";
           job.stage = "interrupted";
@@ -190,22 +191,215 @@ export class TerraformManager {
 
   async listProjects(worlds = []) {
     const byId = new Map(worlds.map((world) => [world.id, world]));
+    const byName = new Map(worlds.map((world) => [world.name, world]));
     const entries = await fs.readdir(this.projectsRoot, { withFileTypes: true }).catch(() => []);
     const projects = [];
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       const directory = path.join(this.projectsRoot, entry.name);
       const metadata = await readJson(path.join(directory, "project.json"), null);
-      if (!metadata?.worldId) continue;
+      if (!metadata?.worldId && metadata?.projectKind !== "template-instance") continue;
+      const linkedWorld = metadata.worldId ? byId.get(metadata.worldId) : byName.get(metadata.instanceName);
       projects.push({
         ...metadata,
-        worldExists: byId.has(metadata.worldId),
+        worldId: linkedWorld?.id || metadata.worldId || null,
+        worldExists: Boolean(linkedWorld),
         statePresent: await fileExists(path.join(directory, "terraform.tfstate")),
         lockPresent: await fileExists(path.join(directory, ".terraform.lock.hcl")),
         plan: await readJson(path.join(directory, "plan.json"), null)
       });
     }
     return projects.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)));
+  }
+
+  async startTemplateDeployment(templateStore, template, input = {}, options = {}) {
+    if (this.closed) throw conflict("Terraform manager is shutting down");
+    if (!this.enabled) {
+      const error = new Error("Terraform integration is disabled");
+      error.statusCode = 503;
+      throw error;
+    }
+    const instanceName = cleanInstanceName(input.name);
+    const lockKey = `template-instance:${instanceName.toLocaleLowerCase("en-US")}`;
+    const activeId = this.projectLocks.get(lockKey);
+    if (activeId) throw conflict(`Terraform run ${activeId} is already active for ${instanceName}`);
+    const reservation = `pending-${crypto.randomBytes(6).toString("hex")}`;
+    this.projectLocks.set(lockKey, reservation);
+    let id = null;
+    try {
+      const availability = await this.availability();
+      if (!availability.installed) {
+        const error = new Error(`Terraform is unavailable: ${availability.error || availability.binary}`);
+        error.statusCode = 503;
+        throw error;
+      }
+      const project = await this.prepareTemplateDeployment(templateStore, template, input);
+      id = `tfr-${Date.now().toString(36)}-${crypto.randomBytes(5).toString("hex")}`;
+      const job = {
+        version: 1,
+        id,
+        projectId: project.projectId,
+        projectKind: "template-instance",
+        templateId: template.id,
+        templateSlug: template.slug,
+        templateVersion: project.templateVersion,
+        instanceName,
+        worldId: project.worldId || null,
+        worldName: instanceName,
+        action: "deploy",
+        status: "queued",
+        stage: "queued",
+        subject: options.subject || null,
+        createdAt: new Date().toISOString(),
+        startedAt: null,
+        finishedAt: null,
+        error: null,
+        exitCode: null,
+        logFile: path.join(this.runsRoot, `${id}.log`),
+        logBytes: 0,
+        logTask: Promise.resolve(),
+        child: null,
+        cancelRequested: false,
+        lockKey
+      };
+      this.runs.set(id, job);
+      this.projectLocks.set(lockKey, id);
+      await this.persistJob(job);
+      const publicJob = await this.publicJob(job);
+      queueMicrotask(() => this.executeTemplateDeployment(job).catch(() => {}));
+      return publicJob;
+    } catch (error) {
+      if (this.projectLocks.get(lockKey) === reservation || this.projectLocks.get(lockKey) === id) this.projectLocks.delete(lockKey);
+      if (id) this.runs.delete(id);
+      throw error;
+    }
+  }
+
+  async prepareTemplateDeployment(templateStore, template, input = {}) {
+    const instanceName = cleanInstanceName(input.name);
+    const projectKey = templateDeploymentProjectId(instanceName);
+    const directory = this.projectDirectoryById(projectKey);
+    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+    const previous = await readJson(path.join(directory, "project.json"), {});
+    const statePresent = await fileExists(path.join(directory, "terraform.tfstate"));
+    const { listWorlds } = await import("./worlds.js");
+    const existingWorld = (await listWorlds(this.config)).find((world) => world.name === instanceName);
+    if (existingWorld && previous.projectKind !== "template-instance") {
+      throw conflict(`sandbox ${instanceName} already exists and is not owned by a Terraform template deployment`);
+    }
+    if (existingWorld && previous.worldId && existingWorld.id !== previous.worldId) {
+      throw conflict(`sandbox ${instanceName} no longer matches its Terraform-managed instance`);
+    }
+    if (previous.projectKind === "template-instance" && previous.templateId && previous.templateId !== template.id && statePresent) {
+      throw conflict(`${instanceName} is already managed by template ${previous.templateSlug || previous.templateId}`);
+    }
+    for (const relativePath of previous.templateFiles || []) {
+      const file = path.resolve(directory, relativePath);
+      if (file !== directory && file.startsWith(`${directory}${path.sep}`)) await fs.rm(file, { force: true });
+    }
+    await fs.rm(path.join(directory, ".kakurizai"), { recursive: true, force: true });
+    await fs.rm(path.join(directory, "terraform.auto.tfvars.json"), { force: true });
+    const materialized = await templateStore.materialize(template.id, directory, { version: template.activeVersion });
+    const runtimeModule = terraformSandboxRuntimeModule({ agctl: this.agctl });
+    const moduleFile = path.join(directory, ".kakurizai", "modules", "sandbox", "main.tf");
+    await fs.mkdir(path.dirname(moduleFile), { recursive: true, mode: 0o700 });
+    await fs.writeFile(moduleFile, runtimeModule, { mode: 0o600 });
+    const variables = templateVariableValues(template, { ...input.variables, name: instanceName });
+    const variablesFile = path.join(directory, "terraform.auto.tfvars.json");
+    await fs.writeFile(variablesFile, `${JSON.stringify(variables, null, 2)}\n`, { mode: 0o600 });
+    const nextHash = crypto.createHash("sha256")
+      .update(materialized.sourceHash)
+      .update("\0")
+      .update(materialized.activeVersion)
+      .update("\0")
+      .update(JSON.stringify(variables))
+      .update("\0")
+      .update(runtimeModule)
+      .digest("hex");
+    if (previous.sourceHash && previous.sourceHash !== nextHash) {
+      await Promise.all([
+        fs.rm(path.join(directory, "terraform.tfplan"), { force: true }),
+        fs.rm(path.join(directory, "plan.json"), { force: true })
+      ]);
+    }
+    const now = new Date().toISOString();
+    const project = {
+      version: 1,
+      projectId: projectKey,
+      projectKind: "template-instance",
+      templateId: template.id,
+      templateSlug: template.slug,
+      templateVersion: materialized.activeVersion,
+      instanceName,
+      worldId: previous.worldId || null,
+      sourceHash: nextHash,
+      templateFiles: materialized.files,
+      variableNames: Object.keys(variables).sort(),
+      createdAt: previous.createdAt || now,
+      updatedAt: now,
+      statePresent,
+      plan: null
+    };
+    await writeJsonAtomic(path.join(directory, "project.json"), project);
+    return { ...project, directory };
+  }
+
+  async executeTemplateDeployment(job) {
+    job.status = "running";
+    job.startedAt = new Date().toISOString();
+    await this.persistJob(job);
+    const directory = this.projectDirectoryById(job.projectId);
+    try {
+      await this.runCommand(job, "init", ["init", "-no-color", "-input=false"], directory);
+      await this.runCommand(job, "validate", ["validate", "-no-color"], directory);
+      const planResult = await this.runCommand(job, "plan", ["plan", "-no-color", "-input=false", "-detailed-exitcode", "-out=terraform.tfplan"], directory, { allowExitCodes: [0, 2] });
+      await this.runCommand(job, "show", ["show", "-no-color", "terraform.tfplan"], directory);
+      const metadata = await readJson(path.join(directory, "project.json"), {});
+      metadata.plan = {
+        kind: "apply",
+        sourceHash: metadata.sourceHash,
+        runId: job.id,
+        hasChanges: planResult.code === 2,
+        createdAt: new Date().toISOString()
+      };
+      metadata.updatedAt = new Date().toISOString();
+      await Promise.all([
+        writeJsonAtomic(path.join(directory, "plan.json"), metadata.plan),
+        writeJsonAtomic(path.join(directory, "project.json"), metadata)
+      ]);
+      await this.runCommand(job, "apply", ["apply", "-no-color", "-input=false", "-auto-approve", "terraform.tfplan"], directory);
+      await fs.rm(path.join(directory, "plan.json"), { force: true });
+      const completed = await readJson(path.join(directory, "project.json"), {});
+      completed.plan = null;
+      completed.statePresent = await fileExists(path.join(directory, "terraform.tfstate"));
+      completed.updatedAt = new Date().toISOString();
+      try {
+        const { listWorlds } = await import("./worlds.js");
+        const world = (await listWorlds(this.config)).find((candidate) => candidate.name === job.instanceName);
+        if (world) {
+          completed.worldId = world.id;
+          job.worldId = world.id;
+        }
+      } catch {
+        // The Terraform result remains authoritative even if Studio cannot refresh world metadata yet.
+      }
+      await writeJsonAtomic(path.join(directory, "project.json"), completed);
+      job.status = "succeeded";
+      job.stage = "complete";
+      job.exitCode = 0;
+    } catch (error) {
+      job.status = job.cancelRequested ? "canceled" : "failed";
+      job.stage = job.cancelRequested ? "canceled" : job.stage;
+      job.error = commandError(error);
+      job.exitCode = Number.isInteger(error?.exitCode) ? error.exitCode : null;
+      await this.appendLog(job, `\n[${new Date().toISOString()}] ${job.status}: ${job.error}\n`);
+    } finally {
+      job.child = null;
+      job.finishedAt = new Date().toISOString();
+      this.projectLocks.delete(job.lockKey);
+      await job.logTask;
+      await this.persistJob(job);
+    }
   }
 
   async startRun(world, action, options = {}) {
@@ -421,7 +615,11 @@ export class TerraformManager {
   }
 
   projectDirectory(worldId) {
-    const directory = path.resolve(this.projectsRoot, projectId(worldId));
+    return this.projectDirectoryById(projectId(worldId));
+  }
+
+  projectDirectoryById(id) {
+    const directory = path.resolve(this.projectsRoot, projectId(id));
     if (path.dirname(directory) !== this.projectsRoot) throw badRequest("invalid Terraform project id");
     return directory;
   }
@@ -430,6 +628,11 @@ export class TerraformManager {
     return {
       id: job.id,
       projectId: job.projectId,
+      projectKind: job.projectKind || "sandbox",
+      templateId: job.templateId || null,
+      templateSlug: job.templateSlug || null,
+      templateVersion: job.templateVersion || null,
+      instanceName: job.instanceName || null,
       worldId: job.worldId,
       worldName: job.worldName,
       action: job.action,
@@ -468,6 +671,11 @@ export class TerraformManager {
       version: 1,
       id: job.id,
       projectId: job.projectId,
+      projectKind: job.projectKind || "sandbox",
+      templateId: job.templateId || null,
+      templateSlug: job.templateSlug || null,
+      templateVersion: job.templateVersion || null,
+      instanceName: job.instanceName || null,
       worldId: job.worldId,
       worldName: job.worldName,
       action: job.action,
@@ -479,7 +687,8 @@ export class TerraformManager {
       finishedAt: job.finishedAt,
       error: job.error,
       exitCode: job.exitCode,
-      logFile: job.logFile
+      logFile: job.logFile,
+      lockKey: job.lockKey || null
     };
     await writeJsonAtomic(path.join(this.runsRoot, `${job.id}.json`), serializable);
   }
@@ -490,6 +699,55 @@ function projectId(worldId) {
   const slug = input.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
   if (!slug) throw badRequest("world id is required");
   return slug;
+}
+
+function templateDeploymentProjectId(instanceName) {
+  const slug = projectId(instanceName).slice(0, 56);
+  const suffix = crypto.createHash("sha256").update(instanceName).digest("hex").slice(0, 10);
+  return `template-${slug}-${suffix}`;
+}
+
+function cleanInstanceName(value) {
+  const name = String(value || "").trim();
+  if (!name || name.length > 80) throw badRequest("sandbox name must be between 1 and 80 characters");
+  if (/[\0\r\n]/.test(name)) throw badRequest("sandbox name contains unsupported characters");
+  return name;
+}
+
+function templateVariableValues(template, input = {}) {
+  const declared = new Map((template.parameters || []).map((parameter) => [parameter.name, parameter]));
+  const unknown = Object.keys(input || {}).filter((name) => !declared.has(name));
+  if (unknown.length) throw badRequest(`unknown template variable${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}`);
+  const result = {};
+  for (const parameter of template.parameters || []) {
+    const supplied = Object.prototype.hasOwnProperty.call(input, parameter.name);
+    if (!supplied) {
+      if (parameter.required) throw badRequest(`template variable is required: ${parameter.name}`);
+      continue;
+    }
+    result[parameter.name] = coerceTemplateVariable(parameter, input[parameter.name]);
+  }
+  return result;
+}
+
+function coerceTemplateVariable(parameter, value) {
+  const type = String(parameter.type || "any").replace(/\s+/g, "");
+  if (type === "string") return String(value ?? "");
+  if (type === "number") {
+    const number = typeof value === "number" ? value : Number(value);
+    if (!Number.isFinite(number)) throw badRequest(`${parameter.name} must be a number`);
+    return number;
+  }
+  if (type === "bool" || type === "boolean") {
+    if (typeof value === "boolean") return value;
+    if (String(value).toLowerCase() === "true") return true;
+    if (String(value).toLowerCase() === "false") return false;
+    throw badRequest(`${parameter.name} must be true or false`);
+  }
+  if (typeof value === "string" && (/^(?:list|set|map|object|tuple)\(/.test(type) || type === "any")) {
+    try { return JSON.parse(value); } catch { return value; }
+  }
+  return value;
 }
 
 function sourceHash(files) {

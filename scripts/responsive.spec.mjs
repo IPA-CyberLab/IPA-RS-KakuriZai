@@ -261,6 +261,34 @@ const terraformPreview = {
   }
 };
 
+const terraformTemplates = [
+  {
+    id: "kzt-developer",
+    slug: "developer-sandbox",
+    name: "developer-sandbox",
+    displayName: "Developer sandbox",
+    description: "Reusable CubeSandbox developer environment",
+    activeVersion: "a1b2c3d4e5f6",
+    sourceHash: "a1b2c3d4e5f6abcdef",
+    parameters: [
+      { name: "name", type: "string", description: "Sandbox name", required: true, sensitive: false, defaultHcl: null, sourceFile: "main.tf" },
+      { name: "cpu", type: "string", description: "CPU allocation", required: false, sensitive: false, default: "2000m", defaultHcl: "\"2000m\"", sourceFile: "main.tf" },
+      { name: "memory", type: "string", description: "Memory allocation", required: false, sensitive: false, default: "2000Mi", defaultHcl: "\"2000Mi\"", sourceFile: "main.tf" }
+    ],
+    versions: [{ version: "a1b2c3d4e5f6", createdAt: "2026-06-28T00:00:00.000Z", fileCount: 1, sizeBytes: 512 }],
+    createdAt: "2026-06-28T00:00:00.000Z",
+    updatedAt: "2026-06-28T00:00:00.000Z"
+  }
+];
+
+const terraformTemplateDetail = {
+  ...terraformTemplates[0],
+  files: {
+    "main.tf": "variable \"name\" {\n  type = string\n}\n\nmodule \"sandbox\" {\n  source = \"./.kakurizai/modules/sandbox\"\n}\n"
+  },
+  sourceFiles: [{ path: "main.tf", size: 112, text: true }]
+};
+
 const mainViewports = [
   { name: "phone-320", width: 320, height: 568 },
   { name: "phone-390", width: 390, height: 844 },
@@ -346,6 +374,7 @@ test.describe("Studio responsive layout", () => {
       await page.getByTitle("Terraform").click();
       await page.waitForSelector(".terraformWorkspace");
       await expect(page.getByText("Terraform 1.13.3")).toBeVisible();
+      await expect(page.locator(".templateSummary strong")).toHaveText("Developer sandbox");
       const report = await auditLayout(page, `${viewport.name}-terraform`);
       console.log(JSON.stringify(report.summary));
       expect(report.failures).toEqual([]);
@@ -429,6 +458,9 @@ async function mockApi(page) {
   await page.route("**/api/account/sessions", (route) => json(route, accountSessions));
   await page.route("**/api/account", (route) => json(route, account));
   await page.route("**/api/users", (route) => json(route, [account]));
+  await page.route("**/api/terraform/templates/starter", (route) => json(route, { files: terraformTemplateDetail.files }));
+  await page.route("**/api/terraform/templates/*", (route) => json(route, terraformTemplateDetail));
+  await page.route("**/api/terraform/templates", (route) => json(route, terraformTemplates));
   await page.route("**/api/terraform/projects/*", (route) => json(route, terraformPreview));
   await page.route("**/api/terraform", (route) => json(route, terraformOverview));
   await page.route("**/api/cube/inspect", (route) => json(route, cube));
