@@ -357,8 +357,8 @@ class DevAccessManager {
     }
     const loginUrl = `http://${session.sandboxIp}:${session.vscodePort}/login`;
     const attempts = [
-      { base: ".", href: loginUrl },
-      { base: "/", href: publicUrl }
+      { base: ".", href: publicUrl },
+      { base: "/", href: loginUrl }
     ];
     let lastError = null;
     for (const attempt of attempts) {
