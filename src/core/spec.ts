@@ -36,9 +36,9 @@ export function normalizeSandboxManifest(data) {
       template: spec.template || null,
       hostMount,
       resources: {
-        cpu: resources.cpu || spec.cpu || "2000m",
-        memory: resources.memory || spec.memory || "2000Mi",
-        writableLayerSize: resources.writableLayerSize || resources.disk || spec.writableLayerSize || "2G"
+        cpu: resources.cpu || spec.cpu || "4000m",
+        memory: resources.memory || spec.memory || "4000Mi",
+        writableLayerSize: resources.writableLayerSize || resources.disk || spec.writableLayerSize || "20G"
       },
       network: normalizeNetworkConfig(spec.network || { type: spec.networkType }),
       kubernetes: normalizeKubernetesConfig(spec.kubernetes || spec.k8s || {})
@@ -88,9 +88,9 @@ export function worldToManifest(world) {
         mounts
       },
       resources: {
-        cpu: backendConfig.cpu || "2000m",
-        memory: backendConfig.memory || "2000Mi",
-        writableLayerSize: backendConfig.writableLayerSize || "2G"
+        cpu: backendConfig.cpu || "4000m",
+        memory: backendConfig.memory || "4000Mi",
+        writableLayerSize: backendConfig.writableLayerSize || "20G"
       },
       network: backendConfig.network || { type: backendConfig.networkType || "tap" },
       kubernetes: backendConfig.kubernetes || { enabled: false, profile: "k3s" }

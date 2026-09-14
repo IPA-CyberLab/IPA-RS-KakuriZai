@@ -423,9 +423,9 @@ export async function instantiateSandboxTemplate(config, input = {}) {
         mounts
       },
       resources: {
-        cpu: input.cpu || config.cube?.cpu || "2000m",
-        memory: input.memory || config.cube?.memory || "2000Mi",
-        writableLayerSize: input.writableLayerSize || input.diskSize || config.cube?.writableLayerSize || "2G"
+        cpu: input.cpu || config.cube?.cpu || "4000m",
+        memory: input.memory || config.cube?.memory || "4000Mi",
+        writableLayerSize: input.writableLayerSize || input.diskSize || config.cube?.writableLayerSize || "20G"
       },
       network,
       kubernetes

@@ -166,6 +166,9 @@ export function mergeConfig(base, override) {
   result.cluster = { ...base.cluster, ...(override?.cluster || {}) };
   result.cluster.failover = { ...base.cluster?.failover, ...(override?.cluster?.failover || {}) };
   result.cube = { ...base.cube, ...(override?.cube || {}) };
+  result.cube.cpu = override?.cube?.cpu || base.cube?.cpu;
+  result.cube.memory = override?.cube?.memory || base.cube?.memory;
+  result.cube.writableLayerSize = override?.cube?.writableLayerSize || base.cube?.writableLayerSize;
   result.isolatedAgent = { ...base.isolatedAgent, ...(override?.isolatedAgent || {}) };
   return result;
 }
