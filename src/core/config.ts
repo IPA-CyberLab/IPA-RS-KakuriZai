@@ -139,7 +139,7 @@ export function defaultConfig(home = defaultHome()) {
           "unionfs-fuse",
           "vim-tiny"
         ],
-        commands: ["bash", "curl", "git", "gh", "ip", "nano", "node", "npm", "ping", "ps", "sudo", "tmux", "codex", "claude"]
+        commands: ["bash", "curl", "git", "gh", "ip", "nano", "node", "npm", "ping", "ps", "sudo", "tmux", "codex", "claude", "code-server"]
       }
     },
     isolatedAgent: {

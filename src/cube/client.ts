@@ -1658,7 +1658,7 @@ export class CubeSandboxClient {
 
 function normalizeBootstrapConfig(config = {}) {
   const developerPackages = ["gh", "nodejs", "npm"];
-  const developerCommands = ["gh", "node", "npm", "codex", "claude"];
+  const developerCommands = ["gh", "node", "npm", "codex", "claude", "code-server"];
   const defaults = {
     enabled: true,
     packages: [
@@ -1687,7 +1687,7 @@ function normalizeBootstrapConfig(config = {}) {
       "unionfs-fuse",
       "vim-tiny"
     ],
-    commands: ["bash", "curl", "git", "gh", "ip", "iptables", "nano", "node", "npm", "ping", "ps", "sudo", "tmux", "codex", "claude"]
+    commands: ["bash", "curl", "git", "gh", "ip", "iptables", "nano", "node", "npm", "ping", "ps", "sudo", "tmux", "codex", "claude", "code-server"]
   };
   if (config === false) return { ...defaults, enabled: false };
   const packages = Array.isArray(config.packages) && config.packages.length ? config.packages.map(String) : defaults.packages;
@@ -1701,7 +1701,7 @@ function normalizeBootstrapConfig(config = {}) {
 
 function buildBootstrapToolsScript(config) {
   const commands = config.commands.map(shellQuote).join(" ");
-  const osCommands = config.commands.filter((command) => !["codex", "claude"].includes(command)).map(shellQuote).join(" ");
+  const osCommands = config.commands.filter((command) => !["codex", "claude", "code-server"].includes(command)).map(shellQuote).join(" ");
   const aptPackages = config.packages.map(shellQuote).join(" ");
   const apkPackages = config.packages.map((pkg) => apkPackageName(pkg)).map(shellQuote).join(" ");
   const rpmPackages = config.packages.map((pkg) => rpmPackageName(pkg)).map(shellQuote).join(" ");
@@ -1710,12 +1710,14 @@ function buildBootstrapToolsScript(config) {
     "need_os_install=0",
     `for command_name in ${osCommands}; do command -v \"$command_name\" >/dev/null 2>&1 || need_os_install=1; done`,
     "if [ \"$need_os_install\" = \"1\" ]; then if command -v apt-get >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update || { sleep 3; apt-get update; }; apt-get install -y --no-install-recommends " + aptPackages + " || { sleep 3; dpkg --configure -a; apt-get install -y --no-install-recommends " + aptPackages + "; }; elif command -v apk >/dev/null 2>&1; then apk add --no-cache " + apkPackages + "; elif command -v dnf >/dev/null 2>&1; then dnf install -y " + rpmPackages + "; elif command -v yum >/dev/null 2>&1; then yum install -y " + rpmPackages + "; else echo 'No supported package manager found for KakuriZai terminal bootstrap' >&2; exit 1; fi; fi",
-    "node_major=$(node -p \"process.versions.node.split('.')[0]\" 2>/dev/null || printf 0)",
-    "if [ \"$node_major\" -lt 22 ]; then npm install -g --no-audit --no-fund n; n 22; hash -r; fi",
-    "need_agents=0",
-    "command -v codex >/dev/null 2>&1 || need_agents=1",
-    "command -v claude >/dev/null 2>&1 || need_agents=1",
-    "[ \"$need_agents\" = \"0\" ] || npm install -g --no-audit --no-fund @openai/codex @anthropic-ai/claude-code",
+    "bootstrap_logs=/tmp/kakurizai-bootstrap",
+    "mkdir -p \"$bootstrap_logs\"",
+    "install_agents() { node_major=$(node -p \"process.versions.node.split('.')[0]\" 2>/dev/null || printf 0); if [ \"$node_major\" -lt 22 ]; then npm install -g --no-audit --no-fund n; n 22; hash -r; fi; need_agents=0; command -v codex >/dev/null 2>&1 || need_agents=1; command -v claude >/dev/null 2>&1 || need_agents=1; [ \"$need_agents\" = \"0\" ] || npm install -g --no-audit --no-fund @openai/codex @anthropic-ai/claude-code; }",
+    "install_vscode() { command -v code-server >/dev/null 2>&1 || curl -fsSL https://code-server.dev/install.sh | sh; for extension_id in GitHub.vscode-pull-request-github; do code-server --list-extensions 2>/dev/null | grep -Fqi \"$extension_id\" && continue; code-server --install-extension \"$extension_id\" --force; done; }",
+    "install_agents >\"$bootstrap_logs/agents.log\" 2>&1 & agents_pid=$!",
+    "install_vscode >\"$bootstrap_logs/vscode.log\" 2>&1 & vscode_pid=$!",
+    "agents_rc=0; vscode_rc=0; wait \"$agents_pid\" || agents_rc=$?; wait \"$vscode_pid\" || vscode_rc=$?",
+    "if [ \"$agents_rc\" -ne 0 ] || [ \"$vscode_rc\" -ne 0 ]; then cat \"$bootstrap_logs/agents.log\" \"$bootstrap_logs/vscode.log\" >&2; exit 1; fi",
     `for command_name in ${commands}; do command -v \"$command_name\" >/dev/null 2>&1 || { echo \"missing required developer command: $command_name\" >&2; exit 1; }; done`
   ].join("; ");
 }
@@ -1806,7 +1808,7 @@ function buildDevAccessScript(options) {
     "[ \"$enable_ssh\" = \"0\" ] || command -v sshd >/dev/null 2>&1 || need_packages=1",
     "[ \"$need_packages\" = \"0\" ] || install_packages",
     "if [ \"$enable_ssh\" = \"1\" ]; then mkdir -p /run/sshd /root/.ssh; chmod 700 /root/.ssh; printf '%s\\n' \"$ssh_authorized_keys\" > /root/.ssh/authorized_keys; chmod 600 /root/.ssh/authorized_keys; ssh-keygen -A >/tmp/kakurizai-dev-access/ssh-keygen.log 2>&1 || true; cat > /tmp/kakurizai-dev-access/sshd_config <<KAKURIZAI_SSHD\nPort ${ssh_port}\nListenAddress 0.0.0.0\nPermitRootLogin prohibit-password\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nChallengeResponseAuthentication no\nPubkeyAuthentication yes\nUsePAM no\nPidFile /tmp/kakurizai-dev-access/sshd.pid\nAuthorizedKeysFile /root/.ssh/authorized_keys\nSubsystem sftp internal-sftp\nKAKURIZAI_SSHD\nsshd_binary=$(command -v sshd || printf /usr/sbin/sshd); sshd_pid_file=/tmp/kakurizai-dev-access/sshd.pid; sshd_running=0; if [ -f \"$sshd_pid_file\" ]; then sshd_pid=$(cat \"$sshd_pid_file\" 2>/dev/null || true); if [ -n \"$sshd_pid\" ] && kill -0 \"$sshd_pid\" 2>/dev/null; then sshd_running=1; fi; fi; if [ \"$sshd_running\" = \"1\" ]; then kill -HUP \"$sshd_pid\"; else \"$sshd_binary\" -f /tmp/kakurizai-dev-access/sshd_config -E /tmp/kakurizai-dev-access/sshd.log; fi; fi",
-    "if [ \"$enable_vscode\" = \"1\" ]; then if [ -z \"$vscode_hashed_password\" ]; then echo 'missing code-server hashed password' >&2; exit 1; fi; install_code_server() { command -v code-server >/dev/null 2>&1 && return 0; if command -v npm >/dev/null 2>&1; then npm install -g code-server && return 0; fi; curl -fsSL https://code-server.dev/install.sh | sh; }; install_vscode_extensions() { mkdir -p /tmp/kakurizai-dev-access; for extension_id in " + vscodeExtensionArgs + "; do code-server --list-extensions 2>/dev/null | grep -Fqi \"$extension_id\" && continue; code-server --install-extension \"$extension_id\" --force >>/tmp/kakurizai-dev-access/extensions.log 2>&1 || true; done; }; stop_code_server() { code_pid_file=/tmp/kakurizai-dev-access/code-server.pid; if [ -f \"$code_pid_file\" ]; then code_pid=$(cat \"$code_pid_file\" 2>/dev/null || true); if [ -n \"$code_pid\" ] && kill -0 \"$code_pid\" 2>/dev/null; then kill \"$code_pid\" 2>/dev/null || true; fi; fi; if command -v fuser >/dev/null 2>&1; then fuser -k \"${vscode_port}/tcp\" >/dev/null 2>&1 || true; fi; if command -v lsof >/dev/null 2>&1; then lsof -ti tcp:\"$vscode_port\" | xargs -r kill 2>/dev/null || true; fi; if command -v ss >/dev/null 2>&1; then ss -ltnp 2>/dev/null | awk -v port=\":$vscode_port\" '$4 ~ port {print $NF}' | sed -n 's/.*pid=\\([0-9][0-9]*\\).*/\\1/p' | xargs -r kill 2>/dev/null || true; fi; if command -v ps >/dev/null 2>&1; then code_server_port=:$vscode_port; ps -eo pid=,comm=,args= 2>/dev/null | while read -r pid comm args; do if [ \"$comm\" = node ]; then case \"$args\" in *code-server*$code_server_port*) [ \"$pid\" = \"$$\" ] || kill \"$pid\" 2>/dev/null || true ;; esac; fi; done; fi; sleep 1; }; command -v code-server >/dev/null 2>&1 || install_code_server; install_vscode_extensions; stop_code_server; code_pid_file=/tmp/kakurizai-dev-access/code-server.pid; HASHED_PASSWORD=\"$vscode_hashed_password\" nohup code-server --bind-addr \"0.0.0.0:$vscode_port\" --auth password --disable-workspace-trust --disable-telemetry --disable-update-check \"$workspace\" >/tmp/kakurizai-dev-access/code-server.log 2>&1 & echo $! > \"$code_pid_file\"; fi",
+    "if [ \"$enable_vscode\" = \"1\" ]; then if [ -z \"$vscode_hashed_password\" ]; then echo 'missing code-server hashed password' >&2; exit 1; fi; install_code_server() { command -v code-server >/dev/null 2>&1 && return 0; curl -fsSL https://code-server.dev/install.sh | sh; }; install_vscode_extensions() { mkdir -p /tmp/kakurizai-dev-access; for extension_id in " + vscodeExtensionArgs + "; do code-server --list-extensions 2>/dev/null | grep -Fqi \"$extension_id\" && continue; code-server --install-extension \"$extension_id\" --force >>/tmp/kakurizai-dev-access/extensions.log 2>&1 || true; done; }; stop_code_server() { code_pid_file=/tmp/kakurizai-dev-access/code-server.pid; if [ -f \"$code_pid_file\" ]; then code_pid=$(cat \"$code_pid_file\" 2>/dev/null || true); if [ -n \"$code_pid\" ] && kill -0 \"$code_pid\" 2>/dev/null; then kill \"$code_pid\" 2>/dev/null || true; fi; fi; if command -v fuser >/dev/null 2>&1; then fuser -k \"${vscode_port}/tcp\" >/dev/null 2>&1 || true; fi; if command -v lsof >/dev/null 2>&1; then lsof -ti tcp:\"$vscode_port\" | xargs -r kill 2>/dev/null || true; fi; if command -v ss >/dev/null 2>&1; then ss -ltnp 2>/dev/null | awk -v port=\":$vscode_port\" '$4 ~ port {print $NF}' | sed -n 's/.*pid=\\([0-9][0-9]*\\).*/\\1/p' | xargs -r kill 2>/dev/null || true; fi; if command -v ps >/dev/null 2>&1; then code_server_port=:$vscode_port; ps -eo pid=,comm=,args= 2>/dev/null | while read -r pid comm args; do if [ \"$comm\" = node ]; then case \"$args\" in *code-server*$code_server_port*) [ \"$pid\" = \"$$\" ] || kill \"$pid\" 2>/dev/null || true ;; esac; fi; done; fi; sleep 1; }; command -v code-server >/dev/null 2>&1 || install_code_server; install_vscode_extensions; stop_code_server; code_pid_file=/tmp/kakurizai-dev-access/code-server.pid; HASHED_PASSWORD=\"$vscode_hashed_password\" nohup code-server --bind-addr \"0.0.0.0:$vscode_port\" --auth password --disable-workspace-trust --disable-telemetry --disable-update-check \"$workspace\" >/tmp/kakurizai-dev-access/code-server.log 2>&1 & echo $! > \"$code_pid_file\"; fi",
     "sleep 1",
     "printf 'workspace=%s\\nvscode_port=%s\\nssh_port=%s\\n' \"$workspace\" \"$vscode_port\" \"$ssh_port\""
   ].join("\n");

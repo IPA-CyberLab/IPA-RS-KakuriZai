@@ -299,6 +299,12 @@ test("cube client bootstraps terminal tools after sandbox create", async () => {
   assert.match(args[6], /n 22/);
   assert.match(args[6], /@openai\/codex/);
   assert.match(args[6], /@anthropic-ai\/claude-code/);
+  assert.match(args[6], /code-server\.dev\/install\.sh/);
+  assert.match(args[6], /GitHub\.vscode-pull-request-github/);
+  assert.match(args[6], /install_agents >"\$bootstrap_logs\/agents\.log" 2>&1 & agents_pid=\$!/);
+  assert.match(args[6], /install_vscode >"\$bootstrap_logs\/vscode\.log" 2>&1 & vscode_pid=\$!/);
+  assert.match(args[6], /wait "\$agents_pid"/);
+  assert.match(args[6], /wait "\$vscode_pid"/);
 });
 
 test("cube client mounts agctl overlay with a probed unionfs driver", async () => {
@@ -518,6 +524,8 @@ test("cube client starts sandbox dev access services", async () => {
   assert.match(argsText, /git/);
   assert.doesNotMatch(argsText, /openssh-server/);
   assert.match(argsText, /code-server/);
+  assert.match(argsText, /code-server\.dev\/install\.sh/);
+  assert.doesNotMatch(argsText, /npm install -g code-server/);
   assert.match(argsText, /--install-extension "\$extension_id" --force/);
   assert.match(argsText, /GitHub\.vscode-pull-request-github/);
   assert.match(argsText, /--auth password/);
