@@ -20,6 +20,8 @@ export function defaultConfig(home = defaultHome()) {
       host: process.env.KAKURIZAI_HOST || "127.0.0.1",
       port: Number(process.env.KAKURIZAI_PORT || 38476),
       publicUrl: process.env.KAKURIZAI_STUDIO_PUBLIC_URL || null,
+      forwardHost: process.env.KAKURIZAI_FORWARD_HOST || null,
+      sshHost: process.env.KAKURIZAI_SSH_HOST || null,
       secureCookies: process.env.KAKURIZAI_SECURE_COOKIES === "true",
       trustProxy: process.env.KAKURIZAI_TRUST_PROXY === "true",
       trustedProxies: [],

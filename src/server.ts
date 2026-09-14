@@ -283,7 +283,7 @@ class DevAccessManager {
       if (!services.applied) throw new Error(services.reason || `failed to start VS Code Web for ${world.name}`);
       session.workspace = services.workspace;
       session.vscodeForward = await listenTcpForward({
-        listenHost: publicListenHost(this.config.studio.host),
+        listenHost: publicListenHost(this.config.studio.host, this.config.studio.forwardHost),
         targetHost: session.sandboxIp,
         targetPort: vscodePort
       });
@@ -309,7 +309,7 @@ class DevAccessManager {
       session.sshPublicKeys = sshPublicKeys;
       if (!session.sshForward) {
         session.sshForward = await listenTcpForward({
-          listenHost: publicListenHost(this.config.studio.host),
+          listenHost: publicListenHost(this.config.studio.host, this.config.studio.forwardHost),
           targetHost: session.sandboxIp,
           targetPort: sshPort
         });
@@ -322,6 +322,7 @@ class DevAccessManager {
   publicSession(session, request) {
     const origin = publicOrigin(request, this.config);
     const publicHost = publicHostname(origin);
+    const sshHost = this.config.studio.sshHost || publicHost;
     const httpUrl = session.vscodeForward ? new URL(origin) : null;
     if (httpUrl) {
       httpUrl.port = String(session.vscodeForward.port);
@@ -329,7 +330,7 @@ class DevAccessManager {
       httpUrl.search = "";
       httpUrl.hash = "";
     }
-    const sshCommand = session.sshForward ? `ssh root@${publicHost} -p ${session.sshForward.port}` : null;
+    const sshCommand = session.sshForward ? `ssh root@${sshHost} -p ${session.sshForward.port}` : null;
     return {
       worldId: session.worldId,
       worldName: session.worldName,
@@ -339,9 +340,9 @@ class DevAccessManager {
       vscodePath: httpUrl ? "/" : null,
       vscodePort: session.vscodeForward ? session.vscodePort : null,
       vscodeForwardPort: session.vscodeForward?.port || null,
-      sshHost: publicHost,
+      sshHost,
       sshPort: session.sshForward?.port || null,
-      sshUri: session.sshForward ? `ssh://root@${publicHost}:${session.sshForward.port}` : null,
+      sshUri: session.sshForward ? `ssh://root@${sshHost}:${session.sshForward.port}` : null,
       sshCommand
     };
   }
@@ -440,7 +441,8 @@ function listenTcpForward(options) {
   });
 }
 
-function publicListenHost(studioHost) {
+function publicListenHost(studioHost, forwardHost) {
+  if (forwardHost) return forwardHost;
   return studioHost === "127.0.0.1" || studioHost === "localhost" ? "127.0.0.1" : "0.0.0.0";
 }
 
