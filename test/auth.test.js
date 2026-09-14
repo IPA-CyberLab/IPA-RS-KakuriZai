@@ -101,6 +101,7 @@ test("studio signs in through keycloak code flow with session cookie, csrf, rbac
     assert.match(cookie, /kakurizai_session=/);
     assert.match(cookie, /HttpOnly/);
     assert.match(cookie, /SameSite=Strict/);
+    assert.ok(Number(/Max-Age=(\d+)/.exec(cookie)?.[1]) >= 604790);
     const sessionCookie = /kakurizai_session=[^;]+/.exec(cookie)?.[0];
     assert.ok(sessionCookie);
 
@@ -111,6 +112,7 @@ test("studio signs in through keycloak code flow with session cookie, csrf, rbac
     assert.equal(sessionBody.user.username, "alice");
     assert.ok(sessionBody.permissions.includes("admin"));
     assert.ok(sessionBody.csrfToken);
+    assert.ok(Number(/Max-Age=(\d+)/.exec(session.headers.get("set-cookie") || "")?.[1]) >= 604790);
 
     const accountResponse = await fetch(`${origin}/api/account`, { headers: { cookie: sessionCookie } });
     assert.equal(accountResponse.status, 200);
@@ -169,11 +171,33 @@ test("studio signs in through keycloak code flow with session cookie, csrf, rbac
 
     const templatesResponse = await fetch(`${origin}/api/terraform/templates`, { headers: { cookie: sessionCookie } });
     assert.equal(templatesResponse.status, 200);
-    assert.equal((await templatesResponse.json())[0].activeVersion, createdTemplate.activeVersion);
+    const listedTemplates = await templatesResponse.json();
+    assert.equal(listedTemplates.find((template) => template.id === createdTemplate.id)?.activeVersion, createdTemplate.activeVersion);
 
     const templateSourceResponse = await fetch(`${origin}/api/terraform/templates/${createdTemplate.id}`, { headers: { cookie: sessionCookie } });
     assert.equal(templateSourceResponse.status, 200);
     assert.match((await templateSourceResponse.json()).files["main.tf"], /variable "name"/);
+
+    const updateTemplateResponse = await fetch(`${origin}/api/terraform/templates`, {
+      method: "PUT",
+      headers: {
+        cookie: sessionCookie,
+        "content-type": "application/json",
+        "x-csrf-token": sessionBody.csrfToken
+      },
+      body: JSON.stringify({
+        name: "test-template",
+        slug: "test-template",
+        displayName: "Updated test template",
+        files: { "main.tf": "variable \"name\" {\n  type = string\n}\noutput \"revision\" { value = 2 }\n" }
+      })
+    });
+    const updatedTemplateBody = await updateTemplateResponse.text();
+    assert.equal(updateTemplateResponse.status, 201, updatedTemplateBody);
+    const updatedTemplate = JSON.parse(updatedTemplateBody);
+    assert.equal(updatedTemplate.id, createdTemplate.id);
+    assert.notEqual(updatedTemplate.activeVersion, createdTemplate.activeVersion);
+    assert.equal(updatedTemplate.versions.length, 2);
 
     const suspendSelf = await fetch(`${origin}/api/users/alice`, {
       method: "PATCH",

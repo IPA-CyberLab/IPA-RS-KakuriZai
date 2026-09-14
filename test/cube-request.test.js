@@ -101,7 +101,7 @@ test("cube request supports multiple workspace subfolder mounts", async () => {
   assert.doesNotMatch(request.containers[0].volume_mounts.map((mount) => mount.container_path).join(","), /(^|,)\/workspace(,|$)/);
 });
 
-test("cube request carries writable layer and network settings", async () => {
+test("cube request carries writable layer annotations without duplicating template rootfs", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-"));
   const source = path.join(tmp, "source");
   await fs.mkdir(source);
@@ -124,10 +124,8 @@ test("cube request carries writable layer and network settings", async () => {
   assert.equal(request.annotations["cube.master.rootfs.writable_layer_size"], "2G");
   assert.equal(request.annotations["cube.master.system_disk_size"], "2");
   assert.equal(request.containers[0].annotations["cube.master.rootfs.writable_layer_size"], "2G");
-  const rootVolume = request.volumes.find((volume) => volume.name === "cube_rootfs_rw");
-  assert.equal(rootVolume.volume_source.empty_dir.size_limit, "2G");
-  const rootMount = request.containers[0].volume_mounts.find((mount) => mount.name === "cube_rootfs_rw");
-  assert.equal(rootMount.container_path, "/");
+  assert.equal(request.volumes.some((volume) => volume.name === "cube_rootfs_rw"), false);
+  assert.equal(request.containers[0].volume_mounts.some((mount) => mount.name === "cube_rootfs_rw"), false);
 });
 
 test("cube request can launch without a host mount", async () => {
@@ -215,10 +213,8 @@ test("world disk size update is saved for later CubeSandbox requests", async () 
   assert.equal(result.world.backendConfig.cubeRequest.annotations["cube.master.rootfs.writable_layer_size"], "3G");
   assert.equal(result.world.backendConfig.cubeRequest.annotations["cube.master.system_disk_size"], "3");
   assert.equal(result.world.backendConfig.cubeRequest.containers[0].annotations["cube.master.rootfs.writable_layer_size"], "3G");
-  const rootVolume = result.world.backendConfig.cubeRequest.volumes.find((volume) => volume.name === "cube_rootfs_rw");
-  assert.equal(rootVolume.volume_source.empty_dir.size_limit, "3G");
-  const rootMount = result.world.backendConfig.cubeRequest.containers[0].volume_mounts.find((mount) => mount.name === "cube_rootfs_rw");
-  assert.equal(rootMount.container_path, "/");
+  assert.equal(result.world.backendConfig.cubeRequest.volumes.some((volume) => volume.name === "cube_rootfs_rw"), false);
+  assert.equal(result.world.backendConfig.cubeRequest.containers[0].volume_mounts.some((mount) => mount.name === "cube_rootfs_rw"), false);
 });
 
 test("world network update recreates the CubeSandbox request when requested", async () => {

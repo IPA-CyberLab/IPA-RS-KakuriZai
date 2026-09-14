@@ -27,8 +27,8 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
   );
   const writableLayerSize = cubeConfig.writableLayerSize || world.backendConfig?.writableLayerSize || null;
   const writableLayerRequestAnnotations = writableLayerAnnotations(writableLayerSize);
-  const volumes = volumesForMounts(mounts, world, { writableLayerSize });
-  const volumeMounts = volumeMountsForMounts(mounts, world, { writableLayerSize });
+  const volumes = volumesForMounts(mounts, world);
+  const volumeMounts = volumeMountsForMounts(mounts, world);
   const primaryMount = mounts[0] || null;
   const request = {
     requestID: `kakurizai-${world.id}`,
@@ -308,11 +308,8 @@ function withReplicationHydration(setup, replication = {}, paths) {
   ].join("; ");
 }
 
-function volumesForMounts(mounts, world, options = {}) {
+function volumesForMounts(mounts, world) {
   const volumes = [];
-  if (options.writableLayerSize) {
-    volumes.push(rootfsWritableVolume(options.writableLayerSize));
-  }
   if (!mounts.length) return volumes;
   if (mounts.some((mount) => mount.mode === "agctl-overlay")) {
     volumes.push(
@@ -328,11 +325,8 @@ function volumesForMounts(mounts, world, options = {}) {
   return volumes;
 }
 
-function volumeMountsForMounts(mounts, world, options = {}) {
+function volumeMountsForMounts(mounts, world) {
   const volumeMounts = [];
-  if (options.writableLayerSize) {
-    volumeMounts.push({ name: "cube_rootfs_rw", container_path: "/" });
-  }
   if (!mounts.length) return volumeMounts;
   if (mounts.some((mount) => mount.mode === "agctl-overlay")) {
     volumeMounts.push(
@@ -359,17 +353,6 @@ function volumeMountsForMounts(mounts, world, options = {}) {
     }
   }
   return volumeMounts;
-}
-
-function rootfsWritableVolume(sizeLimit) {
-  return {
-    name: "cube_rootfs_rw",
-    volume_source: {
-      empty_dir: {
-        size_limit: sizeLimit
-      }
-    }
-  };
 }
 
 function sizeToGi(value) {

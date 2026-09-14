@@ -49,7 +49,7 @@ export function defaultConfig(home = defaultHome()) {
       authorizationParams: process.env.KAKURIZAI_KEYCLOAK_ACR_VALUES
         ? { acr_values: process.env.KAKURIZAI_KEYCLOAK_ACR_VALUES }
         : {},
-      sessionTtlSeconds: 8 * 60 * 60,
+      sessionTtlSeconds: Number(process.env.KAKURIZAI_SESSION_TTL_SECONDS || 7 * 24 * 60 * 60),
       maxLoginAttempts: 12,
       persistSessions: true,
       sessionFile: path.join(home, "auth", "studio-sessions.json"),

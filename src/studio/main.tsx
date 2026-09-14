@@ -165,6 +165,13 @@ type CubeTemplate = {
   detailError?: string;
 };
 
+type TerraformLaunchTemplate = {
+  id: string;
+  displayName: string;
+  description: string;
+  activeVersion: string;
+};
+
 type CubeNode = {
   id: string;
   nodeId: string;
@@ -572,6 +579,7 @@ function App() {
   const [token] = React.useState("");
   const [session, setSession] = React.useState<string | null>(null);
   const [sessionDetails, setSessionDetails] = React.useState<SessionResponse | null>(null);
+  const [sessionChecked, setSessionChecked] = React.useState(false);
   const [, setCsrfToken] = React.useState(() => sessionStorage.getItem("kakurizai.csrf") || "");
   const [theme, setTheme] = React.useState<ThemeMode>(() => localStorage.getItem("kakurizai.theme") === "dark" ? "dark" : "light");
   const [worlds, setWorlds] = React.useState<World[]>([]);
@@ -586,12 +594,13 @@ function App() {
   const [networkProbe, setNetworkProbe] = React.useState<NetworkProbePlan | null>(null);
   const [activeView, setActiveView] = React.useState<AppView>("sandboxes");
   const [sandboxPage, setSandboxPage] = React.useState<SandboxPage>("list");
-  const [actionMenuOpen, setActionMenuOpen] = React.useState(false);
   const [launchMenuOpen, setLaunchMenuOpen] = React.useState(false);
   const activityMenuRef = React.useRef<HTMLButtonElement | null>(null);
-  const actionMenuRef = React.useRef<HTMLElement | null>(null);
   const launchMenuRef = React.useRef<HTMLFormElement | null>(null);
   const [formMessage, setFormMessage] = React.useState("");
+  const [launchTemplates, setLaunchTemplates] = React.useState<TerraformLaunchTemplate[]>([]);
+  const [launchTemplateId, setLaunchTemplateId] = React.useState("");
+  const [launchTemplatesLoading, setLaunchTemplatesLoading] = React.useState(false);
   const [search, setSearch] = React.useState("");
   const [stateFilter, setStateFilter] = React.useState<StateFilter>("all");
   const [launch, setLaunch] = React.useState({
@@ -643,7 +652,10 @@ function App() {
   React.useEffect(() => {
     api<AuthConfig>("/api/auth/config", { token: null })
       .then(setAuthConfig)
-      .catch((error) => setStatus(error.message));
+      .catch((error) => {
+        setStatus(error.message);
+        setSessionChecked(true);
+      });
   }, []);
 
   React.useEffect(() => {
@@ -652,10 +664,9 @@ function App() {
   }, [authConfig]);
 
   React.useEffect(() => {
-    if (!actionMenuOpen && !launchMenuOpen) return;
+    if (!launchMenuOpen) return;
 
     function closeMenus() {
-      setActionMenuOpen(false);
       setLaunchMenuOpen(false);
     }
 
@@ -663,7 +674,6 @@ function App() {
       const target = event.target as Node | null;
       if (!target) return;
       if (activityMenuRef.current?.contains(target)) return;
-      if (actionMenuRef.current?.contains(target)) return;
       if (launchMenuRef.current?.contains(target)) return;
       closeMenus();
     }
@@ -678,27 +688,31 @@ function App() {
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [actionMenuOpen, launchMenuOpen]);
+  }, [launchMenuOpen]);
 
   async function refresh() {
     setBusy(true);
+    let authenticated = false;
     try {
-      const [sessionResult, worldsResult, cubeResult, nodesResult, metricsResult, tracesResult] = await Promise.all([
-        api<SessionResponse>("/api/session", { token }),
+      const sessionResult = await api<SessionResponse>("/api/session", { token });
+      authenticated = true;
+      const nextCsrfToken = sessionResult.csrfToken || "";
+      if (nextCsrfToken) {
+        sessionStorage.setItem("kakurizai.csrf", nextCsrfToken);
+        setCsrfToken(nextCsrfToken);
+      }
+      setSession(sessionResult.user.subject);
+      setSessionDetails(sessionResult);
+      setSessionChecked(true);
+
+      const [worldsResult, cubeResult, nodesResult, metricsResult, tracesResult] = await Promise.all([
         api<World[]>("/api/worlds", { token }),
         api<CubeInspect>("/api/cube/inspect", { token }),
         api<ClusterNode[]>("/api/cluster/nodes", { token }),
         api<ObservabilitySnapshot>("/api/observability/metrics", { token }),
         api<TraceSession[]>("/api/observability/traces", { token })
       ]);
-      const nextCsrfToken = (sessionResult as { csrfToken?: string | null }).csrfToken || "";
-      if (nextCsrfToken) {
-        sessionStorage.setItem("kakurizai.csrf", nextCsrfToken);
-        setCsrfToken(nextCsrfToken);
-      }
       const nextInventory = buildInventory(worldsResult, cubeResult);
-      setSession(sessionResult.user.subject);
-      setSessionDetails(sessionResult);
       setWorlds(worldsResult);
       setCube(cubeResult);
       setClusterNodes(nodesResult);
@@ -707,7 +721,7 @@ function App() {
       setSelectedId((current) => nextInventory.some((row) => row.key === current) ? current : nextInventory[0]?.key || null);
       setStatus(`${nextInventory.length} Sandbox${nextInventory.length === 1 ? "" : "es"} / ${cubeResult.sandboxes.length} runtime`);
     } catch (error) {
-      if (authConfig?.requiresRedirect) {
+      if (authConfig?.requiresRedirect && !authenticated) {
         setSession(null);
         setSessionDetails(null);
         setCsrfToken("");
@@ -715,6 +729,7 @@ function App() {
       }
       setStatus(error instanceof Error ? error.message : String(error));
     } finally {
+      setSessionChecked(true);
       setBusy(false);
     }
   }
@@ -739,15 +754,19 @@ function App() {
   }
 
   async function openCreateMenu() {
-    setActionMenuOpen(false);
     setLaunchMenuOpen(true);
     setFormMessage("");
-    if (launch.hostMount && !browser) {
-      try {
-        await browse(activeLaunchMount().sourcePath || "/home/mizuame", browserMountIndex);
-      } catch (error) {
-        setFormMessage(error instanceof Error ? error.message : String(error));
-      }
+    setLaunchTemplatesLoading(true);
+    try {
+      const templates = await api<TerraformLaunchTemplate[]>("/api/terraform/templates", { token });
+      setLaunchTemplates(templates);
+      setLaunchTemplateId((current) => templates.some((template) => template.id === current)
+        ? current
+        : templates[0]?.id || "");
+    } catch (error) {
+      setFormMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLaunchTemplatesLoading(false);
     }
   }
 
@@ -795,71 +814,22 @@ function App() {
       setFormMessage("Enter a sandbox name.");
       return;
     }
-    const launchMounts = ensureLaunchMounts(launch.mounts)
-      .filter((mount) => mount.sourcePath.trim())
-      .map((mount) => ({
-        name: mount.name.trim() || suggestMountName(mount.sourcePath),
-        sourcePath: mount.sourcePath.trim(),
-        mode: mount.mode
-      }));
-    if (launch.hostMount && launchMounts.length === 0) {
-      setFormMessage("Choose at least one host folder.");
+    if (!launchTemplateId) {
+      setFormMessage("Select a Terraform template.");
       return;
     }
     setBusy(true);
     setFormMessage("");
     try {
-      const world = await api<World>("/api/worlds", {
+      await api(`/api/terraform/templates/${encodeURIComponent(launchTemplateId)}/deployments`, {
         method: "POST",
         token,
-        body: {
-          name: launch.name.trim(),
-          sourcePath: launch.hostMount ? launchMounts[0]?.sourcePath : undefined,
-          mounts: launch.hostMount ? launchMounts : undefined,
-          backend: "cube-sandbox-overlay",
-          hostMount: launch.hostMount,
-          mountMode: launch.hostMount ? launchMounts[0]?.mode || launch.mountMode : "none",
-          cpu: launch.cpu,
-          memory: launch.memory,
-          writableLayerSize: launch.writableLayerSize,
-          networkType: launch.networkType,
-          network: {
-            type: launch.networkType,
-            mode: launch.networkMode,
-            sandboxIp: launch.sandboxIp,
-            exposedPorts: parsePortList(launch.exposedPorts),
-            dns: {
-              servers: parseCsv(launch.dnsServers),
-              searches: parseCsv(launch.dnsSearches),
-              options: parseCsv(launch.dnsOptions)
-            },
-            allowInternetAccess: launch.allowInternetAccess,
-            allowOut: parseCsv(launch.allowOut),
-            denyOut: parseCsv(launch.denyOut),
-            inbound: {
-              defaultPolicy: launch.inboundDefaultPolicy,
-              allowFrom: parseCsv(launch.inboundAllowFrom),
-              denyFrom: parseCsv(launch.inboundDenyFrom)
-            },
-            rules: egressRuleDraftsToRules(launch.egressRules),
-            vlan: {
-              enabled: launch.vlanEnabled,
-              vlanId: launch.vlanId ? Number(launch.vlanId) : null,
-              hostInterface: launch.vlanHostInterface,
-              bridgeName: launch.vlanBridgeName
-            },
-            nat: {
-              enabled: !launch.vlanEnabled && launch.natEnabled,
-              masquerade: !launch.vlanEnabled && launch.natEnabled,
-              portForwards: natForwardDraftsToForwards(launch.natPortForwards)
-            }
-          }
-        }
+        body: { name: launch.name.trim(), variables: {} }
       });
       setLaunchMenuOpen(false);
-      setSelectedId(`world:${world.id}`);
-      setSandboxPage("detail");
-      await refresh();
+      setSandboxPage("list");
+      setStatus(`Creating ${launch.name.trim()} from Terraform template`);
+      window.setTimeout(() => void refresh(), 1000);
     } catch (error) {
       setFormMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -1170,6 +1140,15 @@ function App() {
 
   const authRequired = Boolean(authConfig?.requiresRedirect);
 
+  if (!authConfig || (authRequired && !sessionChecked)) {
+    return (
+      <div className="appBoot" aria-label="Loading KakuriZai">
+        <strong>KakuriZai</strong>
+        <span>Loading</span>
+      </div>
+    );
+  }
+
   if (authRequired && !session) {
     const expectedSignedOutState = status === "Starting"
       || status === "Sign in required"
@@ -1179,7 +1158,7 @@ function App() {
         <Card className="loginPanel">
           <h1>KakuriZai</h1>
           <p>{expectedSignedOutState ? "Sign in to manage your sandboxes." : status}</p>
-          <Button aria-label="Sign in with Keycloak" className="primary wide" onClick={signIn} disabled={busy}><KeyRound size={16} /> Continue with GitHub</Button>
+          <Button aria-label="Sign in with Keycloak" className="primary wide" onClick={signIn} disabled={busy}><KeyRound size={16} /> Continue with {authConfig?.label || "Keycloak"}</Button>
         </Card>
       </div>
     );
@@ -1217,6 +1196,15 @@ function App() {
           <span className="brandCopy">
             <strong>KakuriZai</strong>
           </span>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="ghost iconButton brandThemeButton"
+            onClick={() => setTheme((value) => value === "dark" ? "light" : "dark")}
+            title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          >
+            {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+          </Button>
         </div>
 
         <nav className="activityNav" aria-label="Primary navigation">
@@ -1227,7 +1215,6 @@ function App() {
             onClick={() => {
               setActiveView("sandboxes");
               setSandboxPage("list");
-              setActionMenuOpen(false);
               setLaunchMenuOpen(false);
             }}
             title="Sandboxes"
@@ -1241,7 +1228,6 @@ function App() {
             className={`activityButton ${activeView === "network" ? "active" : ""}`}
             onClick={() => {
               setActiveView("network");
-              setActionMenuOpen(false);
               setLaunchMenuOpen(false);
             }}
             title="Network"
@@ -1255,7 +1241,6 @@ function App() {
             className={`activityButton ${activeView === "observability" ? "active" : ""}`}
             onClick={() => {
               setActiveView("observability");
-              setActionMenuOpen(false);
               setLaunchMenuOpen(false);
             }}
             title="Observability"
@@ -1272,7 +1257,6 @@ function App() {
             className={`activityButton ${activeView === "terraform" ? "active" : ""}`}
             onClick={() => {
               setActiveView("terraform");
-              setActionMenuOpen(false);
               setLaunchMenuOpen(false);
             }}
             title="Terraform"
@@ -1286,7 +1270,6 @@ function App() {
             className={`activityButton ${activeView === "accounts" ? "active" : ""}`}
             onClick={() => {
               setActiveView("accounts");
-              setActionMenuOpen(false);
               setLaunchMenuOpen(false);
             }}
             title="Accounts"
@@ -1299,27 +1282,28 @@ function App() {
         <Button
           ref={activityMenuRef}
           variant="outline"
-          className={`activityButton activityCreate ${actionMenuOpen || launchMenuOpen ? "active" : ""}`}
-          onClick={() => {
-            setLaunchMenuOpen(false);
-            setActionMenuOpen((value) => !value);
-          }}
-          title="Menu"
+          className={`activityButton activityCreate ${launchMenuOpen ? "active" : ""}`}
+          onClick={() => void openCreateMenu()}
+          title="New sandbox"
         >
           <Plus size={17} weight="bold" />
           <span>New sandbox</span>
         </Button>
 
-      </aside>
+        {authRequired ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="ghost iconButton topSignOut"
+            onClick={() => void signOut()}
+            title="Sign out"
+            aria-label="Sign out"
+          >
+            <LogOut size={17} />
+          </Button>
+        ) : null}
 
-      {actionMenuOpen ? (
-        <section className="actionMenu" ref={actionMenuRef}>
-          <button className="actionMenuItem" onClick={() => void openCreateMenu()} type="button">
-            <Plus size={16} />
-            <span>Create Sandbox</span>
-          </button>
-        </section>
-      ) : null}
+      </aside>
 
       {launchMenuOpen ? (
         <form className="newSandboxMenu" onSubmit={createSandbox} ref={launchMenuRef}>
@@ -1333,7 +1317,21 @@ function App() {
           <label>Name</label>
           <input value={launch.name} onChange={(event) => setLaunch({ ...launch, name: event.target.value })} autoFocus />
 
-          <details className="formDisclosure">
+          <label htmlFor="new-sandbox-template">Terraform template</label>
+          <select
+            id="new-sandbox-template"
+            value={launchTemplateId}
+            onChange={(event) => setLaunchTemplateId(event.target.value)}
+            disabled={launchTemplatesLoading || launchTemplates.length === 0}
+          >
+            {launchTemplatesLoading ? <option value="">Loading templates...</option> : null}
+            {!launchTemplatesLoading && launchTemplates.length === 0 ? <option value="">No templates available</option> : null}
+            {launchTemplates.map((template) => (
+              <option value={template.id} key={template.id}>{template.displayName} ({template.activeVersion})</option>
+            ))}
+          </select>
+
+          <details className="formDisclosure" hidden>
             <summary>
               <span>Customize</span>
               <small>Resources, mounts, and network</small>
@@ -1558,7 +1556,7 @@ function App() {
 
           {formMessage ? <div className="formMessage">{formMessage}</div> : null}
 
-          <button className="primary wide" disabled={busy} type="submit">
+          <button className="primary wide newSandboxSubmit" disabled={busy || launchTemplatesLoading || !launchTemplateId} type="submit">
             <Plus size={16} />
             {busy ? "Creating" : "Create"}
           </button>
@@ -1660,23 +1658,9 @@ function App() {
             </div>
           ) : null}
           <div className="toolbarActions">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="ghost iconButton"
-              onClick={() => setTheme((value) => value === "dark" ? "light" : "dark")}
-              title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-            >
-              {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
-            </Button>
             <Button variant="ghost" size="icon" className="ghost iconButton" onClick={() => void refresh()} title="Refresh" disabled={busy}>
               <RefreshCcw size={16} />
             </Button>
-            {authRequired ? (
-              <Button variant="ghost" size="icon" className="ghost iconButton" onClick={() => void signOut()} title="Sign out">
-                <LogOut size={16} />
-              </Button>
-            ) : null}
             {isObservabilityView ? (
               <Button variant="outline" className="ghost" onClick={() => void refresh()} title="Refresh metrics" disabled={busy}>
                 <Activity size={16} />

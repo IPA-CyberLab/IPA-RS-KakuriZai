@@ -9,6 +9,7 @@ import {
   FileCode as FileCode2,
   SignOut as LogOut,
   Monitor,
+  PencilSimple as Pencil,
   Plus,
   Rocket,
   FloppyDisk as Save,
@@ -155,6 +156,52 @@ type TerraformTemplateDetail = TerraformTemplate & {
   files: Record<string, string>;
   sourceFiles: Array<{ path: string; size: number; text: boolean }>;
 };
+
+type TerraformTemplateBuilder = {
+  baseTemplate: string;
+  cpu: string;
+  memory: string;
+  writableLayerSize: string;
+  networkType: string;
+  allowInternetAccess: boolean;
+  kubernetesEnabled: boolean;
+  startupScript: string;
+};
+
+type TerraformTemplateEditor = {
+  templateId?: string;
+  storeName?: string;
+  name: string;
+  displayName: string;
+  description: string;
+  mode: "builder" | "hcl";
+  builder: TerraformTemplateBuilder;
+  mainTf: string;
+};
+
+function builderFromTemplate(detail: TerraformTemplateDetail): TerraformTemplateBuilder | null {
+  const parameters = new Map(detail.parameters.map((parameter) => [parameter.name, parameter]));
+  const required = ["base_template", "cpu", "memory", "disk_size", "startup_script", "network_type", "allow_internet_access", "kubernetes_enabled"];
+  if (!required.every((name) => parameters.has(name))) return null;
+  const stringValue = (name: string, fallback: string) => {
+    const value = parameters.get(name)?.default;
+    return typeof value === "string" ? value : fallback;
+  };
+  const booleanValue = (name: string, fallback: boolean) => {
+    const value = parameters.get(name)?.default;
+    return typeof value === "boolean" ? value : fallback;
+  };
+  return {
+    baseTemplate: stringValue("base_template", ""),
+    cpu: stringValue("cpu", "2000m"),
+    memory: stringValue("memory", "2000Mi"),
+    writableLayerSize: stringValue("disk_size", "2G"),
+    networkType: stringValue("network_type", "tap"),
+    allowInternetAccess: booleanValue("allow_internet_access", true),
+    kubernetesEnabled: booleanValue("kubernetes_enabled", false),
+    startupScript: stringValue("startup_script", "")
+  };
+}
 
 function ManagementDisclosure({
   icon,
@@ -444,7 +491,8 @@ export function TerraformWorkspace({
   const [templateDetail, setTemplateDetail] = React.useState<TerraformTemplateDetail | null>(null);
   const [templateValues, setTemplateValues] = React.useState<Record<string, unknown>>({});
   const [instanceName, setInstanceName] = React.useState("");
-  const [editor, setEditor] = React.useState<null | { name: string; displayName: string; description: string; mainTf: string }>(null);
+  const [editor, setEditor] = React.useState<TerraformTemplateEditor | null>(null);
+  const [renderingHcl, setRenderingHcl] = React.useState(false);
   const [selectedWorldId, setSelectedWorldId] = React.useState(worlds[0]?.id || "");
   const [preview, setPreview] = React.useState<TerraformPreview | null>(null);
   const [previewFile, setPreviewFile] = React.useState("main.tf");
@@ -549,8 +597,36 @@ export function TerraformWorkspace({
     ? run.templateId === selectedTemplateId
     : !run.templateId && (!selectedWorldId || run.worldId === selectedWorldId));
   const selectedRun = overview?.runs.find((run) => run.id === selectedRunId) || scopedRuns[0] || null;
-  const sourceFiles = mode === "templates" ? templateDetail?.files || {} : preview?.files || {};
+  const sourceFiles = editor
+    ? { "main.tf": editor.mainTf }
+    : mode === "templates" ? templateDetail?.files || {} : preview?.files || {};
   const terraformReady = Boolean(overview?.terraform.installed);
+  const builderKey = editor?.mode === "builder" ? JSON.stringify(editor.builder) : "";
+
+  React.useEffect(() => {
+    if (!editor || editor.mode !== "builder") return;
+    let canceled = false;
+    setRenderingHcl(true);
+    const timer = window.setTimeout(() => {
+      apiClient<{ files: Record<string, string> }>("/api/terraform/templates/render", {
+        method: "POST",
+        body: editor.builder
+      }).then((rendered) => {
+        if (canceled) return;
+        setEditor((current) => current?.mode === "builder"
+          ? { ...current, mainTf: rendered.files["main.tf"] || current.mainTf }
+          : current);
+      }).catch((error) => {
+        if (!canceled) setMessage(`Error: ${error instanceof Error ? error.message : String(error)}`);
+      }).finally(() => {
+        if (!canceled) setRenderingHcl(false);
+      });
+    }, 220);
+    return () => {
+      canceled = true;
+      window.clearTimeout(timer);
+    };
+  }, [apiClient, builderKey]);
 
   React.useEffect(() => {
     const names = Object.keys(sourceFiles);
@@ -618,8 +694,48 @@ export function TerraformWorkspace({
     setBusy(true);
     setMessage("");
     try {
-      const starter = await apiClient<{ files: Record<string, string> }>("/api/terraform/templates/starter");
-      setEditor({ name: "developer-sandbox", displayName: "Developer sandbox", description: "", mainTf: starter.files["main.tf"] || "" });
+      const starter = await apiClient<{ builder: TerraformTemplateBuilder; files: Record<string, string> }>("/api/terraform/templates/starter");
+      setEditor({
+        name: "custom-sandbox",
+        displayName: "Custom sandbox",
+        description: "",
+        mode: "builder",
+        builder: starter.builder,
+        mainTf: starter.files["main.tf"] || ""
+      });
+    } catch (error) {
+      setMessage(`Error: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openEditTemplate() {
+    if (!templateDetail || templateDetail.id !== selectedTemplateId) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const starter = await apiClient<{ builder: TerraformTemplateBuilder; files: Record<string, string> }>("/api/terraform/templates/starter");
+      const currentSource = templateDetail.files["main.tf"] || "";
+      const detectedBuilder = builderFromTemplate(templateDetail);
+      let editorMode: "builder" | "hcl" = "hcl";
+      if (detectedBuilder) {
+        const rendered = await apiClient<{ files: Record<string, string> }>("/api/terraform/templates/render", {
+          method: "POST",
+          body: detectedBuilder
+        });
+        if ((rendered.files["main.tf"] || "").trim() === currentSource.trim()) editorMode = "builder";
+      }
+      setEditor({
+        templateId: templateDetail.id,
+        storeName: templateDetail.name,
+        name: templateDetail.slug,
+        displayName: templateDetail.displayName,
+        description: templateDetail.description,
+        mode: editorMode,
+        builder: detectedBuilder || starter.builder,
+        mainTf: currentSource
+      });
     } catch (error) {
       setMessage(`Error: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -633,10 +749,12 @@ export function TerraformWorkspace({
     setBusy(true);
     setMessage("");
     try {
+      const updating = Boolean(editor.templateId);
       const saved = await apiClient<TerraformTemplate>("/api/terraform/templates", {
-        method: "POST",
+        method: updating ? "PUT" : "POST",
         body: {
-          name: editor.name.trim(),
+          name: editor.storeName || editor.name.trim(),
+          slug: editor.name.trim(),
           displayName: editor.displayName.trim() || editor.name.trim(),
           description: editor.description.trim(),
           files: { "main.tf": editor.mainTf }
@@ -645,12 +763,21 @@ export function TerraformWorkspace({
       setEditor(null);
       setSelectedTemplateId(saved.id);
       await refreshOverview();
-      setMessage(`${saved.displayName} ${saved.activeVersion} published`);
+      const refreshed = await apiClient<TerraformTemplateDetail>(`/api/terraform/templates/${encodeURIComponent(saved.id)}`);
+      setTemplateDetail(refreshed);
+      setPreviewFile("main.tf");
+      setMessage(`${saved.displayName} ${saved.activeVersion} ${updating ? "updated" : "published"}`);
     } catch (error) {
       setMessage(`Error: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setBusy(false);
     }
+  }
+
+  function updateBuilder(patch: Partial<TerraformTemplateBuilder>) {
+    setEditor((current) => current
+      ? { ...current, builder: { ...current.builder, ...patch } }
+      : current);
   }
 
   async function deployTemplate(event: React.FormEvent) {
@@ -703,27 +830,73 @@ export function TerraformWorkspace({
           {editor ? (
             <form className="templateEditor" onSubmit={saveTemplate}>
               <header className="settingsCardHeading splitHeading">
-                <div><strong>New template</strong><span>Standard Terraform variables become launch fields.</span></div>
+                <div><strong>{editor.templateId ? "Edit template" : "New template"}</strong><span>{editor.templateId ? "Publish changes as a new version." : "Standard Terraform variables become launch fields."}</span></div>
                 <Button variant="ghost" size="sm" type="button" onClick={() => setEditor(null)}>Cancel</Button>
               </header>
               <div className="templateMetadataFields">
-                <div><label>Slug</label><Input value={editor.name} onChange={(event) => setEditor({ ...editor, name: event.target.value })} /></div>
+                <div><label>Slug</label><Input value={editor.name} onChange={(event) => setEditor({ ...editor, name: event.target.value })} disabled={Boolean(editor.templateId)} /></div>
                 <div><label>Display name</label><Input value={editor.displayName} onChange={(event) => setEditor({ ...editor, displayName: event.target.value })} /></div>
               </div>
               <div><label>Description</label><Input value={editor.description} onChange={(event) => setEditor({ ...editor, description: event.target.value })} placeholder="What this sandbox provides" /></div>
-              <div><label htmlFor="terraform-template-source">main.tf</label><textarea id="terraform-template-source" className="templateSourceEditor" value={editor.mainTf} onChange={(event) => setEditor({ ...editor, mainTf: event.target.value })} spellCheck={false} /></div>
-              <div className="terraformActions"><Button type="submit" disabled={busy || !editor.name.trim() || !editor.mainTf.trim()}><Save size={15} /> Publish template</Button></div>
+              <div className="templateEditorMode" role="tablist" aria-label="Template editing mode">
+                <button className={editor.mode === "builder" ? "active" : ""} onClick={() => setEditor({ ...editor, mode: "builder" })} role="tab" aria-selected={editor.mode === "builder"} type="button">Builder</button>
+                <button className={editor.mode === "hcl" ? "active" : ""} onClick={() => setEditor({ ...editor, mode: "hcl" })} role="tab" aria-selected={editor.mode === "hcl"} type="button">HCL</button>
+              </div>
+              {editor.mode === "builder" ? (
+                <div className="templateBuilder">
+                  <div className="templateBuilderGrid">
+                    <div>
+                      <label htmlFor="builder-base-template">Base template</label>
+                      <Input id="builder-base-template" value={editor.builder.baseTemplate} onChange={(event) => updateBuilder({ baseTemplate: event.target.value })} />
+                    </div>
+                    <div>
+                      <label htmlFor="builder-cpu">CPU</label>
+                      <select id="builder-cpu" value={editor.builder.cpu} onChange={(event) => updateBuilder({ cpu: event.target.value })}>
+                        <option value="1000m">1 vCPU</option><option value="2000m">2 vCPU</option><option value="4000m">4 vCPU</option><option value="6000m">6 vCPU</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label htmlFor="builder-memory">Memory</label>
+                      <select id="builder-memory" value={editor.builder.memory} onChange={(event) => updateBuilder({ memory: event.target.value })}>
+                        <option value="1000Mi">1 GB</option><option value="2000Mi">2 GB</option><option value="4000Mi">4 GB</option><option value="8000Mi">8 GB</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label htmlFor="builder-disk">Disk</label>
+                      <select id="builder-disk" value={editor.builder.writableLayerSize} onChange={(event) => updateBuilder({ writableLayerSize: event.target.value })}>
+                        <option value="2G">2 GB</option><option value="4G">4 GB</option><option value="8G">8 GB</option><option value="16G">16 GB</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="templateBuilderToggles">
+                    <label><input type="checkbox" checked={editor.builder.allowInternetAccess} onChange={(event) => updateBuilder({ allowInternetAccess: event.target.checked })} /><span><strong>Internet access</strong><small>Allow outbound public network access</small></span></label>
+                    <label><input type="checkbox" checked={editor.builder.kubernetesEnabled} onChange={(event) => updateBuilder({ kubernetesEnabled: event.target.checked })} /><span><strong>Kubernetes</strong><small>Install the standalone cluster profile</small></span></label>
+                  </div>
+                  <div>
+                    <label htmlFor="builder-startup-script">Startup script</label>
+                    <textarea id="builder-startup-script" className="templateStartupEditor" value={editor.builder.startupScript} onChange={(event) => updateBuilder({ startupScript: event.target.value })} spellCheck={false} />
+                  </div>
+                </div>
+              ) : (
+                <div><label htmlFor="terraform-template-source">main.tf</label><textarea id="terraform-template-source" className="templateSourceEditor" value={editor.mainTf} onChange={(event) => setEditor({ ...editor, mainTf: event.target.value })} spellCheck={false} /></div>
+              )}
+              <div className="terraformActions">
+                <Button type="submit" disabled={busy || renderingHcl || !editor.name.trim() || !editor.mainTf.trim()}><Save size={15} /> {renderingHcl ? "Generating HCL" : editor.templateId ? "Publish changes" : "Publish template"}</Button>
+              </div>
             </form>
           ) : (
             <>
               <div className="templatePickerRow">
-                <div>
+                <div className="templatePickerControl">
                   <label htmlFor="terraform-template">Template</label>
                   <select id="terraform-template" value={selectedTemplateId} onChange={(event) => { setSelectedTemplateId(event.target.value); setInstanceName(""); setSelectedRunId(""); }}>
                     {templates.map((template) => <option value={template.id} key={template.id}>{template.displayName}</option>)}
                   </select>
                 </div>
-                <Button variant="outline" onClick={() => void openNewTemplate()} disabled={busy}><Plus size={15} /> New template</Button>
+                <div className="templatePickerActions">
+                  <Button variant="outline" onClick={() => void openEditTemplate()} disabled={busy || !selectedTemplate || templateDetail?.id !== selectedTemplate.id}><Pencil size={15} /> Edit template</Button>
+                  <Button variant="outline" onClick={() => void openNewTemplate()} disabled={busy}><Plus size={15} /> New template</Button>
+                </div>
               </div>
               {!selectedTemplate ? (
                 <div className="templateEmptyState">

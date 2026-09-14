@@ -18,6 +18,18 @@ export class SandboxTemplateStore {
     await ensureDir(this.root);
   }
 
+  async ensureDefault(options = {}) {
+    await this.init();
+    const existing = (await this.listMetadata()).find((template) => template.slug === "default-sandbox");
+    if (existing) return publicTemplate(existing);
+    return this.push({
+      name: "default-sandbox",
+      displayName: "Default sandbox",
+      description: "Standard isolated development sandbox",
+      files: { "main.tf": starterSandboxTemplate(options) }
+    });
+  }
+
   async list() {
     await this.init();
     const entries = await fs.readdir(this.root, { withFileTypes: true });
@@ -171,6 +183,14 @@ export function starterSandboxTemplate(options = {}) {
   const cpu = JSON.stringify(String(options.cpu || "2000m"));
   const memory = JSON.stringify(String(options.memory || "2000Mi"));
   const disk = JSON.stringify(String(options.writableLayerSize || "2G"));
+  const networkType = JSON.stringify(String(options.networkType || "tap"));
+  const allowInternetAccess = options.allowInternetAccess !== false;
+  const kubernetesEnabled = options.kubernetesEnabled === true;
+  const startupScript = JSON.stringify(String(options.startupScript ?? [
+    "set -eu",
+    "mkdir -p /workspace",
+    "printf '%s\\n' 'hello from KakuriZai' > /workspace/README.txt"
+  ].join("\n")));
   return `terraform {
   required_version = ">= 1.4.0"
 }
@@ -207,10 +227,25 @@ variable "disk_size" {
 variable "startup_script" {
   description = "Runs once after the sandbox is ready"
   type        = string
-  default     = <<-EOT
-    mkdir -p /workspace
-    printf '%s\\n' 'hello from KakuriZai' > /workspace/README.txt
-  EOT
+  default     = ${startupScript}
+}
+
+variable "network_type" {
+  description = "CubeSandbox network type"
+  type        = string
+  default     = ${networkType}
+}
+
+variable "allow_internet_access" {
+  description = "Allow outbound internet access"
+  type        = bool
+  default     = ${allowInternetAccess}
+}
+
+variable "kubernetes_enabled" {
+  description = "Install the standalone Kubernetes profile"
+  type        = bool
+  default     = ${kubernetesEnabled}
 }
 
 module "sandbox" {
@@ -222,10 +257,16 @@ module "sandbox" {
   memory           = var.memory
   disk_size        = var.disk_size
   startup_script   = var.startup_script
-  network          = { type = "tap" }
+  network = {
+    type                = var.network_type
+    allowInternetAccess = var.allow_internet_access
+  }
   host_mounts      = []
-  kubernetes       = { enabled = false }
-  labels           = { "kakurizai.managed-by" = "terraform-template" }
+  kubernetes       = { enabled = var.kubernetes_enabled }
+  labels = {
+    "kakurizai.profile"    = "default-sandbox"
+    "kakurizai.managed-by" = "terraform-template"
+  }
 }
 
 output "sandbox_name" {

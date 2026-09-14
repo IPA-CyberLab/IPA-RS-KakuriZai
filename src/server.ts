@@ -42,6 +42,12 @@ export async function startStudio(config) {
   await terraform.load();
   const templates = new SandboxTemplateStore(config);
   await templates.init();
+  await templates.ensureDefault({
+    baseTemplate: config.cube?.template,
+    cpu: config.cube?.cpu,
+    memory: config.cube?.memory,
+    writableLayerSize: config.cube?.writableLayerSize
+  });
   const audit = new AuditLog(config);
   await audit.load();
   const devAccess = new DevAccessManager(config);
@@ -449,7 +455,7 @@ class StudioSessionStore {
     this.sessions = new Map();
     this.loginAttempts = new Map();
     this.oidcStates = new Map();
-    this.ttlMs = Number(config.auth.sessionTtlSeconds || 8 * 60 * 60) * 1000;
+    this.ttlMs = Number(config.auth.sessionTtlSeconds || 7 * 24 * 60 * 60) * 1000;
     this.maxLoginAttempts = Number(config.auth.maxLoginAttempts || 12);
     this.persist = config.auth.persistSessions !== false;
     this.file = config.auth.sessionFile || path.join(securityBaseDir(config), "auth", "studio-sessions.json");
@@ -463,9 +469,13 @@ class StudioSessionStore {
       const sessions = Array.isArray(raw.sessions) ? raw.sessions : [];
       const now = Date.now();
       for (const session of sessions) {
-        if (session?.id && session?.csrfToken && session?.user && session.expiresAt > now) {
+        const createdAt = Date.parse(session?.createdAt || "");
+        const configuredExpiry = Number.isFinite(createdAt) ? createdAt + this.ttlMs : 0;
+        const expiresAt = Math.max(Number(session?.expiresAt || 0), configuredExpiry);
+        if (session?.id && session?.csrfToken && session?.user && expiresAt > now) {
           this.sessions.set(session.id, {
             ...session,
+            expiresAt,
             createdAt: session.createdAt || new Date(now).toISOString(),
             lastSeenAt: session.lastSeenAt || session.createdAt || new Date(now).toISOString(),
             ip: session.ip || null,
@@ -1372,7 +1382,7 @@ async function api(config, devAccess, sessions, accounts, terraform, templates, 
         lastSeenAt: request.authSession.lastSeenAt,
         expiresAt: new Date(request.authSession.expiresAt).toISOString()
       } : null
-    });
+    }, 200, request.authSession ? { "set-cookie": sessionCookie(config, request, request.authSession) } : {});
   }
   if (request.method === "GET" && url.pathname === "/api/account") {
     authorize(config, request, "studio:read");
@@ -1418,13 +1428,37 @@ async function api(config, devAccess, sessions, accounts, terraform, templates, 
   }
   if (request.method === "GET" && url.pathname === "/api/terraform/templates/starter") {
     authorize(config, request, "terraform:read");
+    const builder = {
+      baseTemplate: config.cube?.template || "",
+      cpu: config.cube?.cpu || "2000m",
+      memory: config.cube?.memory || "2000Mi",
+      writableLayerSize: config.cube?.writableLayerSize || "2G",
+      networkType: "tap",
+      allowInternetAccess: true,
+      kubernetesEnabled: false,
+      startupScript: "set -eu\nmkdir -p /workspace\nprintf '%s\\n' 'hello from KakuriZai' > /workspace/README.txt"
+    };
+    return sendJson(request, response, {
+      builder,
+      files: {
+        "main.tf": starterSandboxTemplate(builder)
+      }
+    });
+  }
+  if (request.method === "POST" && url.pathname === "/api/terraform/templates/render") {
+    authorize(config, request, "terraform:write");
+    const input = await readBody(request);
     return sendJson(request, response, {
       files: {
         "main.tf": starterSandboxTemplate({
-          baseTemplate: config.cube?.template,
-          cpu: config.cube?.cpu,
-          memory: config.cube?.memory,
-          writableLayerSize: config.cube?.writableLayerSize
+          baseTemplate: input.baseTemplate || config.cube?.template,
+          cpu: input.cpu,
+          memory: input.memory,
+          writableLayerSize: input.writableLayerSize,
+          networkType: input.networkType,
+          allowInternetAccess: input.allowInternetAccess,
+          kubernetesEnabled: input.kubernetesEnabled,
+          startupScript: input.startupScript
         })
       }
     });

@@ -1046,31 +1046,15 @@ function updateCubeRequestWritableLayer(world, writableLayerSize) {
     ...(request.annotations || {}),
     ...writableLayerAnnotations(writableLayerSize)
   };
-  request.volumes = request.volumes || [];
-  let rootfsVolume = request.volumes.find((volume) => volume?.name === "cube_rootfs_rw");
-  if (!rootfsVolume) {
-    rootfsVolume = {
-      name: "cube_rootfs_rw",
-      volume_source: {
-        empty_dir: {}
-      }
-    };
-    request.volumes.unshift(rootfsVolume);
-  }
-  rootfsVolume.volume_source = rootfsVolume.volume_source || {};
-  rootfsVolume.volume_source.empty_dir = {
-    ...(rootfsVolume.volume_source.empty_dir || {}),
-    size_limit: writableLayerSize
-  };
+  // The selected CubeSandbox template owns the rootfs volume and mount.
+  request.volumes = (request.volumes || []).filter((volume) => volume?.name !== "cube_rootfs_rw");
   for (const container of request.containers || []) {
     container.annotations = {
       ...(container.annotations || {}),
       "cube.master.rootfs.writable_layer_size": writableLayerSize
     };
-    container.volume_mounts = container.volume_mounts || [];
-    if (!container.volume_mounts.some((mount) => mount?.name === "cube_rootfs_rw" && mount?.container_path === "/")) {
-      container.volume_mounts.unshift({ name: "cube_rootfs_rw", container_path: "/" });
-    }
+    container.volume_mounts = (container.volume_mounts || [])
+      .filter((mount) => !(mount?.name === "cube_rootfs_rw" && mount?.container_path === "/"));
   }
 }
 

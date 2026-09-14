@@ -462,6 +462,14 @@ label {
   padding: 0 8px;
 }
 
+button.brandThemeButton {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  margin-left: 2px;
+}
+
 .brandMark {
   width: 34px;
   min-width: 34px;
@@ -600,6 +608,10 @@ button.activityCreate {
 .newSandboxMenu > header strong {
   font-size: 16px;
   letter-spacing: -0.02em;
+}
+
+.newSandboxSubmit {
+  margin-top: 18px;
 }
 
 .folderBrowser,
@@ -2127,6 +2139,21 @@ button.activityCreate {
   padding-inline: 14px;
 }
 
+button.topSignOut {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  min-height: 36px;
+  margin-left: 6px;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  color: var(--muted-foreground);
+}
+
+button.topSignOut:hover {
+  color: var(--foreground);
+}
+
 button.activityCreate svg {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -2988,12 +3015,18 @@ button.activityCreate.active {
   gap: 14px;
 }
 
-.templatePickerRow > div {
+.templatePickerRow > .templatePickerControl {
   width: min(420px, 100%);
 }
 
 .templatePickerRow select {
   width: 100%;
+}
+
+.templatePickerActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .templateLaunchLayout {
@@ -3134,6 +3167,101 @@ button.activityCreate.active {
   gap: 12px;
 }
 
+.templateEditorMode {
+  display: inline-flex;
+  width: fit-content;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 2px;
+}
+
+.templateEditorMode button {
+  min-width: 76px;
+  min-height: 30px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 620;
+}
+
+.templateEditorMode button.active {
+  background: var(--secondary);
+  color: var(--foreground);
+}
+
+.templateBuilder {
+  display: grid;
+  gap: 16px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+.templateBuilderGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.templateBuilderGrid > div,
+.templateBuilder > div:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.templateBuilderGrid select {
+  width: 100%;
+}
+
+.templateBuilderGrid > div:first-child {
+  grid-column: span 2;
+}
+
+.templateBuilderToggles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-block: 1px solid var(--border);
+}
+
+.templateBuilderToggles label {
+  min-height: 62px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.templateBuilderToggles label + label {
+  border-left: 1px solid var(--border);
+}
+
+.templateBuilderToggles span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.templateBuilderToggles strong,
+.templateBuilderToggles small {
+  font-size: 11px;
+}
+
+.templateBuilderToggles small {
+  color: var(--muted-foreground);
+  line-height: 1.35;
+}
+
+.templateStartupEditor {
+  width: 100%;
+  min-height: 124px;
+  resize: vertical;
+  padding: 12px;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
 .templateSourceEditor {
   width: 100%;
   height: min(440px, 48vh);
@@ -3157,8 +3285,10 @@ button.activityCreate.active {
     flex-direction: column;
   }
 
-  .templatePickerRow > div,
+  .templatePickerRow > .templatePickerControl,
   .templatePickerRow > button,
+  .templatePickerActions,
+  .templatePickerActions > button,
   .templateLaunchForm > button {
     width: 100%;
   }
@@ -3167,9 +3297,42 @@ button.activityCreate.active {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .templateBuilderGrid,
+  .templateBuilderToggles {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .templateBuilderGrid > div:first-child {
+    grid-column: auto;
+  }
+
+  .templateBuilderToggles label + label {
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+
   .terraformModeTabs button {
     flex: 1;
     justify-content: center;
     padding-inline: 7px;
   }
+}
+.appBoot {
+  min-height: 100vh;
+  display: grid;
+  place-content: center;
+  gap: 10px;
+  text-align: center;
+  color: var(--foreground);
+  background: var(--background);
+}
+
+.appBoot strong {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.appBoot span {
+  color: var(--muted-foreground);
+  font-size: 13px;
 }

@@ -17,6 +17,18 @@ test("Terraform sandbox templates are versioned and expose standard variables", 
   await fs.writeFile(path.join(source, "main.tf"), starterSandboxTemplate({ baseTemplate: "tpl-base" }), "utf8");
   const store = new SandboxTemplateStore({ storeDir: path.join(tmp, "store") });
 
+  const defaultTemplate = await store.ensureDefault({
+    baseTemplate: "tpl-default",
+    allowInternetAccess: false,
+    kubernetesEnabled: true
+  });
+  const defaultSource = (await store.getWithSource(defaultTemplate.id)).files["main.tf"];
+  assert.equal(defaultTemplate.slug, "default-sandbox");
+  assert.match(defaultSource, /default\s+=\s+"tpl-default"/);
+  assert.match(defaultSource, /default\s+=\s+false/);
+  assert.match(defaultSource, /default\s+=\s+true/);
+  assert.equal((await store.ensureDefault({ baseTemplate: "ignored" })).id, defaultTemplate.id);
+
   const first = await store.push({
     name: "dev-tools",
     displayName: "Developer tools",
