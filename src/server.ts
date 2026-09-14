@@ -380,7 +380,7 @@ class DevAccessManager {
 
   proxyHttp(worldId, request, response, upstreamPath) {
     const session = this.requireVscodeSession(worldId);
-    const headers = { ...request.headers, host: `${session.sandboxIp}:${session.vscodePort}` };
+    const headers = { ...request.headers };
     const upstream = http.request({
       host: session.sandboxIp,
       port: session.vscodePort,
@@ -408,10 +408,9 @@ class DevAccessManager {
     const upstream = net.createConnection({ host: session.sandboxIp, port: session.vscodePort }, () => {
       upstream.write(`${request.method} ${upstreamPath} HTTP/${request.httpVersion}\r\n`);
       for (let index = 0; index < request.rawHeaders.length; index += 2) {
-        if (request.rawHeaders[index].toLowerCase() === "host") continue;
         upstream.write(`${request.rawHeaders[index]}: ${request.rawHeaders[index + 1]}\r\n`);
       }
-      upstream.write(`Host: ${session.sandboxIp}:${session.vscodePort}\r\n\r\n`);
+      upstream.write("\r\n");
       if (head.length) upstream.write(head);
       socket.pipe(upstream);
       upstream.pipe(socket);
