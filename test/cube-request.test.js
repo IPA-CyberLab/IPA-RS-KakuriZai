@@ -502,7 +502,7 @@ spec:
   assert.match(mainTf, /apply -f/);
   assert.match(mainTf, /remove/);
   assert.match(mainTf, /command = <<-EOT\n\s+"\$KAKURIZAI_AGCTL" apply -f "\$KAKURIZAI_SPEC_FILE"\n\s+EOT/);
-  assert.match(mainTf, /"\$KAKURIZAI_AGCTL" remove "\$KAKURIZAI_NAME" --yes/);
+  assert.match(mainTf, /"\$KAKURIZAI_AGCTL" remove "\$KAKURIZAI_NAME" --yes --if-exists/);
   assert.doesNotMatch(mainTf, /command = ""/);
 });
 
@@ -516,8 +516,8 @@ spec:
   hostMount: false
 `);
 
-  assert.equal(manifest.spec.resources.writableLayerSize, "2G");
-  assert.equal(manifestToCreateInput(manifest).writableLayerSize, "2G");
+  assert.equal(manifest.spec.resources.writableLayerSize, "20G");
+  assert.equal(manifestToCreateInput(manifest).writableLayerSize, "20G");
 });
 
 test("network config rejects unsupported CubeSandbox network types", () => {

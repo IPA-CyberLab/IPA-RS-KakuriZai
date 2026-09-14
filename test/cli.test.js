@@ -56,6 +56,8 @@ test("cli covers studio world operations", async () => {
 
   const remove = JSON.parse((await runCli(home, ["remove", "cli-world", "--yes", "--json"])).stdout);
   assert.equal(remove.name, "cli-world");
+  const removeAgain = await runCli(home, ["remove", "cli-world", "--yes", "--if-exists"]);
+  assert.match(removeAgain.stdout, /already absent cli-world/);
   const afterRemove = await runCli(home, ["list"]);
   assert.match(afterRemove.stdout, /no sandboxes/);
 });

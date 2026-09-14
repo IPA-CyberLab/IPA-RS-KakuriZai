@@ -153,7 +153,7 @@ resource "terraform_data" "sandbox" {
       KAKURIZAI_NAME  = self.input.name
     }
     command = <<-EOT
-      "$KAKURIZAI_AGCTL" remove "$KAKURIZAI_NAME" --yes
+      "$KAKURIZAI_AGCTL" remove "$KAKURIZAI_NAME" --yes --if-exists
     EOT
   }
 }

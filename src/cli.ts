@@ -199,7 +199,18 @@ async function remove(config, args) {
   const ref = args.find((arg) => !arg.startsWith("-"));
   if (!ref) throw new Error("remove requires a sandbox name or id");
   if (!args.includes("--yes")) await confirmRemove(ref);
-  const world = await removeWorld(config, ref);
+  let world;
+  try {
+    world = await removeWorld(config, ref);
+  } catch (error) {
+    if (!args.includes("--if-exists") || !/world not found:/.test(error.message || String(error))) throw error;
+    if (args.includes("--json")) {
+      console.log(JSON.stringify({ name: ref, removed: false, reason: "world already absent" }, null, 2));
+    } else {
+      console.log(`already absent ${ref}`);
+    }
+    return;
+  }
   if (args.includes("--json")) {
     console.log(JSON.stringify(world, null, 2));
     return;
