@@ -70,6 +70,7 @@ type AccountUser = {
   status: "active" | "suspended";
   roles: string[];
   assignedRoles: string[];
+  sshPublicKeys: string[];
   permissions?: string[];
   createdAt: string;
   updatedAt: string;

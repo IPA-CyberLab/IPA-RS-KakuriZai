@@ -4,6 +4,17 @@ import path from "node:path";
 
 const USERNAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 const ROLE_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,63}$/;
+const SSH_KEY_TYPES = new Set([
+  "ssh-ed25519",
+  "ssh-rsa",
+  "ecdsa-sha2-nistp256",
+  "ecdsa-sha2-nistp384",
+  "ecdsa-sha2-nistp521",
+  "sk-ssh-ed25519@openssh.com",
+  "sk-ecdsa-sha2-nistp256@openssh.com"
+]);
+const MAX_SSH_PUBLIC_KEYS = 32;
+const MAX_SSH_PUBLIC_KEYS_LENGTH = 64 * 1024;
 
 export class AccountStore {
   constructor(config) {
@@ -42,6 +53,7 @@ export class AccountStore {
       status: existing?.status || "active",
       roles: existing?.roles || [],
       identityRoles: identity.roles,
+      sshPublicKeys: existing?.sshPublicKeys || [],
       createdAt: existing?.createdAt || now,
       updatedAt: existing?.updatedAt || now,
       lastSeenAt: shouldPersistSeen ? now : existing?.lastSeenAt || now
@@ -57,7 +69,12 @@ export class AccountStore {
 
   list() {
     return [...this.accounts.values()]
-      .map((account) => ({ ...account, roles: [...account.roles], identityRoles: [...account.identityRoles] }))
+      .map((account) => ({
+        ...account,
+        roles: [...account.roles],
+        identityRoles: [...account.identityRoles],
+        sshPublicKeys: [...account.sshPublicKeys]
+      }))
       .sort((left, right) => String(right.lastSeenAt).localeCompare(String(left.lastSeenAt)));
   }
 
@@ -71,6 +88,7 @@ export class AccountStore {
     }
     if (Object.hasOwn(input, "name")) next.name = cleanOptional(input.name, "name", 128);
     if (Object.hasOwn(input, "avatarUrl")) next.avatarUrl = cleanAvatarUrl(input.avatarUrl);
+    if (Object.hasOwn(input, "sshPublicKeys")) next.sshPublicKeys = normalizeSshPublicKeys(input.sshPublicKeys);
     next.updatedAt = new Date().toISOString();
     this.accounts.set(subject, normalizeStoredAccount(next));
     await this.save();
@@ -133,6 +151,7 @@ export function publicAccount(account, options = {}) {
     status: account.status,
     roles: options.roles || account.roles || [],
     assignedRoles: account.roles || [],
+    sshPublicKeys: account.sshPublicKeys || [],
     createdAt: account.createdAt,
     updatedAt: account.updatedAt,
     lastSeenAt: account.lastSeenAt
@@ -171,10 +190,59 @@ function normalizeStoredAccount(account) {
     status: account.status === "suspended" ? "suspended" : "active",
     roles: [...new Set(arrayClaim(account.roles).filter((role) => ROLE_PATTERN.test(role)))],
     identityRoles: [...new Set(arrayClaim(account.identityRoles).filter((role) => ROLE_PATTERN.test(role)))],
+    sshPublicKeys: safeStoredSshPublicKeys(account.sshPublicKeys),
     createdAt: validDate(account.createdAt) || new Date().toISOString(),
     updatedAt: validDate(account.updatedAt) || validDate(account.createdAt) || new Date().toISOString(),
     lastSeenAt: validDate(account.lastSeenAt) || new Date().toISOString()
   };
+}
+
+export function normalizeSshPublicKeys(value) {
+  if (value != null && !Array.isArray(value) && typeof value !== "string") {
+    throw badRequest("SSH public keys must be a string or an array");
+  }
+  const source = Array.isArray(value) ? value.join("\n") : String(value || "");
+  if (source.length > MAX_SSH_PUBLIC_KEYS_LENGTH) {
+    throw badRequest(`SSH public keys must be at most ${MAX_SSH_PUBLIC_KEYS_LENGTH} characters`);
+  }
+  const keys = [];
+  const seen = new Set();
+  for (const rawLine of source.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const parts = line.split(/\s+/);
+    if (parts.length < 2 || !SSH_KEY_TYPES.has(parts[0])) {
+      throw badRequest("each SSH public key must begin with a supported OpenSSH key type");
+    }
+    const [type, encoded] = parts;
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) throw badRequest("SSH public key data is not valid base64");
+    let blob;
+    try {
+      blob = Buffer.from(encoded, "base64");
+    } catch {
+      throw badRequest("SSH public key data is not valid base64");
+    }
+    if (blob.length < 8 || blob.length > 16 * 1024) throw badRequest("SSH public key data is invalid");
+    const embeddedLength = blob.readUInt32BE(0);
+    const embeddedType = blob.subarray(4, 4 + embeddedLength).toString("utf8");
+    if (embeddedLength < 1 || 4 + embeddedLength > blob.length || embeddedType !== type) {
+      throw badRequest("SSH public key type does not match its encoded data");
+    }
+    const identity = `${type} ${encoded}`;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    keys.push(parts.join(" "));
+    if (keys.length > MAX_SSH_PUBLIC_KEYS) throw badRequest(`at most ${MAX_SSH_PUBLIC_KEYS} SSH public keys are allowed`);
+  }
+  return keys;
+}
+
+function safeStoredSshPublicKeys(value) {
+  try {
+    return normalizeSshPublicKeys(Array.isArray(value) ? value : []);
+  } catch {
+    return [];
+  }
 }
 
 function identityChanged(left, right) {

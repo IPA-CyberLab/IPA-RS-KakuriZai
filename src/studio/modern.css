@@ -1068,6 +1068,38 @@ button.activityCreate {
   margin-top: 20px;
 }
 
+.sshKeyForm {
+  display: grid;
+  gap: 8px;
+}
+
+.sshKeyEditor {
+  min-height: 132px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.sshKeyForm .formActions {
+  margin-top: 4px;
+}
+
+.githubKeyImport {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.githubKeyImport label {
+  grid-column: 1 / -1;
+}
+
 .settingsCardHeading {
   min-height: 38px;
   display: flex;
@@ -1881,6 +1913,14 @@ button.activityCreate {
   .accountAvatar {
     width: 42px;
     height: 42px;
+  }
+
+  .githubKeyImport {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .githubKeyImport label {
+    grid-column: auto;
   }
 
   .sessionRow {

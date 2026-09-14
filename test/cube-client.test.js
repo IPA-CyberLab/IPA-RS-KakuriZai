@@ -536,7 +536,8 @@ test("cube client starts sandbox dev access services", async () => {
       vscodePort: 13337,
       sshPort: 2222,
       enableVscode: false,
-      enableSsh: true
+      enableSsh: true,
+      sshPublicKeys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMMbPV2O0rGvBDkuoqe89uWQ2f6B+2o5ABPclGVCHG1X test@example.com"]
     }
   );
   const sshArgsText = await fs.readFile(argsFile, "utf8");
@@ -549,6 +550,13 @@ test("cube client starts sandbox dev access services", async () => {
   assert.match(sshArgsText, /enable_ssh=1/);
   assert.match(sshArgsText, /openssh-server/);
   assert.match(sshArgsText, /Port \$\{ssh_port\}/);
+  assert.match(sshArgsText, /AAAAC3NzaC1lZDI1NTE5AAAAIMMbPV2O0rGvBDkuoqe89uWQ2f6B/);
+  assert.match(sshArgsText, /authorized_keys/);
+  assert.match(sshArgsText, /chmod 600 \/root\/\.ssh\/authorized_keys/);
+  assert.match(sshArgsText, /PermitRootLogin prohibit-password/);
+  assert.match(sshArgsText, /PasswordAuthentication no/);
+  assert.match(sshArgsText, /KbdInteractiveAuthentication no/);
+  assert.doesNotMatch(sshArgsText, /ssh_password|chpasswd/);
 });
 
 test("cube client builds host inbound firewall rules", async () => {

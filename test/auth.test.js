@@ -6,8 +6,34 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { normalizeAuthConfig } from "../dist/src/core/config.js";
+import { normalizeSshPublicKeys } from "../dist/src/core/accounts.js";
 import { createAuthProvider } from "../dist/src/auth/providers.js";
-import { startStudio } from "../dist/src/server.js";
+import { fetchGithubSshPublicKeys, startStudio } from "../dist/src/server.js";
+
+const TEST_SSH_PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMMbPV2O0rGvBDkuoqe89uWQ2f6B+2o5ABPclGVCHG1X test@example.com";
+
+test("SSH public keys are validated and deduplicated", () => {
+  assert.deepEqual(normalizeSshPublicKeys(`${TEST_SSH_PUBLIC_KEY}\n${TEST_SSH_PUBLIC_KEY}`), [TEST_SSH_PUBLIC_KEY]);
+  assert.throws(
+    () => normalizeSshPublicKeys(`command=\"id\" ${TEST_SSH_PUBLIC_KEY}`),
+    /supported OpenSSH key type/
+  );
+  assert.throws(
+    () => normalizeSshPublicKeys("ssh-ed25519 AAAA invalid"),
+    /invalid/
+  );
+});
+
+test("GitHub SSH public key import uses the fixed GitHub keys endpoint", async () => {
+  let requestedUrl = "";
+  const keys = await fetchGithubSshPublicKeys("mizuamedesu", async (url) => {
+    requestedUrl = url;
+    return new Response(`${TEST_SSH_PUBLIC_KEY}\n`, { status: 200 });
+  });
+  assert.equal(requestedUrl, "https://github.com/mizuamedesu.keys");
+  assert.deepEqual(keys, [TEST_SSH_PUBLIC_KEY]);
+  await assert.rejects(() => fetchGithubSshPublicKeys("user/example", async () => new Response()), /invalid/);
+});
 
 test("keycloak config normalizes to oidc discovery", () => {
   const auth = normalizeAuthConfig({
@@ -127,12 +153,18 @@ test("studio signs in through keycloak code flow with session cookie, csrf, rbac
         "content-type": "application/json",
         "x-csrf-token": sessionBody.csrfToken
       },
-      body: JSON.stringify({ username: "alice.dev", name: "Alice Dev", avatarUrl: "https://example.com/alice.png" })
+      body: JSON.stringify({
+        username: "alice.dev",
+        name: "Alice Dev",
+        avatarUrl: "https://example.com/alice.png",
+        sshPublicKeys: TEST_SSH_PUBLIC_KEY
+      })
     });
     assert.equal(updatedAccountResponse.status, 200);
     const updatedAccount = await updatedAccountResponse.json();
     assert.equal(updatedAccount.username, "alice.dev");
     assert.equal(updatedAccount.name, "Alice Dev");
+    assert.deepEqual(updatedAccount.sshPublicKeys, [TEST_SSH_PUBLIC_KEY]);
 
     const browserSessionsResponse = await fetch(`${origin}/api/account/sessions`, { headers: { cookie: sessionCookie } });
     assert.equal(browserSessionsResponse.status, 200);

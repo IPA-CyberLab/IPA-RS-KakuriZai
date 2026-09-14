@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocket, WebSocketServer } from "ws";
 import { Algorithm, hashSync as hashArgon2Sync } from "@node-rs/argon2";
 import { createAuthProvider } from "./auth/providers.js";
-import { AccountStore, publicAccount } from "./core/accounts.js";
+import { AccountStore, normalizeSshPublicKeys, publicAccount } from "./core/accounts.js";
 import { checkpointFailoverReplicas, createJoinToken, joinNode, listClusterNodes, reconcileFailover, removeClusterNode, replicateWorld, startFailoverController } from "./core/cluster.js";
 import { collectMetrics, listTraces, prometheusText, recordTraceEvent, startTrace, stopTrace } from "./core/observability.js";
 import { applyWorld, changedPaths, createHeteroNetworkLab, createKubernetesLab, createWorld, ensureWorldProvisioned, execWorld, getWorld, listWorlds, openWorld, pauseWorld, removeWorld, resumeWorld, updateWorldConfig } from "./core/worlds.js";
@@ -205,7 +205,9 @@ function httpStatusText(status) {
     409: "Conflict",
     429: "Too Many Requests",
     500: "Internal Server Error",
-    503: "Service Unavailable"
+    502: "Bad Gateway",
+    503: "Service Unavailable",
+    504: "Gateway Timeout"
   })[status] || "Error";
 }
 
@@ -287,22 +289,31 @@ class DevAccessManager {
       });
     }
 
-    if (needsSsh && !session.sshForward) {
-      session.sshPassword = crypto.randomBytes(18).toString("base64url");
+    const sshPublicKeys = [...new Set(options.sshPublicKeys || [])];
+    const sshKeysChanged = JSON.stringify(session.sshPublicKeys || []) !== JSON.stringify(sshPublicKeys);
+    if (needsSsh && sshPublicKeys.length === 0) {
+      const error = new Error("Add an SSH public key in Account settings before starting SSH Forward");
+      error.statusCode = 400;
+      throw error;
+    }
+    if (needsSsh && (!session.sshForward || sshKeysChanged)) {
       const services = await client.startDevAccessServices(world, {
         vscodePort,
         sshPort,
         enableVscode: false,
         enableSsh: true,
-        sshPassword: session.sshPassword
+        sshPublicKeys
       });
       if (!services.applied) throw new Error(services.reason || `failed to start SSH for ${world.name}`);
       session.workspace = session.workspace || services.workspace;
-      session.sshForward = await listenTcpForward({
-        listenHost: publicListenHost(this.config.studio.host),
-        targetHost: session.sandboxIp,
-        targetPort: sshPort
-      });
+      session.sshPublicKeys = sshPublicKeys;
+      if (!session.sshForward) {
+        session.sshForward = await listenTcpForward({
+          listenHost: publicListenHost(this.config.studio.host),
+          targetHost: session.sandboxIp,
+          targetPort: sshPort
+        });
+      }
     }
 
     return session;
@@ -1241,6 +1252,79 @@ function publicStoredAccount(config, account) {
   };
 }
 
+function devAccessSshPublicKeys(config, accounts) {
+  const keys = new Set();
+  for (const account of accounts) {
+    if (account.status !== "active") continue;
+    const user = {
+      subject: account.subject,
+      provider: account.provider,
+      claims: { roles: account.identityRoles || [] },
+      account
+    };
+    const permissions = permissionsForUser(config, user);
+    if (!permissions.has("admin") && !permissions.has("devaccess:open")) continue;
+    for (const key of account.sshPublicKeys || []) keys.add(key);
+  }
+  return [...keys];
+}
+
+export async function fetchGithubSshPublicKeys(username, fetchImpl = fetch) {
+  const githubUsername = String(username || "").trim();
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(githubUsername)) {
+    const error = new Error("GitHub username is invalid");
+    error.statusCode = 400;
+    throw error;
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const response = await fetchImpl(`https://github.com/${encodeURIComponent(githubUsername)}.keys`, {
+      headers: { "user-agent": "KakuriZai" },
+      redirect: "error",
+      signal: controller.signal
+    });
+    if (response.status === 404) {
+      const error = new Error("GitHub user was not found");
+      error.statusCode = 404;
+      throw error;
+    }
+    if (!response.ok) {
+      const error = new Error(`GitHub key import failed with HTTP ${response.status}`);
+      error.statusCode = 502;
+      throw error;
+    }
+    const contentLength = Number(response.headers.get("content-length") || 0);
+    if (contentLength > 64 * 1024) {
+      const error = new Error("GitHub returned too many SSH public keys");
+      error.statusCode = 502;
+      throw error;
+    }
+    const text = await response.text();
+    if (text.length > 64 * 1024) {
+      const error = new Error("GitHub returned too many SSH public keys");
+      error.statusCode = 502;
+      throw error;
+    }
+    const keys = normalizeSshPublicKeys(text);
+    if (keys.length === 0) {
+      const error = new Error("No SSH public keys were found for that GitHub user");
+      error.statusCode = 404;
+      throw error;
+    }
+    return keys;
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      const timeoutError = new Error("GitHub key import timed out");
+      timeoutError.statusCode = 504;
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function addValues(target, value) {
   for (const item of arrayClaim(value)) target.add(item);
 }
@@ -1391,6 +1475,15 @@ async function api(config, devAccess, sessions, accounts, terraform, templates, 
   if (request.method === "PATCH" && url.pathname === "/api/account") {
     authorize(config, request, "studio:read");
     request.user.account = await accounts.updateProfile(request.user.subject, await readBody(request));
+    return sendJson(request, response, publicUser(config, request.user));
+  }
+  if (request.method === "POST" && url.pathname === "/api/account/ssh-keys/import/github") {
+    authorize(config, request, "studio:read");
+    const body = await readBody(request);
+    const importedKeys = await fetchGithubSshPublicKeys(body.username);
+    request.user.account = await accounts.updateProfile(request.user.subject, {
+      sshPublicKeys: [...(request.user.account.sshPublicKeys || []), ...importedKeys]
+    });
     return sendJson(request, response, publicUser(config, request.user));
   }
   if (request.method === "GET" && url.pathname === "/api/account/sessions") {
@@ -1671,7 +1764,8 @@ async function api(config, devAccess, sessions, accounts, terraform, templates, 
     const world = await getWorld(config, decodeURIComponent(ref));
     const session = await devAccess.ensureSession(world, {
       vscode: body.vscode !== false,
-      ssh: body.ssh === true
+      ssh: body.ssh === true,
+      sshPublicKeys: devAccessSshPublicKeys(config, accounts.list())
     });
     return sendJson(request, response, devAccess.publicSession(session, request));
   }

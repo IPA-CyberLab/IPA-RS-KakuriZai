@@ -7,6 +7,8 @@ import {
   CaretRight as ChevronRight,
   ArrowSquareOut as ExternalLink,
   FileCode as FileCode2,
+  GithubLogo,
+  Key as KeyRound,
   SignOut as LogOut,
   Monitor,
   PencilSimple as Pencil,
@@ -35,6 +37,7 @@ type AccountUser = {
   status: "active" | "suspended";
   roles: string[];
   assignedRoles: string[];
+  sshPublicKeys: string[];
   permissions?: string[];
   createdAt: string;
   updatedAt: string;
@@ -247,6 +250,8 @@ export function AccountsWorkspace({
     name: initialSession?.user.name || "",
     avatarUrl: initialSession?.user.avatarUrl || ""
   });
+  const [sshKeysText, setSshKeysText] = React.useState((initialSession?.user.sshPublicKeys || []).join("\n"));
+  const [githubUsername, setGithubUsername] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [message, setMessage] = React.useState("");
   const permissions = initialSession?.permissions || [];
@@ -266,6 +271,7 @@ export function AccountsWorkspace({
         setSessions(nextSessions);
         setUsers(nextUsers);
         setForm({ username: nextAccount.username, name: nextAccount.name, avatarUrl: nextAccount.avatarUrl });
+        setSshKeysText((nextAccount.sshPublicKeys || []).join("\n"));
       } catch (error) {
         if (!canceled) setMessage(error instanceof Error ? error.message : String(error));
       }
@@ -282,6 +288,44 @@ export function AccountsWorkspace({
       const next = await apiClient<AccountUser>("/api/account", { method: "PATCH", body: form });
       setAccount(next);
       setMessage("Account updated");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveSshKeys(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setMessage("");
+    try {
+      const next = await apiClient<AccountUser>("/api/account", {
+        method: "PATCH",
+        body: { sshPublicKeys: sshKeysText }
+      });
+      setAccount(next);
+      setSshKeysText((next.sshPublicKeys || []).join("\n"));
+      setMessage("SSH public keys updated");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function importGithubKeys(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setMessage("");
+    try {
+      const next = await apiClient<AccountUser>("/api/account/ssh-keys/import/github", {
+        method: "POST",
+        body: { username: githubUsername }
+      });
+      setAccount(next);
+      setSshKeysText((next.sshPublicKeys || []).join("\n"));
+      setMessage(`Imported SSH public keys from GitHub user ${githubUsername.trim()}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -391,6 +435,43 @@ export function AccountsWorkspace({
           </div>
         </ManagementDisclosure>
       </div>
+
+      <ManagementDisclosure
+        icon={<KeyRound size={16} />}
+        title="SSH public keys"
+        hint={`${account?.sshPublicKeys?.length || 0} registered`}
+      >
+        <form className="sshKeyForm" onSubmit={saveSshKeys}>
+          <label htmlFor="account-ssh-keys">Public keys</label>
+          <textarea
+            id="account-ssh-keys"
+            className="sshKeyEditor"
+            value={sshKeysText}
+            onChange={(event) => setSshKeysText(event.target.value)}
+            placeholder="ssh-ed25519 AAAA…"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+          />
+          <div className="formActions">
+            <Button type="submit" disabled={busy}><Save size={15} /> Save keys</Button>
+          </div>
+        </form>
+        <form className="githubKeyImport" onSubmit={importGithubKeys}>
+          <label htmlFor="account-github-username">GitHub username</label>
+          <Input
+            id="account-github-username"
+            value={githubUsername}
+            onChange={(event) => setGithubUsername(event.target.value)}
+            placeholder="github-user"
+            autoCapitalize="none"
+            autoCorrect="off"
+          />
+          <Button type="submit" variant="outline" disabled={busy || !githubUsername.trim()}>
+            <GithubLogo size={16} /> Import from GitHub
+          </Button>
+        </form>
+      </ManagementDisclosure>
 
       <ManagementDisclosure icon={<Monitor size={16} />} title="Sessions" hint={`${sessions.length} signed-in ${sessions.length === 1 ? "device" : "devices"}`}>
           <div className="disclosureToolbar">
