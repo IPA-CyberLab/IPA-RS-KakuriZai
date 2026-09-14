@@ -20,11 +20,11 @@ export class SandboxTemplateStore {
 
   async ensureDefault(options = {}) {
     await this.init();
-    const existing = (await this.listMetadata()).find((template) => template.slug === "default-sandbox");
+    const existing = (await this.listMetadata()).find((template) => template.slug === "developer-sandbox");
     if (existing) return publicTemplate(existing);
     return this.push({
-      name: "default-sandbox",
-      displayName: "Default sandbox",
+      name: "developer-sandbox",
+      displayName: "Developer sandbox",
       description: "Standard isolated development sandbox",
       files: { "main.tf": starterSandboxTemplate(options) }
     });
@@ -186,11 +186,7 @@ export function starterSandboxTemplate(options = {}) {
   const networkType = JSON.stringify(String(options.networkType || "tap"));
   const allowInternetAccess = options.allowInternetAccess !== false;
   const kubernetesEnabled = options.kubernetesEnabled === true;
-  const startupScript = JSON.stringify(String(options.startupScript ?? [
-    "set -eu",
-    "mkdir -p /workspace",
-    "printf '%s\\n' 'hello from KakuriZai' > /workspace/README.txt"
-  ].join("\n")));
+  const startupScript = JSON.stringify(String(options.startupScript ?? ""));
   return `terraform {
   required_version = ">= 1.4.0"
 }

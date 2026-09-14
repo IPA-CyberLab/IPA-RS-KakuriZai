@@ -1586,7 +1586,7 @@ async function api(config, devAccess, sessions, accounts, terraform, templates, 
       networkType: "tap",
       allowInternetAccess: true,
       kubernetesEnabled: false,
-      startupScript: "set -eu\nmkdir -p /workspace\nprintf '%s\\n' 'hello from KakuriZai' > /workspace/README.txt"
+      startupScript: ""
     };
     return sendJson(request, response, {
       builder,

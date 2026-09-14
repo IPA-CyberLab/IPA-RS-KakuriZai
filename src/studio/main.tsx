@@ -706,15 +706,22 @@ function App() {
       setSessionDetails(sessionResult);
       setSessionChecked(true);
 
-      const [worldsResult, cubeResult, nodesResult, metricsResult, tracesResult] = await Promise.all([
-        api<World[]>("/api/worlds", { token }),
+      const worldsRequest = api<World[]>("/api/worlds", { token });
+      const supportingRequests = Promise.all([
         api<CubeInspect>("/api/cube/inspect", { token }),
         api<ClusterNode[]>("/api/cluster/nodes", { token }),
         api<ObservabilitySnapshot>("/api/observability/metrics", { token }),
         api<TraceSession[]>("/api/observability/traces", { token })
       ]);
-      const nextInventory = buildInventory(worldsResult, cubeResult);
+
+      const worldsResult = await worldsRequest;
       setWorlds(worldsResult);
+      const initialInventory = buildInventory(worldsResult, cube);
+      setSelectedId((current) => initialInventory.some((row) => row.key === current) ? current : initialInventory[0]?.key || null);
+      setStatus(`${initialInventory.length} Sandbox${initialInventory.length === 1 ? "" : "es"}`);
+
+      const [cubeResult, nodesResult, metricsResult, tracesResult] = await supportingRequests;
+      const nextInventory = buildInventory(worldsResult, cubeResult);
       setCube(cubeResult);
       setClusterNodes(nodesResult);
       setObservability(metricsResult);

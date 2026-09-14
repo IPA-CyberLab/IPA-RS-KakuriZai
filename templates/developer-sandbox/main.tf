@@ -34,15 +34,7 @@ variable "disk_size" {
 variable "startup_script" {
   description = "Runs once after the sandbox is ready"
   type        = string
-  default     = <<-EOT
-    set -eu
-    mkdir -p /workspace
-    cat > /workspace/hello-world.sh <<'SCRIPT'
-    #!/bin/sh
-    echo 'hello world'
-    SCRIPT
-    chmod +x /workspace/hello-world.sh
-  EOT
+  default     = ""
 }
 
 module "sandbox" {

@@ -23,7 +23,7 @@ test("Terraform sandbox templates are versioned and expose standard variables", 
     kubernetesEnabled: true
   });
   const defaultSource = (await store.getWithSource(defaultTemplate.id)).files["main.tf"];
-  assert.equal(defaultTemplate.slug, "default-sandbox");
+  assert.equal(defaultTemplate.slug, "developer-sandbox");
   assert.match(defaultSource, /default\s+=\s+"tpl-default"/);
   assert.match(defaultSource, /default\s+=\s+false/);
   assert.match(defaultSource, /default\s+=\s+true/);
