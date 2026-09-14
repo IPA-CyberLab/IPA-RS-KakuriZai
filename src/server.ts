@@ -77,7 +77,7 @@ export async function startStudio(config) {
       socket.destroy();
       return;
     }
-    handleUpgrade(config, auth, sessions, accounts, shellServer, request, socket, head).catch((error) => {
+    handleUpgrade(config, auth, sessions, accounts, devAccess, shellServer, request, socket, head).catch((error) => {
       const status = error.statusCode || 500;
       socket.write(`HTTP/1.1 ${status} ${httpStatusText(status)}\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n${error.message || String(error)}\n`);
       socket.destroy();
@@ -106,8 +106,16 @@ async function loadTlsOptions(config) {
   return { cert, key };
 }
 
-async function handleUpgrade(config, auth, sessions, accounts, shellServer, request, socket, head) {
+async function handleUpgrade(config, auth, sessions, accounts, devAccess, shellServer, request, socket, head) {
   const url = new URL(request.url, `http://${request.headers.host || "127.0.0.1"}`);
+  const vscodeMatch = /^\/api\/worlds\/([^/]+)\/vscode(?:\/(.*))?$/.exec(url.pathname);
+  if (vscodeMatch) {
+    const session = await authenticateRequest(config, auth, sessions, accounts, request, { requireCsrf: false });
+    request.user = session.user;
+    request.authSession = session.session;
+    authorize(config, request, "devaccess:open");
+    return devAccess.proxyUpgrade(decodeURIComponent(vscodeMatch[1]), request, socket, head, `/${vscodeMatch[2] || ""}${url.search}`);
+  }
   const match = /^\/api\/worlds\/([^/]+)\/shell$/.exec(url.pathname);
   if (!match) {
     socket.destroy();
@@ -320,16 +328,12 @@ class DevAccessManager {
   }
 
   publicSession(session, request) {
-    const origin = publicOrigin(request, this.config);
+    const origin = normalizeOrigin(this.config.studio.publicUrl) || publicOrigin(request, this.config);
     const publicHost = publicHostname(origin);
     const sshHost = this.config.studio.sshHost || publicHost;
-    const httpUrl = session.vscodeForward ? new URL(origin) : null;
-    if (httpUrl) {
-      httpUrl.port = String(session.vscodeForward.port);
-      httpUrl.pathname = "/";
-      httpUrl.search = "";
-      httpUrl.hash = "";
-    }
+    const httpUrl = session.vscodeForward
+      ? new URL(`/api/worlds/${encodeURIComponent(session.worldId)}/vscode/`, origin)
+      : null;
     const sshCommand = session.sshForward ? `ssh root@${sshHost} -p ${session.sshForward.port}` : null;
     return {
       worldId: session.worldId,
@@ -351,7 +355,7 @@ class DevAccessManager {
     if (!session.vscodeForward || !session.vscodePassword) {
       throw new Error("VS Code Web is not started");
     }
-    const loginUrl = new URL("login", publicUrl).toString();
+    const loginUrl = `http://${session.sandboxIp}:${session.vscodePort}/login`;
     const attempts = [
       { base: ".", href: loginUrl },
       { base: "/", href: publicUrl }
@@ -360,7 +364,8 @@ class DevAccessManager {
     for (const attempt of attempts) {
       try {
         return await postCodeServerLogin({
-          port: session.vscodeForward.port,
+          connectHost: session.sandboxIp,
+          connectPort: session.vscodePort,
           host: new URL(publicUrl).host,
           password: session.vscodePassword,
           base: attempt.base,
@@ -371,6 +376,56 @@ class DevAccessManager {
       }
     }
     throw lastError || new Error("code-server login failed");
+  }
+
+  proxyHttp(worldId, request, response, upstreamPath) {
+    const session = this.requireVscodeSession(worldId);
+    const headers = { ...request.headers, host: `${session.sandboxIp}:${session.vscodePort}` };
+    const upstream = http.request({
+      host: session.sandboxIp,
+      port: session.vscodePort,
+      method: request.method,
+      path: upstreamPath,
+      headers
+    }, (upstreamResponse) => {
+      const responseHeaders = { ...upstreamResponse.headers };
+      const prefix = `/api/worlds/${encodeURIComponent(worldId)}/vscode`;
+      if (typeof responseHeaders.location === "string" && responseHeaders.location.startsWith("/")) {
+        responseHeaders.location = `${prefix}${responseHeaders.location}`;
+      }
+      response.writeHead(upstreamResponse.statusCode || 502, responseHeaders);
+      upstreamResponse.pipe(response);
+    });
+    upstream.on("error", (error) => {
+      if (!response.headersSent) sendJson(request, response, { error: error.message }, 502);
+      else response.destroy(error);
+    });
+    request.pipe(upstream);
+  }
+
+  proxyUpgrade(worldId, request, socket, head, upstreamPath) {
+    const session = this.requireVscodeSession(worldId);
+    const upstream = net.createConnection({ host: session.sandboxIp, port: session.vscodePort }, () => {
+      upstream.write(`${request.method} ${upstreamPath} HTTP/${request.httpVersion}\r\n`);
+      for (let index = 0; index < request.rawHeaders.length; index += 2) {
+        if (request.rawHeaders[index].toLowerCase() === "host") continue;
+        upstream.write(`${request.rawHeaders[index]}: ${request.rawHeaders[index + 1]}\r\n`);
+      }
+      upstream.write(`Host: ${session.sandboxIp}:${session.vscodePort}\r\n\r\n`);
+      if (head.length) upstream.write(head);
+      socket.pipe(upstream);
+      upstream.pipe(socket);
+    });
+    upstream.on("error", () => socket.destroy());
+    socket.on("error", () => upstream.destroy());
+  }
+
+  requireVscodeSession(worldId) {
+    const session = this.sessions.get(worldId);
+    if (session?.vscodeForward) return session;
+    const error = new Error("VS Code Web session is not running; open it again from the sandbox");
+    error.statusCode = 409;
+    throw error;
   }
 }
 
@@ -383,8 +438,8 @@ function postCodeServerLogin(options) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     const request = http.request({
-      host: "127.0.0.1",
-      port: options.port,
+      host: options.connectHost,
+      port: options.connectPort,
       method: "POST",
       path: "/login",
       headers: {
@@ -1060,6 +1115,7 @@ function assertAccountActive(account) {
 }
 
 function requiresCsrf(url, request) {
+  if (/^\/api\/worlds\/[^/]+\/vscode(?:\/|$)/.test(url.pathname)) return false;
   if (!SAFE_METHODS.has(request.method)) return true;
   if (/^\/api\/worlds\/[^/]+\/dev-access\/open$/.test(url.pathname)) return true;
   return false;
@@ -1674,6 +1730,16 @@ async function api(config, devAccess, sessions, accounts, terraform, templates, 
   if (request.method === "POST" && url.pathname === "/api/cluster/nodes") {
     authorize(config, request, "admin");
     return sendJson(request, response, await joinNode(config, { ...(await readBody(request)), requireToken: false }), 201);
+  }
+  const vscodeProxyMatch = /^\/api\/worlds\/([^/]+)\/vscode(?:\/(.*))?$/.exec(url.pathname);
+  if (vscodeProxyMatch) {
+    authorize(config, request, "devaccess:open");
+    return devAccess.proxyHttp(
+      decodeURIComponent(vscodeProxyMatch[1]),
+      request,
+      response,
+      `/${vscodeProxyMatch[2] || ""}${url.search}`
+    );
   }
   const clusterNodeMatch = /^\/api\/cluster\/nodes\/([^/]+)$/.exec(url.pathname);
   if (request.method === "DELETE" && clusterNodeMatch) {
