@@ -109,7 +109,7 @@ export function defaultConfig(home = defaultHome()) {
       template: process.env.KAKURIZAI_CUBE_TEMPLATE || "kakurizai-base",
       namespace: process.env.KAKURIZAI_CUBE_NAMESPACE || "kakurizai",
       workspacePath: "/workspace",
-      cpu: process.env.KAKURIZAI_CUBE_CPU || "4000m",
+      cpu: process.env.KAKURIZAI_CUBE_CPU || "2000m",
       memory: process.env.KAKURIZAI_CUBE_MEMORY || "4000Mi",
       writableLayerSize: process.env.KAKURIZAI_CUBE_WRITABLE_LAYER_SIZE || "20G",
       bootstrapTools: {

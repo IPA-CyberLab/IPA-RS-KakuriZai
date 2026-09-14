@@ -16,7 +16,7 @@ variable "base_template" {
 variable "cpu" {
   description = "CPU allocation in millicores"
   type        = string
-  default     = "4000m"
+  default     = "2000m"
 }
 
 variable "memory" {

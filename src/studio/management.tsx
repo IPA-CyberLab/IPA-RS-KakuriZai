@@ -196,7 +196,7 @@ function builderFromTemplate(detail: TerraformTemplateDetail): TerraformTemplate
   };
   return {
     baseTemplate: stringValue("base_template", ""),
-    cpu: stringValue("cpu", "4000m"),
+    cpu: stringValue("cpu", "2000m"),
     memory: stringValue("memory", "4000Mi"),
     writableLayerSize: stringValue("disk_size", "20G"),
     networkType: stringValue("network_type", "tap"),

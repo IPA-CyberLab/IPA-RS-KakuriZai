@@ -610,7 +610,7 @@ function App() {
     sourcePath: "",
     mountMode: "agctl-overlay",
     mounts: [{ name: "project", sourcePath: "", mode: "agctl-overlay" }] as LaunchMount[],
-    cpu: "4000m",
+    cpu: "2000m",
     memory: "4000Mi",
     writableLayerSize: "20G",
     networkType: "tap",

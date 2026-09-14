@@ -1580,7 +1580,7 @@ async function api(config, devAccess, sessions, accounts, terraform, templates, 
     authorize(config, request, "terraform:read");
     const builder = {
       baseTemplate: config.cube?.template || "",
-      cpu: config.cube?.cpu || "4000m",
+      cpu: config.cube?.cpu || "2000m",
       memory: config.cube?.memory || "4000Mi",
       writableLayerSize: config.cube?.writableLayerSize || "20G",
       networkType: "tap",

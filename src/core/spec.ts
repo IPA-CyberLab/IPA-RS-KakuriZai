@@ -36,7 +36,7 @@ export function normalizeSandboxManifest(data) {
       template: spec.template || null,
       hostMount,
       resources: {
-        cpu: resources.cpu || spec.cpu || "4000m",
+        cpu: resources.cpu || spec.cpu || "2000m",
         memory: resources.memory || spec.memory || "4000Mi",
         writableLayerSize: resources.writableLayerSize || resources.disk || spec.writableLayerSize || "20G"
       },
@@ -88,7 +88,7 @@ export function worldToManifest(world) {
         mounts
       },
       resources: {
-        cpu: backendConfig.cpu || "4000m",
+        cpu: backendConfig.cpu || "2000m",
         memory: backendConfig.memory || "4000Mi",
         writableLayerSize: backendConfig.writableLayerSize || "20G"
       },
