@@ -610,9 +610,9 @@ function App() {
     sourcePath: "",
     mountMode: "agctl-overlay",
     mounts: [{ name: "project", sourcePath: "", mode: "agctl-overlay" }] as LaunchMount[],
-    cpu: "2000m",
-    memory: "2000Mi",
-    writableLayerSize: "2G",
+    cpu: "4000m",
+    memory: "4000Mi",
+    writableLayerSize: "20G",
     networkType: "tap",
     networkMode: "tap",
     sandboxIp: "",
@@ -1441,7 +1441,7 @@ function App() {
           <div className="splitFields">
             <div>
               <label>Disk size</label>
-              <input value={launch.writableLayerSize} onChange={(event) => setLaunch({ ...launch, writableLayerSize: event.target.value })} placeholder="2G" />
+              <input value={launch.writableLayerSize} onChange={(event) => setLaunch({ ...launch, writableLayerSize: event.target.value })} placeholder="20G" />
             </div>
             <div>
               <label>Network type</label>

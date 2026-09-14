@@ -180,9 +180,9 @@ export class SandboxTemplateStore {
 
 export function starterSandboxTemplate(options = {}) {
   const baseTemplate = JSON.stringify(String(options.baseTemplate || "kakurizai-base"));
-  const cpu = JSON.stringify(String(options.cpu || "2000m"));
-  const memory = JSON.stringify(String(options.memory || "2000Mi"));
-  const disk = JSON.stringify(String(options.writableLayerSize || "2G"));
+  const cpu = JSON.stringify(String(options.cpu || "4000m"));
+  const memory = JSON.stringify(String(options.memory || "4000Mi"));
+  const disk = JSON.stringify(String(options.writableLayerSize || "20G"));
   const networkType = JSON.stringify(String(options.networkType || "tap"));
   const allowInternetAccess = options.allowInternetAccess !== false;
   const kubernetesEnabled = options.kubernetesEnabled === true;

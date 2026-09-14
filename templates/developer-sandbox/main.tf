@@ -16,19 +16,19 @@ variable "base_template" {
 variable "cpu" {
   description = "CPU allocation in millicores"
   type        = string
-  default     = "2000m"
+  default     = "4000m"
 }
 
 variable "memory" {
   description = "Memory allocation"
   type        = string
-  default     = "2000Mi"
+  default     = "4000Mi"
 }
 
 variable "disk_size" {
   description = "Writable root disk size"
   type        = string
-  default     = "2G"
+  default     = "20G"
 }
 
 variable "startup_script" {

@@ -109,7 +109,9 @@ export function defaultConfig(home = defaultHome()) {
       template: process.env.KAKURIZAI_CUBE_TEMPLATE || "kakurizai-base",
       namespace: process.env.KAKURIZAI_CUBE_NAMESPACE || "kakurizai",
       workspacePath: "/workspace",
-      writableLayerSize: process.env.KAKURIZAI_CUBE_WRITABLE_LAYER_SIZE || "2G",
+      cpu: process.env.KAKURIZAI_CUBE_CPU || "4000m",
+      memory: process.env.KAKURIZAI_CUBE_MEMORY || "4000Mi",
+      writableLayerSize: process.env.KAKURIZAI_CUBE_WRITABLE_LAYER_SIZE || "20G",
       bootstrapTools: {
         enabled: process.env.KAKURIZAI_CUBE_BOOTSTRAP_TOOLS !== "false",
         packages: [
@@ -120,6 +122,7 @@ export function defaultConfig(home = defaultHome()) {
           "fuse-overlayfs",
           "fuse3",
           "git",
+          "gh",
           "iproute2",
           "iputils-ping",
           "less",
@@ -128,13 +131,15 @@ export function defaultConfig(home = defaultHome()) {
           "ncurses-bin",
           "ncurses-term",
           "net-tools",
+          "nodejs",
+          "npm",
           "procps",
           "sudo",
           "tmux",
           "unionfs-fuse",
           "vim-tiny"
         ],
-        commands: ["bash", "curl", "git", "ip", "nano", "ping", "ps", "sudo", "tmux"]
+        commands: ["bash", "curl", "git", "gh", "ip", "nano", "node", "npm", "ping", "ps", "sudo", "tmux", "codex", "claude"]
       }
     },
     isolatedAgent: {

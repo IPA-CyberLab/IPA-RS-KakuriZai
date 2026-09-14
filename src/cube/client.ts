@@ -1657,6 +1657,8 @@ export class CubeSandboxClient {
 }
 
 function normalizeBootstrapConfig(config = {}) {
+  const developerPackages = ["gh", "nodejs", "npm"];
+  const developerCommands = ["gh", "node", "npm", "codex", "claude"];
   const defaults = {
     enabled: true,
     packages: [
@@ -1667,6 +1669,7 @@ function normalizeBootstrapConfig(config = {}) {
       "fuse-overlayfs",
       "fuse3",
       "git",
+      "gh",
       "iptables",
       "iproute2",
       "iputils-ping",
@@ -1676,44 +1679,51 @@ function normalizeBootstrapConfig(config = {}) {
       "ncurses-bin",
       "ncurses-term",
       "net-tools",
+      "nodejs",
+      "npm",
       "procps",
       "sudo",
       "tmux",
       "unionfs-fuse",
       "vim-tiny"
     ],
-    commands: ["bash", "curl", "git", "ip", "iptables", "nano", "ping", "ps", "sudo", "tmux"]
+    commands: ["bash", "curl", "git", "gh", "ip", "iptables", "nano", "node", "npm", "ping", "ps", "sudo", "tmux", "codex", "claude"]
   };
   if (config === false) return { ...defaults, enabled: false };
+  const packages = Array.isArray(config.packages) && config.packages.length ? config.packages.map(String) : defaults.packages;
+  const commands = Array.isArray(config.commands) && config.commands.length ? config.commands.map(String) : defaults.commands;
   return {
     enabled: config.enabled !== false,
-    packages: Array.isArray(config.packages) && config.packages.length ? config.packages.map(String) : defaults.packages,
-    commands: Array.isArray(config.commands) && config.commands.length ? config.commands.map(String) : defaults.commands
+    packages: [...new Set([...packages, ...developerPackages])],
+    commands: [...new Set([...commands, ...developerCommands])]
   };
 }
 
 function buildBootstrapToolsScript(config) {
   const commands = config.commands.map(shellQuote).join(" ");
+  const osCommands = config.commands.filter((command) => !["codex", "claude"].includes(command)).map(shellQuote).join(" ");
   const aptPackages = config.packages.map(shellQuote).join(" ");
   const apkPackages = config.packages.map((pkg) => apkPackageName(pkg)).map(shellQuote).join(" ");
   const rpmPackages = config.packages.map((pkg) => rpmPackageName(pkg)).map(shellQuote).join(" ");
   return [
     "set -eu",
-    "need_install=0",
-    `for command_name in ${commands}; do command -v \"$command_name\" >/dev/null 2>&1 || need_install=1; done`,
-    "[ \"$need_install\" = \"0\" ] && exit 0",
-    "if command -v apt-get >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y --no-install-recommends " + aptPackages + "; exit 0; fi",
-    "if command -v apk >/dev/null 2>&1; then apk add --no-cache " + apkPackages + "; exit 0; fi",
-    "if command -v dnf >/dev/null 2>&1; then dnf install -y " + rpmPackages + "; exit 0; fi",
-    "if command -v yum >/dev/null 2>&1; then yum install -y " + rpmPackages + "; exit 0; fi",
-    "echo 'No supported package manager found for KakuriZai terminal bootstrap' >&2",
-    "exit 0"
+    "need_os_install=0",
+    `for command_name in ${osCommands}; do command -v \"$command_name\" >/dev/null 2>&1 || need_os_install=1; done`,
+    "if [ \"$need_os_install\" = \"1\" ]; then if command -v apt-get >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update || { sleep 3; apt-get update; }; apt-get install -y --no-install-recommends " + aptPackages + " || { sleep 3; dpkg --configure -a; apt-get install -y --no-install-recommends " + aptPackages + "; }; elif command -v apk >/dev/null 2>&1; then apk add --no-cache " + apkPackages + "; elif command -v dnf >/dev/null 2>&1; then dnf install -y " + rpmPackages + "; elif command -v yum >/dev/null 2>&1; then yum install -y " + rpmPackages + "; else echo 'No supported package manager found for KakuriZai terminal bootstrap' >&2; exit 1; fi; fi",
+    "node_major=$(node -p \"process.versions.node.split('.')[0]\" 2>/dev/null || printf 0)",
+    "if [ \"$node_major\" -lt 22 ]; then npm install -g --no-audit --no-fund n; n 22; hash -r; fi",
+    "need_agents=0",
+    "command -v codex >/dev/null 2>&1 || need_agents=1",
+    "command -v claude >/dev/null 2>&1 || need_agents=1",
+    "[ \"$need_agents\" = \"0\" ] || npm install -g --no-audit --no-fund @openai/codex @anthropic-ai/claude-code",
+    `for command_name in ${commands}; do command -v \"$command_name\" >/dev/null 2>&1 || { echo \"missing required developer command: $command_name\" >&2; exit 1; }; done`
   ].join("; ");
 }
 
 function apkPackageName(pkg) {
   return {
     dnsutils: "bind-tools",
+    gh: "github-cli",
     "iputils-ping": "iputils",
     "ncurses-base": "ncurses-terminfo-base",
     "ncurses-bin": "ncurses",

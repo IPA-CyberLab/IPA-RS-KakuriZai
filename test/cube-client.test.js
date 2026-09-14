@@ -174,6 +174,8 @@ esac
     name: "resize-fails",
     backend: "cube-sandbox-overlay",
     hostMount: false,
+    cpu: "2000m",
+    memory: "2000Mi",
     writableLayerSize: "10G"
   });
 
@@ -294,6 +296,9 @@ test("cube client bootstraps terminal tools after sandbox create", async () => {
   assert.match(args[6], /ncurses-term/);
   assert.match(args[6], /tmux/);
   assert.match(args[6], /unionfs-fuse/);
+  assert.match(args[6], /n 22/);
+  assert.match(args[6], /@openai\/codex/);
+  assert.match(args[6], /@anthropic-ai\/claude-code/);
 });
 
 test("cube client mounts agctl overlay with a probed unionfs driver", async () => {

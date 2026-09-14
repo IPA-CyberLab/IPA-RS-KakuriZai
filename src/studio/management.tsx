@@ -196,9 +196,9 @@ function builderFromTemplate(detail: TerraformTemplateDetail): TerraformTemplate
   };
   return {
     baseTemplate: stringValue("base_template", ""),
-    cpu: stringValue("cpu", "2000m"),
-    memory: stringValue("memory", "2000Mi"),
-    writableLayerSize: stringValue("disk_size", "2G"),
+    cpu: stringValue("cpu", "4000m"),
+    memory: stringValue("memory", "4000Mi"),
+    writableLayerSize: stringValue("disk_size", "20G"),
     networkType: stringValue("network_type", "tap"),
     allowInternetAccess: booleanValue("allow_internet_access", true),
     kubernetesEnabled: booleanValue("kubernetes_enabled", false),
@@ -945,7 +945,7 @@ export function TerraformWorkspace({
                     <div>
                       <label htmlFor="builder-disk">Disk</label>
                       <select id="builder-disk" value={editor.builder.writableLayerSize} onChange={(event) => updateBuilder({ writableLayerSize: event.target.value })}>
-                        <option value="2G">2 GB</option><option value="4G">4 GB</option><option value="8G">8 GB</option><option value="16G">16 GB</option>
+                        <option value="2G">2 GB</option><option value="4G">4 GB</option><option value="8G">8 GB</option><option value="16G">16 GB</option><option value="20G">20 GB</option>
                       </select>
                     </div>
                   </div>
