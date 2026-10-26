@@ -188,6 +188,14 @@
       },
       "additionalProperties": false
     },
+    "provisioning": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "intervalMs": { "type": "integer", "minimum": 25 }
+      },
+      "additionalProperties": false
+    },
     "cube": {
       "type": "object",
       "properties": {

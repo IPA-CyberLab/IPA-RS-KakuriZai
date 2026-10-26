@@ -99,6 +99,10 @@ export function normalizeKubernetesConfig(input = {}) {
   return {
     enabled,
     profile,
+    bootstrap: input?.bootstrap !== false,
+    version: cleanString(input?.version || ""),
+    clusterInit: input?.clusterInit === true,
+    expectedNodes: normalizeStringList(input?.expectedNodes),
     clusterName: cleanString(input?.clusterName || input?.cluster || "kakurizai"),
     nodeRole,
     nodeName: cleanString(input?.nodeName || ""),
@@ -161,6 +165,9 @@ export function effectiveNetworkConfig(network = {}, kubernetes = {}) {
   const exposedPorts = new Set(normalizedNetwork.exposedPorts);
   if (normalizedKubernetes.enabled) {
     exposedPorts.add(normalizedKubernetes.apiServerPort);
+    if (normalizedKubernetes.profile === "k3s" && normalizedKubernetes.bootstrap) {
+      for (const port of [8472, 10250, ...(normalizedKubernetes.clusterInit || (normalizedKubernetes.nodeRole === "control-plane" && normalizedKubernetes.joinEndpoint) ? [2379, 2380] : [])]) exposedPorts.add(port);
+    }
     for (const port of normalizedKubernetes.nodePorts) exposedPorts.add(port);
   }
   return {

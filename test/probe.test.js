@@ -72,7 +72,7 @@ test("network probe plan maps worlds to sandbox IPs, ports, NAT forwards, and ed
   const plan = buildNetworkProbePlan(worlds, runtimes);
 
   assert.equal(plan.nodes.length, 2);
-  assert.deepEqual(plan.nodes[0].exposedPorts, [6443, 8080, 13337, 30000]);
+  assert.deepEqual(plan.nodes[0].exposedPorts, [2379, 2380, 6443, 8080, 8472, 10250, 13337, 30000]);
   assert.equal(plan.nodes[0].sandboxIp, "10.0.0.10");
   assert.deepEqual(plan.nodes[0].kubernetes, {
     enabled: true,

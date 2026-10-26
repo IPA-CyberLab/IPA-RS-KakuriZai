@@ -8,3 +8,7 @@ test-results/
 tmp/
 *.log
 .key
+
+# Local CubeSandbox interview article
+/docs/cubesandbox-interview.md
+/docs/cubesandbox-interview-assets/

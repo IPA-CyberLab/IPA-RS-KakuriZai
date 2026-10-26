@@ -7,6 +7,7 @@ import { WebSocket } from "ws";
 import { loadConfig } from "../dist/src/core/config.js";
 import { createWorld, ensureWorldProvisioned, getWorld } from "../dist/src/core/worlds.js";
 import { startStudio } from "../dist/src/server.js";
+import { startProvisioningController } from "../dist/src/core/provisioning.js";
 
 test("pending CubeSandbox world is provisioned once before concurrent connections", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-provision-"));
@@ -168,6 +169,45 @@ async function provisioningConfig(tmp) {
   };
   return config;
 }
+
+test("provisioning controller automatically creates a planned World when Cube becomes available", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-auto-provision-"));
+  const config = await provisioningConfig(tmp);
+  const world = await createPendingWorld(config);
+  const controller = startProvisioningController(config, { intervalMs: 25 });
+  try {
+    const runtime = await createFakeCubeCli(tmp, "f4ad874fc9124e25b3c6644e3a9f0123");
+    enableFakeCubeCli(config, runtime);
+    const deadline = Date.now() + 5000;
+    let stored;
+    do {
+      stored = await getWorld(config, world.id);
+      if (stored.status === "ready") break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    } while (Date.now() < deadline);
+    assert.equal(stored.status, "ready");
+    await Promise.all([controller.tick(), controller.tick()]);
+    assert.equal(await readCreateCount(runtime.countFile), 1);
+  } finally {
+    await controller.stop();
+  }
+});
+
+test("World definition remains planned when CubeMaster exists but cubecli is missing", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-planned-master-"));
+  const config = await provisioningConfig(tmp);
+  const mastercli = path.join(tmp, "cubemastercli");
+  const called = path.join(tmp, "called");
+  await fs.writeFile(mastercli, `#!/bin/sh\ntouch '${called}'\nexit 1\n`);
+  await fs.chmod(mastercli, 0o755);
+  config.cube.mode = "master";
+  config.cube.mastercli = mastercli;
+  const world = await createPendingWorld(config);
+  assert.equal(world.sandbox.status, "planned");
+  assert.match(world.sandbox.reason, /cubecli not found/);
+  assert.ok(world.backendConfig.cubeRequest);
+  assert.equal(await fs.access(called).then(() => true, () => false), false);
+});
 
 async function createPendingWorld(config, name = "escape") {
   const world = await createWorld(config, {

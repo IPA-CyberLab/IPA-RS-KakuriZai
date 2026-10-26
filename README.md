@@ -22,6 +22,8 @@ npm start
 
 When `cubecli` is not installed, sandboxes are still recorded with their metadata, upper/work/whiteout/log paths, and generated Cube request. Their runtime status is `planned` until CubeSandbox is available.
 
+Studio reconciles planned Cube workspaces automatically every five seconds. Both the selected lifecycle CLI and `cubecli` must be available before a CubeMaster workspace is provisioned. Pending definitions survive restarts; concurrent connections and reconciliation share the same per-World provisioning lock and reuse an existing runtime instead of creating duplicates. Set `provisioning.enabled` to `false` to disable this controller, or configure `provisioning.intervalMs`. A standalone CLI invocation does not leave a daemon running; automatic provisioning runs while Studio is running.
+
 ## CLI And Studio Parity
 
 Every Studio operation has a CLI equivalent:
@@ -268,7 +270,13 @@ CubeSandbox OSS accepts `network_type=tap`, exposed ports, DNS config, and `cube
 
 Studio also includes a network probe action. It builds a sandbox-to-sandbox reachability plan from CubeSandbox runtime IPs, then can execute ICMP/TCP checks from each provisioned sandbox and render reachable, blocked, and unknown paths in the Network view. The same view summarizes K8s labs by cluster, control-plane and worker nodes, API/join endpoints, CIDRs, NodePorts, NAT, and forwards.
 
-For multi-sandbox Kubernetes experiments, use the Studio action menu's `Create K8s Lab` flow to create a batch of control-plane and worker sandboxes with shared TAP egress policy, exposed API/node ports, CNI, pod/service CIDRs, join token, sysctls, and extra kubelet/runtime args. The generated worlds are named from the lab prefix, for example `demo-cp-1` and `demo-worker-1`, and carry `kakurizai.lab` plus `kakurizai.kubernetes.*` annotations and labels for runtime bootstrappers or host-side automation.
+For multi-sandbox Kubernetes experiments, use `Network → Kubernetes lab → Create K8s Lab` in Studio to create a batch of control-plane and worker sandboxes with shared TAP egress policy, exposed API/node ports, CNI, pod/service CIDRs, join token, sysctls, and extra kubelet/runtime args. The generated worlds are named from the lab prefix, for example `demo-cp-1` and `demo-worker-1`, and carry `kakurizai.lab` plus `kakurizai.kubernetes.*` annotations and labels for runtime bootstrappers or host-side automation.
+
+K3s labs now bootstrap inside the guest: KakuriZai downloads a version-pinned binary and verifies its published SHA-256, starts the first server, waits for its API readiness, joins the remaining servers/workers using a shared token, and waits for every expected node to report `Ready`. The built-in bootstrap supports the `k3s` profile with Flannel VXLAN; set `kubernetes.bootstrap=false` when using an external bootstrapper or another distribution/CNI. Additional control planes use embedded etcd. The API, kubelet, VXLAN and (when needed) etcd ports are included in the generated Cube network request. Cube guest kernels must support the cgroups, overlay and networking features required by K3s.
+
+Node bootstrap state is retained in `world.sandbox.kubernetesBootstrap` as `pending`, `starting`, `ready`, or `failed`; `lab.bootstrap` summarizes a lab creation result. A lab whose Cube runtimes are not yet available stays pending and is picked up by the Studio controller later. A failed install or a node that never becomes Ready is recorded as failed, rather than as a working cluster. Bootstrap timeout, polling interval and the default K3s version are configured in `cube.kubernetesBootstrap`. The current default is `v1.36.5+k3s1` with a ten-minute readiness deadline. Inside each guest the managed process, private configuration, PID and service log live under `/var/lib/kakurizai/kubernetes`.
+
+All newly generated host mount destinations, including internal layer mounts under `/workspace/.kakurizai`, are constrained to the configured guest workspace (by default `/workspace`). The internal `.kakurizai` destination is reserved; mounted-workspace capture excludes it to avoid copying layers twice. Existing requests retain their original `/kakurizai` paths until recreated. This is a host mount configuration boundary, not a restriction on accessing the guest OS filesystem: guest tools and Kubernetes still use paths such as `/etc` and `/var/lib`.
 
 You can also compose a lab manually by using the same cluster name across sandboxes and setting each sandbox role to `control-plane`, `worker`, or `standalone`.
 

@@ -17,6 +17,7 @@ import { applyProbeChecks, buildNetworkProbePlan, buildProbeScript, parseProbeOu
 import { TerraformManager } from "./core/terraform.js";
 import { SandboxTemplateStore, starterSandboxTemplate } from "./core/templates.js";
 import { CubeSandboxClient } from "./cube/client.js";
+import { startProvisioningController } from "./core/provisioning.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATIC_ROOT = path.join(__dirname, "studio");
@@ -87,7 +88,9 @@ export async function startStudio(config) {
     server.once("error", reject);
     server.listen(config.studio.port, config.studio.host, resolve);
   });
+  const provisioningController = startProvisioningController(config);
   server.on("close", () => {
+    void provisioningController.stop();
     failoverController.stop();
     void terraform.close();
   });
@@ -1683,7 +1686,12 @@ async function api(config, devAccess, sessions, accounts, terraform, templates, 
   }
   if (request.method === "POST" && url.pathname === "/api/labs/kubernetes") {
     authorize(config, request, "worlds:write");
-    return sendJson(request, response, await createKubernetesLab(config, await readBody(request)), 201);
+    const result = await createKubernetesLab(config, await readBody(request));
+    const status = result.lab.bootstrap?.status;
+    return sendJson(request, response, {
+      ...result,
+      ...(status === "failed" ? { error: result.lab.bootstrap.reason } : {})
+    }, status === "failed" ? 503 : status === "pending" ? 202 : 201);
   }
   if (request.method === "POST" && url.pathname === "/api/labs/hetero-network") {
     authorize(config, request, "worlds:write");
@@ -1961,7 +1969,10 @@ function sendJson(requestOrResponse, responseOrValue, valueOrStatus, statusOrHea
     ...securityHeaders(request, "application/json; charset=utf-8"),
     ...headers
   });
-  response.end(`${JSON.stringify(value, null, 2)}\n`);
+  response.end(`${JSON.stringify(value, function (key, field) {
+    if (key === "kakurizai.kubernetes.joinToken" || (key === "joinToken" && this?.clusterName && this?.nodeRole)) return "";
+    return field;
+  }, 2)}\n`);
   if (request?.audit && request.url?.startsWith("/api/") && !request.url.startsWith("/api/auth/config")) {
     void request.audit.write(auditRecord(request, status));
   }

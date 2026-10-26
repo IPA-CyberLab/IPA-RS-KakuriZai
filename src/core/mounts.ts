@@ -56,11 +56,14 @@ export function normalizeWorkspacePath(value) {
 export function normalizeSandboxPath(value, workspacePath = DEFAULT_WORKSPACE_PATH, mountName = "mount") {
   const workspace = normalizeWorkspacePath(workspacePath);
   const fallback = path.posix.join(workspace, slugMountName(mountName));
-  if (!value) return fallback;
-  const normalized = path.posix.normalize(`/${String(value).replace(/^\/+/, "")}`);
-  if (normalized === workspace) return fallback;
+  const requested = value ? path.posix.normalize(`/${String(value).replace(/^\/+/, "")}`) : fallback;
+  const normalized = requested === workspace ? fallback : requested;
   if (!normalized.startsWith(`${workspace}/`)) {
     throw new Error(`mount sandboxPath must be inside ${workspace}: ${value}`);
+  }
+  const reserved = path.posix.join(workspace, ".kakurizai");
+  if (normalized === reserved || normalized.startsWith(`${reserved}/`)) {
+    throw new Error(`mount sandboxPath uses reserved internal storage: ${value || mountName}`);
   }
   return normalized;
 }

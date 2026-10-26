@@ -1,11 +1,13 @@
 // @ts-nocheck
 import fs from "node:fs/promises";
+import crypto from "node:crypto";
 import path from "node:path";
 import { getBackend } from "../backends/index.js";
 import { CubeSandboxClient } from "../cube/client.js";
 import { applyNetworkToCubeRequest, writableLayerAnnotations } from "../cube/request.js";
 import { normalizeHostMounts, primaryMount } from "./mounts.js";
 import { normalizeKubernetesConfig, normalizeNetworkConfig } from "./network.js";
+import { bootstrapKubernetesLab } from "./kubernetes.js";
 import { WorldStore } from "./store.js";
 import { openTarget } from "./openers.js";
 
@@ -366,7 +368,12 @@ export async function createKubernetesLab(config, input = {}) {
   const labName = cleanLabName(input.name || input.clusterName || "kakurizai-lab");
   const controlPlanes = clampCount(input.controlPlanes ?? input.controlPlaneCount ?? 1, "controlPlanes", { min: 1 });
   const workers = clampCount(input.workers ?? input.workerCount ?? 2, "workers");
+  const expectedNodes = [
+    ...Array.from({ length: controlPlanes }, (_, index) => `${labName}-cp-${index + 1}`),
+    ...Array.from({ length: workers }, (_, index) => `${labName}-worker-${index + 1}`)
+  ];
   const profile = input.profile || input.kubernetes?.profile || "k3s";
+  const joinToken = input.joinToken || input.kubernetes?.joinToken || crypto.randomBytes(32).toString("hex");
   const apiServerPort = Number(input.apiServerPort || input.kubernetes?.apiServerPort || 6443);
   const nodePorts = input.nodePorts || input.kubernetes?.nodePorts || [30000, 30001];
   const firstControlPlaneIp = cleanOptionalString(input.controlPlaneIp || input.controlPlaneNetwork?.sandboxIp || input.controlPlane?.network?.sandboxIp || input.network?.controlPlane?.sandboxIp || input.network?.controlPlanes?.sandboxIp);
@@ -419,6 +426,9 @@ export async function createKubernetesLab(config, input = {}) {
         nodeName: `${labName}-cp-${index}`,
         apiServerPort,
         nodePorts,
+        joinToken,
+        clusterInit: controlPlanes > 1 && index === 1,
+        expectedNodes,
         joinEndpoint: index === 1 ? input.joinEndpoint || "" : joinEndpoint
       }),
       labels: labLabels(input.labels, labName, "control-plane", index)
@@ -442,12 +452,16 @@ export async function createKubernetesLab(config, input = {}) {
         nodeName: `${labName}-worker-${index}`,
         apiServerPort,
         nodePorts,
+        joinToken,
+        expectedNodes,
         joinEndpoint
       }),
       labels: labLabels(input.labels, labName, "worker", index)
     }));
   }
   const networkTopology = await syncLabNetworkTopology(config, created);
+  const bootstrap = await bootstrapKubernetesLab(config, created);
+  const store = new WorldStore(config);
   return {
     lab: {
       name: labName,
@@ -455,9 +469,10 @@ export async function createKubernetesLab(config, input = {}) {
       controlPlanes,
       workers,
       joinEndpoint,
-      networkTopology
+      networkTopology,
+      bootstrap
     },
-    worlds: created
+    worlds: await Promise.all(created.map((world) => store.get(world.id, { exactId: true })))
   };
 }
 
@@ -539,7 +554,12 @@ export async function updateWorldConfig(config, ref, input = {}) {
     world.backendConfig.networkType = world.backendConfig.network.type;
   }
   if (input.kubernetes !== undefined || input.k8s !== undefined) {
-    world.backendConfig.kubernetes = normalizeKubernetesConfig(input.kubernetes || input.k8s || {});
+    const kubernetes = input.kubernetes || input.k8s || {};
+    world.backendConfig.kubernetes = normalizeKubernetesConfig({
+      ...kubernetes,
+      joinToken: kubernetes.joinToken || world.backendConfig.kubernetes?.joinToken || ""
+    });
+    if (world.sandbox) world.sandbox.kubernetesBootstrap = { status: "pending", reason: "Kubernetes configuration changed" };
   }
   if (input.network !== undefined || input.networkType !== undefined || input.kubernetes !== undefined || input.k8s !== undefined) {
     updateCubeRequestNetwork(world);
@@ -614,11 +634,15 @@ function kubernetesNodeConfig(input, defaults) {
     clusterName: defaults.clusterName,
     nodeRole: defaults.nodeRole,
     nodeName: defaults.nodeName,
+    clusterInit: defaults.clusterInit === true,
+    expectedNodes: defaults.expectedNodes || [],
     cni: input.cni || input.kubernetes?.cni,
     podCidr: input.podCidr || input.kubernetes?.podCidr,
     serviceCidr: input.serviceCidr || input.kubernetes?.serviceCidr,
     joinEndpoint: defaults.joinEndpoint,
-    joinToken: input.joinToken || input.kubernetes?.joinToken,
+    joinToken: input.joinToken || input.kubernetes?.joinToken || defaults.joinToken,
+    bootstrap: input.bootstrap ?? input.kubernetes?.bootstrap ?? true,
+    version: input.kubernetesVersion || input.kubernetes?.version,
     advertiseAddress: input.advertiseAddress || input.kubernetes?.advertiseAddress,
     extraArgs: input.extraArgs || input.kubernetes?.extraArgs,
     sysctls: input.sysctls || input.kubernetes?.sysctls,

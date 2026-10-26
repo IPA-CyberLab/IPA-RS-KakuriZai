@@ -117,6 +117,7 @@ type World = {
       skipped?: boolean;
       reason?: string | null;
     } | null;
+    kubernetesBootstrap?: { status: string; reason?: string; endpoint?: string } | null;
   } | null;
   backendConfig?: {
     mountMode?: string;
@@ -476,6 +477,11 @@ type HeteroNetworkLabResult = {
     doubleNatNodes: number;
     servicePorts?: Record<string, number>;
   };
+  worlds: World[];
+};
+
+type KubernetesLabResult = {
+  lab: { name: string; bootstrap?: { status: string; reason?: string; endpoint?: string } };
   worlds: World[];
 };
 
@@ -959,6 +965,23 @@ function App() {
       return result;
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createKubernetesLab(options: Record<string, unknown>) {
+    setBusy(true);
+    try {
+      const result = await api<KubernetesLabResult>("/api/labs/kubernetes", { method: "POST", token, body: options });
+      setSelectedId(result.worlds[0] ? `world:${result.worlds[0].id}` : selectedId);
+      setStatus(`Kubernetes ${result.lab.name}: ${result.lab.bootstrap?.status || "defined"}`);
+      await refresh();
+      return result;
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+      await refresh().catch(() => {});
       throw error;
     } finally {
       setBusy(false);
@@ -1743,11 +1766,18 @@ function App() {
               selectedTemplate={selectedTemplate}
               onProbe={runNetworkProbe}
               onCreateHeteroNetworkLab={createHeteroNetworkLab}
+              onCreateKubernetesLab={createKubernetesLab}
               onSaveNetwork={saveNetworkSettings}
               onSelectSandbox={setSelectedId}
             />
           ) : selected ? (
             <div className="sandboxDashboard">
+              {selected.world?.sandbox?.kubernetesBootstrap ? (
+                <div className="sandboxAlert" role="status">
+                  Kubernetes: {selected.world.sandbox.kubernetesBootstrap.status}
+                  {selected.world.sandbox.kubernetesBootstrap.reason ? ` — ${selected.world.sandbox.kubernetesBootstrap.reason}` : ""}
+                </div>
+              ) : null}
               {statusTone(selected.status) === "warn" && (selected.world?.sandbox?.reason || selected.runtime?.inspectError) ? (
                 <div className="sandboxAlert">{selected.world?.sandbox?.reason || selected.runtime?.inspectError}</div>
               ) : null}
@@ -2257,6 +2287,7 @@ function NetworkWorkspace({
   selectedTemplate,
   onProbe,
   onCreateHeteroNetworkLab,
+  onCreateKubernetesLab,
   onSaveNetwork,
   onSelectSandbox
 }: {
@@ -2269,6 +2300,7 @@ function NetworkWorkspace({
   selectedTemplate?: CubeTemplate | null;
   onProbe: (live?: boolean) => Promise<void>;
   onCreateHeteroNetworkLab: (options: Record<string, unknown>) => Promise<HeteroNetworkLabResult>;
+  onCreateKubernetesLab: (options: Record<string, unknown>) => Promise<KubernetesLabResult>;
   onSaveNetwork: (world: World, network: NetworkConfig) => Promise<void>;
   onSelectSandbox: (key: string) => void;
 }) {
@@ -2307,6 +2339,10 @@ function NetworkWorkspace({
         </DisclosureSection>
       ) : null}
 
+      <DisclosureSection icon={<Server size={16} />} title="Kubernetes lab" hint="Create a K3s cluster across isolated workspaces">
+        <KubernetesLabPanel busy={busy} onCreate={onCreateKubernetesLab} />
+      </DisclosureSection>
+
       <DisclosureSection icon={<Globe2 size={16} />} title="Experiments" hint="Create a heterogeneous network lab">
         <HeteroNetworkLabPanel busy={busy} onCreate={onCreateHeteroNetworkLab} />
       </DisclosureSection>
@@ -2330,6 +2366,50 @@ function NetworkWorkspace({
         <ConnectivityMatrix rows={rows} probe={networkProbe} />
       </DisclosureSection>
     </div>
+  );
+}
+
+function KubernetesLabPanel({ busy, onCreate }: {
+  busy: boolean;
+  onCreate: (options: Record<string, unknown>) => Promise<KubernetesLabResult>;
+}) {
+  const [form, setForm] = React.useState({ name: "kubernetes-lab", controlPlanes: "1", workers: "2", cpu: "2000m", memory: "4000Mi", writableLayerSize: "20G", podCidr: "10.42.0.0/16", serviceCidr: "10.43.0.0/16" });
+  const [message, setMessage] = React.useState("");
+  const fields: Array<{ key: keyof typeof form; label: string }> = [
+    { key: "name", label: "Lab name" }, { key: "controlPlanes", label: "Control planes" },
+    { key: "workers", label: "Workers" }, { key: "cpu", label: "CPU" },
+    { key: "memory", label: "Memory" }, { key: "writableLayerSize", label: "Disk" },
+    { key: "podCidr", label: "Pod CIDR" }, { key: "serviceCidr", label: "Service CIDR" }
+  ];
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setMessage("");
+    try {
+      const result = await onCreate({ ...form, controlPlanes: Number(form.controlPlanes), workers: Number(form.workers), profile: "k3s", cni: "flannel" });
+      setMessage(`${result.lab.bootstrap?.status || "defined"}: ${result.worlds.length} nodes${result.lab.bootstrap?.reason ? ` — ${result.lab.bootstrap.reason}` : ""}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    }
+  }
+  return (
+    <form className="labProfileForm" aria-label="Create Kubernetes lab" onSubmit={submit}>
+      <div className="splitFields">
+        {fields.map(({ key, label }) => (
+          <div key={key}>
+            <label htmlFor={`k8s-lab-${key}`}>{label}</label>
+            <input id={`k8s-lab-${key}`} value={form[key]} required
+              type={key === "controlPlanes" || key === "workers" ? "number" : "text"}
+              min={key === "workers" ? 0 : key === "controlPlanes" ? 1 : undefined}
+              max={key === "controlPlanes" || key === "workers" ? 20 : undefined}
+              onChange={(event) => setForm({ ...form, [key]: event.target.value })} />
+          </div>
+        ))}
+      </div>
+      <div className="actionStrip">
+        <button className="primary" type="submit" disabled={busy}>Create K8s Lab</button>
+        <span role="status">{message}</span>
+      </div>
+    </form>
   );
 }
 

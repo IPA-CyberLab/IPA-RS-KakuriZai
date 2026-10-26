@@ -84,6 +84,37 @@ test("unionfs-fuse whiteouts delete host paths during apply", async () => {
   await assert.rejects(fs.stat(path.join(source, "docs")), /ENOENT/);
 });
 
+test("native 0/0 whiteouts are collected as deletions and never copied as devices", async (context) => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-native-whiteout-"));
+  const source = path.join(tmp, "source");
+  await fs.mkdir(source);
+  await fs.writeFile(path.join(source, "remove.txt"), "original\n");
+  const config = await loadConfig({ home: path.join(tmp, "home"), createSecrets: false });
+  const store = new WorldStore(config);
+  const world = await store.create({ name: "native-delete", sourcePath: source, backend: "cube-sandbox-overlay" });
+  const upper = path.join(world.paths.upper, world.backendConfig.mounts[0].id);
+  await fs.mkdir(upper, { recursive: true });
+  const marker = path.join(upper, "remove.txt");
+  await fs.writeFile(marker, "");
+  // Emulate the kernel's device metadata without requiring root/mknod in tests.
+  const readdir = fs.readdir.bind(fs);
+  const lstat = fs.lstat.bind(fs);
+  context.mock.method(fs, "readdir", async (dir, options) => {
+    const entries = await readdir(dir, options);
+    return dir === upper && options?.withFileTypes
+      ? entries.map((entry) => ({ name: entry.name, isDirectory: () => false, isSymbolicLink: () => false, isFile: () => false }))
+      : entries;
+  });
+  context.mock.method(fs, "lstat", async (file, ...args) => file === marker
+    ? { isCharacterDevice: () => true, rdev: 0 }
+    : lstat(file, ...args));
+  const preview = await store.apply(world, { dryRun: true });
+  assert.deepEqual(preview.changes.map(({ action, path }) => ({ action, path })), [{ action: "delete", path: "remove.txt" }]);
+  assert.equal(await fs.readFile(path.join(source, "remove.txt"), "utf8"), "original\n");
+  await store.apply(world);
+  await assert.rejects(fs.stat(path.join(source, "remove.txt")), /ENOENT/);
+});
+
 test("duplicate world names require exact id for destructive operations", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-duplicate-"));
   const source = path.join(tmp, "source");

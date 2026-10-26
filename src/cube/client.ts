@@ -6,7 +6,8 @@ import https from "node:https";
 import path from "node:path";
 import { commandExists } from "../core/fs.js";
 import { runCommand } from "../core/process.js";
-import { mountSpecsForWorld } from "./request.js";
+import { normalizeWorkspacePath } from "../core/mounts.js";
+import { guestStorageRootForWorld, mountSpecsForWorld } from "./request.js";
 
 const PUBLIC_IPV4_CIDRS = [
   "1.0.0.0/8",
@@ -320,6 +321,14 @@ export class CubeSandboxClient {
     return { available: false, reason: `cube mode ${mode} is not available` };
   }
 
+  provisioningAvailability() {
+    const status = this.available();
+    if (status.available && status.mode === "master" && !commandExists(this.config.cubecli || "cubecli")) {
+      return { available: false, mode: "master", reason: "cubecli not found; waiting to provision the complete workspace" };
+    }
+    return status;
+  }
+
   async resolveTemplateForResources(resources = {}) {
     const templateId = String(resources.template || "").trim();
     const writableLayerSize = String(resources.writableLayerSize || "").trim();
@@ -399,6 +408,8 @@ export class CubeSandboxClient {
   }
 
   async createCompatibleTemplate(binary, sourceSummary, resources) {
+    const timeoutMs = Math.max(1, Math.min(Number(this.config.templateBuildTimeoutMs) || 20 * 60 * 1000, 20 * 60 * 1000));
+    const deadline = Date.now() + timeoutMs;
     const args = [
       "template",
       "create-from-image",
@@ -416,8 +427,9 @@ export class CubeSandboxClient {
       String(memoryMi(resources.memory)),
       "--json"
     ];
-    const create = await commandSummary(binary, args, parseJsonFromOutput);
+    const create = await commandSummary(binary, args, parseJsonFromOutput, { timeoutMs, killProcessGroup: true });
     if (!create.ok) {
+      if (create.timedOut || Date.now() >= deadline) throw new Error(`CubeSandbox template build timed out after ${timeoutMs}ms`);
       throw new Error(`could not create a resource-compatible CubeSandbox template: ${create.reason}`);
     }
     const job = create.value?.job;
@@ -427,9 +439,7 @@ export class CubeSandboxClient {
       throw new Error("CubeSandbox template build did not return a job and template id");
     }
 
-    const timeoutMs = Number(this.config.templateBuildTimeoutMs || 20 * 60 * 1000);
     const intervalMs = Number(this.config.templateBuildPollIntervalMs || 2000);
-    const deadline = Date.now() + timeoutMs;
     let current = job;
     while (Date.now() < deadline) {
       const state = String(current?.status || "").toUpperCase();
@@ -440,13 +450,16 @@ export class CubeSandboxClient {
           + (current?.error_message || current?.errorMessage || current?.phase || state)
         );
       }
-      await delay(intervalMs);
+      await delay(Math.min(intervalMs, Math.max(0, deadline - Date.now())));
+      if (Date.now() >= deadline) break;
       const status = await commandSummary(
         binary,
         ["template", "status", "--job-id", jobId, "--json"],
-        parseJsonFromOutput
+        parseJsonFromOutput,
+        { timeoutMs: Math.max(1, deadline - Date.now()), killProcessGroup: true }
       );
       if (!status.ok) {
+        if (Date.now() >= deadline) throw new Error(`CubeSandbox template ${templateId} build timed out after ${timeoutMs}ms`);
         throw new Error(`could not read CubeSandbox template build ${jobId}: ${status.reason}`);
       }
       current = status.value?.job || {};
@@ -633,15 +646,19 @@ export class CubeSandboxClient {
     if (!sandboxId) return { applied: false, skipped: true, reason: "world has no sandbox id" };
     const binary = commandExists(this.config.cubecli || "cubecli");
     if (!binary) return { applied: false, skipped: true, reason: "cubecli not found" };
-    const workspace = options.workspace || this.config.workspacePath || "/workspace";
+    const workspace = normalizeWorkspacePath(options.workspace || this.config.workspacePath || "/workspace");
     const target = options.target || "/kakurizai/replication-state/workspace";
+    if (target === "/" || target === workspace || target.startsWith(`${workspace}/`)) throw new Error("replication state target must be outside the mounted workspace");
+    const storage = guestStorageRootForWorld(world, this.config);
+    const excluded = storage.startsWith(`${workspace}/`) ? storage.slice(workspace.length + 1).split("/")[0] : "";
     const script = [
       "set -eu",
       `workspace=${shellQuote(workspace)}`,
       `target=${shellQuote(target)}`,
+      `excluded=${shellQuote(excluded)}`,
       "rm -rf \"$target\"",
       "mkdir -p \"$target\"",
-      "if [ -d \"$workspace\" ]; then cp -a \"$workspace\"/. \"$target\"/; fi",
+      "if [ -d \"$workspace\" ]; then if [ -n \"$excluded\" ]; then find \"$workspace\" -mindepth 1 -maxdepth 1 ! -name \"$excluded\" -exec cp -a {} \"$target\"/ \\;; else cp -a \"$workspace\"/. \"$target\"/; fi; fi",
       "printf 'workspace=%s\\ntarget=%s\\n' \"$workspace\" \"$target\""
     ].join("; ");
     const result = await runCubeCliCommand(binary, [
@@ -1062,6 +1079,9 @@ export class CubeSandboxClient {
       if (network.allowInternetAccess === false) {
         cidrRules.push(`${shellQuote(iptables)} -A ${chain} -s ${shellQuote(`${ip}/32`)} -d 192.168.0.0/18 -m comment --comment ${shellQuote(tag)} -j RETURN`);
         cidrRules.push(`${shellQuote(iptables)} -A ${chain} -s ${shellQuote(`${ip}/32`)} -d 169.254.0.0/16 -m comment --comment ${shellQuote(tag)} -j RETURN`);
+        for (const cidr of PUBLIC_IPV4_CIDRS) {
+          cidrRules.push(`${shellQuote(iptables)} -A ${chain} -s ${shellQuote(`${ip}/32`)} -d ${shellQuote(cidr)} -m comment --comment ${shellQuote(tag)} -j DROP`);
+        }
         cidrRules.push(`${shellQuote(iptables)} -A ${chain} -s ${shellQuote(`${ip}/32`)} -m comment --comment ${shellQuote(tag)} -j REJECT --reject-with icmp-net-unreachable`);
       } else {
         for (const cidr of network.denyOut || []) {
@@ -1396,7 +1416,7 @@ export class CubeSandboxClient {
       "  printf '%s\\n' \"$exec_id\"",
       "done"
     ].join("\n");
-    const result = await runCommand("sh", ["-lc", script], { allowFailure: true });
+    const result = await runCommand("sh", ["-c", script], { allowFailure: true });
     if (result.code === 0) {
       return {
         skipped: false,
@@ -1414,7 +1434,7 @@ export class CubeSandboxClient {
       };
     }
     const sudoScript = script.replaceAll(shellQuote(binary), `${shellQuote(sudo)} -n ${shellQuote(binary)}`);
-    const sudoResult = await runCommand("sh", ["-lc", sudoScript], { allowFailure: true });
+    const sudoResult = await runCommand("sh", ["-c", sudoScript], { allowFailure: true });
     return {
       skipped: false,
       code: sudoResult.code,
@@ -1464,7 +1484,7 @@ export class CubeSandboxClient {
       sandboxIdForCubeCli(sandboxId),
       ...command
     ]);
-    if (direct) return runCommand(direct.command, direct.args, { inherit: options.inherit, allowFailure: options.allowFailure, timeoutMs: options.timeoutMs });
+    if (direct) return runCommand(direct.command, direct.args, { inherit: options.inherit, allowFailure: options.allowFailure, timeoutMs: options.timeoutMs, signal: options.signal, killProcessGroup: options.killProcessGroup });
     const binary = commandExists(this.config.cubecli || "cubecli");
     if (!binary) throw new Error("CubeSandbox is unavailable: cubecli not found");
     const args = [...cubeCliGlobalArgs(this.config), "exec"];
@@ -1474,6 +1494,8 @@ export class CubeSandboxClient {
       inherit: options.inherit,
       allowFailure: options.allowFailure,
       timeoutMs: options.timeoutMs,
+      signal: options.signal,
+      killProcessGroup: options.killProcessGroup,
       config: this.config
     });
   }
@@ -1578,6 +1600,7 @@ export class CubeSandboxClient {
     const binary = commandExists(this.config.cubecli || "cubecli");
     if (!binary) return { mounted: false, reason: "cubecli not found" };
     const workspace = shellQuote(this.config.workspacePath || "/workspace");
+    const storage = guestStorageRootForWorld(world, this.config);
     const mounts = mountSpecsForWorld(world, this.config).filter((mount) => mount.mode === "agctl-overlay");
     if (!mounts.length) return { mounted: true, driver: null, reason: null, output: "" };
     const setupCalls = mounts.map((mount) => [
@@ -1591,8 +1614,8 @@ export class CubeSandboxClient {
     const script = [
       "set -eu",
       `workspace=${workspace}`,
-      "driver_file=/kakurizai/work/.kakurizai-overlay-driver",
-      "mkdir -p \"$workspace\" /kakurizai/work",
+      `driver_file=${shellQuote(`${storage}/work/.kakurizai-overlay-driver`)}`,
+      `mkdir -p "$workspace" ${shellQuote(`${storage}/work`)}`,
       ": > \"$driver_file\"",
       "probe_mount() { lower=$1; upper=$2; target=$3; sample_file=$(find \"$lower\" -mindepth 1 -maxdepth 4 -type f -print -quit 2>/dev/null || true); if [ -n \"$sample_file\" ]; then rel=${sample_file#\"$lower\"/}; head -c 1 \"$target/$rel\" >/dev/null || return 1; fi; sample_dir=$(find \"$lower\" -mindepth 1 -maxdepth 4 -type d -print -quit 2>/dev/null || true); if [ -n \"$sample_dir\" ]; then rel=${sample_dir#\"$lower\"/}; (cd \"$target/$rel\") || return 1; fi; probe=\".kakurizai-overlay-probe-$$\"; printf kakurizai > \"$target/$probe\" || return 1; test -f \"$upper/$probe\" || return 1; rm -f \"$upper/$probe\"; return 0; }",
       "install_unionfs_fuse() { command -v unionfs-fuse >/dev/null 2>&1 && return 0; if command -v apt-get >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y --no-install-recommends unionfs-fuse fuse3; return 0; fi; if command -v apk >/dev/null 2>&1; then apk add --no-cache unionfs-fuse fuse3; return 0; fi; if command -v dnf >/dev/null 2>&1; then dnf install -y unionfs-fuse fuse3; return 0; fi; if command -v yum >/dev/null 2>&1; then yum install -y unionfs-fuse fuse3; return 0; fi; return 1; }",
@@ -1826,12 +1849,12 @@ function parseFailure(output) {
   return /message:([^,\n]+)/.exec(output)?.[1]?.trim() || /run fail:\s*(.+)/.exec(output)?.[1]?.trim() || null;
 }
 
-async function commandSummary(command, args, parser = null) {
-  const result = await runCommand(command, args, { allowFailure: true });
+async function commandSummary(command, args, parser = null, options = {}) {
+  const result = await runCommand(command, args, { ...options, allowFailure: true });
   const stdout = result.stdout || "";
   const stderr = result.stderr || "";
   if (result.code !== 0) {
-    return { ok: false, reason: parseFailure(`${stdout}\n${stderr}`) || `${command} ${args.join(" ")} exited with ${result.code}`, stdout, stderr };
+    return { ok: false, reason: parseFailure(`${stdout}\n${stderr}`) || `${command} ${args.join(" ")} exited with ${result.code}`, stdout, stderr, timedOut: result.timedOut };
   }
   return { ok: true, stdout, stderr, value: parser ? parser(stdout) : stdout };
 }

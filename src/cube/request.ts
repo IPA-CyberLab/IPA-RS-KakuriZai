@@ -1,5 +1,6 @@
 // @ts-nocheck
-import { normalizeHostMounts } from "../core/mounts.js";
+import path from "node:path";
+import { normalizeHostMounts, normalizeWorkspacePath } from "../core/mounts.js";
 import {
   cubeNetworkPolicy,
   effectiveNetworkConfig,
@@ -8,7 +9,8 @@ import {
 } from "../core/network.js";
 
 export function buildCubeSandboxRequest(world, cubeConfig = {}) {
-  const workspace = cubeConfig.workspacePath || "/workspace";
+  const workspace = normalizeWorkspacePath(cubeConfig.workspacePath || "/workspace");
+  cubeConfig = { ...cubeConfig, workspacePath: workspace, guestStorageRoot: path.posix.join(workspace, ".kakurizai") };
   const mounts = mountSpecsForWorld(world, cubeConfig);
   const mountMode = summarizeMountMode(mounts);
   const network = normalizeNetworkConfig({
@@ -28,7 +30,7 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
   const writableLayerSize = cubeConfig.writableLayerSize || world.backendConfig?.writableLayerSize || null;
   const writableLayerRequestAnnotations = writableLayerAnnotations(writableLayerSize);
   const volumes = volumesForMounts(mounts, world);
-  const volumeMounts = volumeMountsForMounts(mounts, world);
+  const volumeMounts = volumeMountsForMounts(mounts, world, cubeConfig.guestStorageRoot);
   const primaryMount = mounts[0] || null;
   const request = {
     requestID: `kakurizai-${world.id}`,
@@ -60,6 +62,7 @@ export function buildCubeSandboxRequest(world, cubeConfig = {}) {
       "kakurizai.source": primaryMount?.sourcePath || world.sourcePath,
       "kakurizai.upper": world.paths.upper,
       "kakurizai.workspace": workspace,
+      "kakurizai.guestStorageRoot": cubeConfig.guestStorageRoot,
       "kakurizai.mountMode": mountMode,
       "kakurizai.hostMount": String(mounts.length > 0),
       "kakurizai.mounts": JSON.stringify(mounts.map(publicMountSpec)),
@@ -110,6 +113,7 @@ export function writableLayerAnnotations(writableLayerSize) {
 
 export function mountSpecsForWorld(world, cubeConfig = {}) {
   const workspace = cubeConfig.workspacePath || "/workspace";
+  const storage = guestStorageRootForWorld(world, cubeConfig);
   return normalizeHostMounts({
     hostMount: world.backendConfig?.hostMount,
     sourcePath: world.sourcePath,
@@ -119,11 +123,20 @@ export function mountSpecsForWorld(world, cubeConfig = {}) {
     workspacePath: workspace
   }).map((mount) => ({
     ...mount,
-    lower: `/kakurizai/mounts/${mount.id}/lower`,
-    upper: `/kakurizai/upper/${mount.id}`,
-    work: `/kakurizai/work/${mount.id}`,
-    whiteouts: `/kakurizai/whiteouts/${mount.id}`
+    lower: `${storage}/mounts/${mount.id}/lower`,
+    upper: `${storage}/upper/${mount.id}`,
+    work: `${storage}/work/${mount.id}`,
+    whiteouts: `${storage}/whiteouts/${mount.id}`
   }));
+}
+
+export function guestStorageRootForWorld(world, cubeConfig = {}) {
+  if (cubeConfig.guestStorageRoot) return cubeConfig.guestStorageRoot;
+  const request = world.backendConfig?.cubeRequest;
+  if (request?.annotations?.["kakurizai.guestStorageRoot"]) return request.annotations["kakurizai.guestStorageRoot"];
+  // Keep existing running guests usable; only newly generated requests move layers.
+  if (request) return "/kakurizai";
+  return path.posix.join(normalizeWorkspacePath(cubeConfig.workspacePath || "/workspace"), ".kakurizai");
 }
 
 export function applyNetworkToCubeRequest(request, networkInput = {}, kubernetesInput = {}) {
@@ -217,6 +230,9 @@ function kubernetesAnnotations(kubernetes) {
   const annotations = {
     "kakurizai.kubernetes": String(kubernetes.enabled),
     "kakurizai.kubernetes.profile": kubernetes.profile,
+    "kakurizai.kubernetes.bootstrap": String(kubernetes.bootstrap),
+    "kakurizai.kubernetes.version": kubernetes.version,
+    "kakurizai.kubernetes.clusterInit": String(kubernetes.clusterInit),
     "kakurizai.kubernetes.cluster": kubernetes.clusterName,
     "kakurizai.kubernetes.nodeRole": kubernetes.nodeRole,
     "kakurizai.kubernetes.nodeName": kubernetes.nodeName || "",
@@ -325,14 +341,14 @@ function volumesForMounts(mounts, world) {
   return volumes;
 }
 
-function volumeMountsForMounts(mounts, world) {
+function volumeMountsForMounts(mounts, world, storage) {
   const volumeMounts = [];
   if (!mounts.length) return volumeMounts;
   if (mounts.some((mount) => mount.mode === "agctl-overlay")) {
     volumeMounts.push(
-      { name: "upper", container_path: "/kakurizai/upper", readonly: false, host_path: world.paths.upper },
-      { name: "work", container_path: "/kakurizai/work", readonly: false, host_path: world.paths.workdir },
-      { name: "whiteouts", container_path: "/kakurizai/whiteouts", readonly: false, host_path: world.paths.whiteouts }
+      { name: "upper", container_path: `${storage}/upper`, readonly: false, host_path: world.paths.upper },
+      { name: "work", container_path: `${storage}/work`, readonly: false, host_path: world.paths.workdir },
+      { name: "whiteouts", container_path: `${storage}/whiteouts`, readonly: false, host_path: world.paths.whiteouts }
     );
   }
   for (const mount of mounts) {

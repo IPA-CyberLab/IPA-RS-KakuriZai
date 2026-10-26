@@ -8,7 +8,8 @@ import { normalizeKubernetesConfig, normalizeNetworkConfig } from "../dist/src/c
 import { parseSandboxManifest, manifestToCreateInput, writeTerraformBundle } from "../dist/src/core/spec.js";
 import { WorldStore } from "../dist/src/core/store.js";
 import { updateWorldConfig } from "../dist/src/core/worlds.js";
-import { buildCubeSandboxRequest } from "../dist/src/cube/request.js";
+import { buildCubeSandboxRequest, mountSpecsForWorld } from "../dist/src/cube/request.js";
+import { normalizeSandboxPath } from "../dist/src/core/mounts.js";
 
 test("cube request mounts source readonly and upper writable", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-"));
@@ -36,7 +37,8 @@ test("cube request mounts source readonly and upper writable", async () => {
   const mounts = request.containers[0].volume_mounts;
   assert.deepEqual(request.containers[0].resources, { cpu: "2000m", mem: "2000Mi" });
   assert.equal(mounts.find((mount) => mount.name === "lower-source").readonly, true);
-  assert.equal(mounts.find((mount) => mount.name === "lower-source").container_path, "/kakurizai/mounts/source/lower");
+  assert.equal(mounts.find((mount) => mount.name === "lower-source").container_path, "/workspace/.kakurizai/mounts/source/lower");
+  assert.ok(mounts.every((mount) => mount.container_path.startsWith("/workspace/")));
   assert.equal(mounts.find((mount) => mount.name === "upper").readonly, false);
   assert.match(request.containers[0].args[0], /\/workspace\/source/);
   assert.match(request.containers[0].args[0], /tail -f \/dev\/null/);
@@ -70,6 +72,20 @@ test("cube request supports CubeSandbox direct mount modes", async () => {
   assert.equal(unsafeRequest.annotations["kakurizai.mountMode"], "unsafe-rw");
 });
 
+test("internal mount destinations are reserved and legacy guest paths remain usable until recreation", async () => {
+  assert.throws(() => normalizeSandboxPath("/workspace/.kakurizai/upper"), /reserved internal storage/);
+  assert.throws(() => normalizeSandboxPath("/etc/source"), /must be inside/);
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-legacy-mounts-"));
+  const config = await loadConfig({ home: path.join(tmp, "home"), createSecrets: false });
+  const world = await new WorldStore(config).create({ name: "old", sourcePath: tmp, backend: "cube-sandbox-overlay" });
+  world.backendConfig.cubeRequest = { annotations: {} };
+  assert.match(mountSpecsForWorld(world)[0].lower, /^\/kakurizai\/mounts\/[^/]+\/lower$/);
+  const request = buildCubeSandboxRequest(world);
+  assert.ok(request.containers[0].volume_mounts.every((mount) => mount.container_path.startsWith("/workspace/")));
+  world.backendConfig.cubeRequest = request;
+  assert.ok(mountSpecsForWorld(world)[0].lower.startsWith("/workspace/.kakurizai/"));
+});
+
 test("cube request supports multiple workspace subfolder mounts", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-cube-multi-"));
   const sourceA = path.join(tmp, "alpha");
@@ -94,7 +110,7 @@ test("cube request supports multiple workspace subfolder mounts", async () => {
 
   assert.equal(request.annotations["kakurizai.mountMode"], "mixed");
   assert.equal(request.annotations["kakurizai.overlayMounts"], "1");
-  assert.equal(mounts.find((mount) => mount.name === "lower-repo").container_path, "/kakurizai/mounts/repo/lower");
+  assert.equal(mounts.find((mount) => mount.name === "lower-repo").container_path, "/workspace/.kakurizai/mounts/repo/lower");
   assert.equal(mounts.find((mount) => mount.name === "mount-data").container_path, "/workspace/data");
   assert.equal(mounts.find((mount) => mount.name === "mount-data").readonly, true);
   assert.match(request.containers[0].args[0], /\/workspace\/repo/);
@@ -326,8 +342,8 @@ test("cube request carries network, DNS, and Kubernetes lab settings", async () 
   assert.equal(request.network_type, "tap");
   assert.equal(request.sandbox_ip, "192.168.1.50");
   assert.equal(request.annotations["kakurizai.network.sandboxIp"], "192.168.1.50");
-  assert.deepEqual(request.exposed_ports, [6443, 8080, 30000]);
-  assert.equal(request.annotations["com.exposed_ports"], "6443:8080:30000");
+  assert.deepEqual(request.exposed_ports, [2379, 2380, 6443, 8080, 8472, 10250, 30000]);
+  assert.equal(request.annotations["com.exposed_ports"], "2379:2380:6443:8080:8472:10250:30000");
   assert.equal(request.annotations["kakurizai.kubernetes.cluster"], "lab-a");
   assert.equal(request.annotations["kakurizai.kubernetes.nodeRole"], "control-plane");
   assert.equal(request.annotations["kakurizai.kubernetes.nodeName"], "cp-1");

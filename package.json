@@ -7,6 +7,7 @@
     "agctl": "./dist/bin/agctl.js"
   },
   "scripts": {
+    "postinstall": "node scripts/prepare-native-pty.mjs",
     "agctl": "npm run build --silent && node ./dist/bin/agctl.js",
     "build": "tsc -p tsconfig.json && vite build && chmod +x dist/bin/agctl.js",
     "start": "npm run build --silent && node ./dist/bin/agctl.js studio",

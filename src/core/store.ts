@@ -211,6 +211,15 @@ async function collectUpperChanges({ changed, upperRoot, whiteoutsRoot, mount })
     }
     if (isUnionfsFuseControlPath(entry.relativePath)) continue;
     if (entry.type === "directory") continue;
+    // Kernel OverlayFS (and some FUSE drivers) store deletions as a 0/0
+    // character device under the original name, rather than a .wh. file.
+    if (entry.type === "special") {
+      const stat = await fs.lstat(entry.path);
+      if (stat.isCharacterDevice() && stat.rdev === 0) {
+        changed.push(changeForMount("delete", entry.relativePath, "overlay-whiteout", mount, upperRoot));
+        continue;
+      }
+    }
     const overlayWhiteout = overlayWhiteoutTarget(entry.relativePath);
     if (overlayWhiteout) {
       changed.push(changeForMount("delete", overlayWhiteout, "overlay-whiteout", mount, upperRoot));

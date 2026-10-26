@@ -80,7 +80,7 @@ function help() {
 Sandbox commands:
   agctl create --source <folder> --name <name> [--backend cube-sandbox-overlay]
   agctl create --name <name> --no-host-mount [--network tap] [--expose-port 6443]
-  agctl lab kubernetes --name <name> [--control-planes 1] [--workers 2] [--json]
+  agctl lab kubernetes --name <name> [--control-planes 1] [--workers 2] [--no-bootstrap] [--kubernetes-version <version>] [--json]
   agctl lab hetero-network --name <name> [--public-nodes 1] [--nat-nodes 1] [--double-nat-nodes 1] [--json]
   agctl apply -f sandbox.yaml [--json]
   agctl export <sandbox> --yaml
@@ -367,6 +367,8 @@ async function kubernetesLab(config, args) {
     memory: takeOption(args, "--memory") || undefined,
     writableLayerSize: writableLayerSize || undefined,
     profile: takeOption(args, "--profile") || undefined,
+    bootstrap: !takeFlag(args, "--no-bootstrap"),
+    kubernetesVersion: takeOption(args, "--kubernetes-version") || undefined,
     cni: takeOption(args, "--cni") || undefined,
     podCidr: takeOption(args, "--pod-cidr") || undefined,
     serviceCidr: takeOption(args, "--service-cidr") || undefined,
@@ -397,11 +399,13 @@ async function kubernetesLab(config, args) {
         }
       : undefined
   });
+  if (result.lab.bootstrap?.status === "failed") process.exitCode = 1;
   if (args.includes("--json")) {
     console.log(JSON.stringify(result, null, 2));
     return;
   }
-  console.log(`created Kubernetes lab ${result.lab.name}`);
+  console.log(`Kubernetes lab ${result.lab.name}: ${result.lab.bootstrap?.status || "defined"}`);
+  if (result.lab.bootstrap?.reason) console.log(result.lab.bootstrap.reason);
   for (const world of result.worlds) {
     console.log(`${world.name}\t${world.status}\t${world.sandbox?.id || world.sandbox?.status || "none"}`);
   }

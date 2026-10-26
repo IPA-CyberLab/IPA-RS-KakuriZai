@@ -304,6 +304,34 @@ const terminalViewports = [
 ];
 
 test.describe("Studio responsive layout", () => {
+  for (const viewport of [{ name: "desktop", width: 1280, height: 900 }, { name: "phone", width: 390, height: 844 }]) {
+    test(`Kubernetes lab form submits cluster settings and shows pending at ${viewport.name}`, async ({ page }, testInfo) => {
+      await page.setViewportSize(viewport);
+      await mockApi(page);
+      let submitted;
+      await page.route("**/api/labs/kubernetes", async (route) => {
+        submitted = route.request().postDataJSON();
+        await route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({
+          lab: { name: "ui-lab", bootstrap: { status: "pending", reason: "waiting for CubeSandbox nodes" } },
+          worlds
+        }) });
+      });
+      await page.goto(baseURL);
+      await page.waitForSelector(".workbench");
+      await page.getByTitle("Network").click();
+      await page.getByText("Kubernetes lab", { exact: true }).click();
+      const form = page.getByRole("form", { name: "Create Kubernetes lab" });
+      await form.getByLabel("Lab name", { exact: true }).fill("ui-lab");
+      await form.getByLabel("Workers", { exact: true }).fill("1");
+      await form.getByRole("button", { name: "Create K8s Lab" }).click();
+      await expect(form.getByRole("status")).toContainText("pending: 2 nodes");
+      expect(submitted).toMatchObject({ name: "ui-lab", controlPlanes: 1, workers: 1, profile: "k3s", cni: "flannel", podCidr: "10.42.0.0/16", serviceCidr: "10.43.0.0/16" });
+      const report = await auditLayout(page, `k8s-form-${viewport.name}`);
+      expect(report.failures).toEqual([]);
+      await page.screenshot({ path: testInfo.outputPath(`k8s-lab-${viewport.name}.png`), fullPage: true });
+    });
+  }
+
   for (const viewport of mainViewports) {
     test(`dashboard has no measured overlap at ${viewport.name}`, async ({ page }) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });

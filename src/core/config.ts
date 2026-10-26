@@ -90,6 +90,10 @@ export function defaultConfig(home = defaultHome()) {
       commandTimeoutSeconds: 30 * 60,
       maxLogBytes: 2 * 1024 * 1024
     },
+    provisioning: {
+      enabled: process.env.KAKURIZAI_PROVISIONING_ENABLED !== "false",
+      intervalMs: Number(process.env.KAKURIZAI_PROVISIONING_INTERVAL_MS || 5000)
+    },
     cluster: {
       failover: {
         enabled: process.env.KAKURIZAI_FAILOVER_ENABLED !== "false",
@@ -112,6 +116,11 @@ export function defaultConfig(home = defaultHome()) {
       cpu: process.env.KAKURIZAI_CUBE_CPU || "2000m",
       memory: process.env.KAKURIZAI_CUBE_MEMORY || "4000Mi",
       writableLayerSize: process.env.KAKURIZAI_CUBE_WRITABLE_LAYER_SIZE || "20G",
+      kubernetesBootstrap: {
+        version: "v1.36.5+k3s1",
+        timeoutMs: 10 * 60 * 1000,
+        pollIntervalMs: 2000
+      },
       bootstrapTools: {
         enabled: process.env.KAKURIZAI_CUBE_BOOTSTRAP_TOOLS !== "false",
         packages: [
@@ -164,8 +173,10 @@ export function mergeConfig(base, override) {
   result.observability = { ...base.observability, ...(override?.observability || {}) };
   result.terraform = { ...base.terraform, ...(override?.terraform || {}) };
   result.cluster = { ...base.cluster, ...(override?.cluster || {}) };
+  result.provisioning = { ...base.provisioning, ...(override?.provisioning || {}) };
   result.cluster.failover = { ...base.cluster?.failover, ...(override?.cluster?.failover || {}) };
   result.cube = { ...base.cube, ...(override?.cube || {}) };
+  result.cube.kubernetesBootstrap = { ...base.cube?.kubernetesBootstrap, ...(override?.cube?.kubernetesBootstrap || {}) };
   result.cube.cpu = override?.cube?.cpu || base.cube?.cpu;
   result.cube.memory = override?.cube?.memory || base.cube?.memory;
   result.cube.writableLayerSize = override?.cube?.writableLayerSize || base.cube?.writableLayerSize;

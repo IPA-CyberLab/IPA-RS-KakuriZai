@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import { loadConfig } from "../dist/src/core/config.js";
 import { createWorld } from "../dist/src/core/worlds.js";
 import { CubeSandboxClient } from "../dist/src/cube/client.js";
+import { runCommand } from "../dist/src/core/process.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -167,7 +168,9 @@ esac
     ...config.cube,
     mode: "master",
     mastercli,
-    template: "tpl-test"
+    template: "tpl-test",
+    cubecli: mastercli,
+    bootstrapTools: { enabled: false }
   };
 
   const world = await createWorld(config, {
@@ -182,6 +185,26 @@ esac
   assert.equal(world.status, "failed");
   assert.equal(world.sandbox.status, "failed");
   assert.match(world.sandbox.reason, /cannot resize/);
+});
+
+test("compatible template polling cannot exceed its deadline when the CLI hangs", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-template-deadline-"));
+  const mastercli = path.join(tmp, "mastercli");
+  await fs.writeFile(mastercli, `#!/bin/sh
+case "$1 $2" in
+  "template create-from-image")
+    printf '%s\\n' '{"ret":{"ret_code":200},"job":{"job_id":"job-1","template_id":"tpl-1","status":"PENDING"}}'
+    ;;
+  "template status") exec sleep 30 ;;
+esac
+`);
+  await fs.chmod(mastercli, 0o755);
+  const client = new CubeSandboxClient({ templateBuildTimeoutMs: 1000, templateBuildPollIntervalMs: 1 });
+  const start = Date.now();
+  await assert.rejects(client.createCompatibleTemplate(mastercli, { id: "source", imageInfo: "test-image" }, {
+    writableLayerSize: "20G", cpu: "2000m", memory: "4000Mi", networkType: "tap", instanceType: "cubebox"
+  }), /timed out/);
+  assert.ok(Date.now() - start < 3000);
 });
 
 test("cube client passes namespace to cubecli exec", async () => {
@@ -572,6 +595,29 @@ test("cube client starts sandbox dev access services", async () => {
   assert.doesNotMatch(sshArgsText, /ssh_password|chpasswd/);
 });
 
+test("internet-disabled egress drops public IPv4 destinations in the host firewall", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-public-egress-"));
+  const iptables = path.join(tmp, "iptables");
+  const sudo = path.join(tmp, "sudo");
+  const scriptFile = path.join(tmp, "script.sh");
+  await fakeBinary(iptables);
+  await fs.writeFile(sudo, `#!/bin/sh\nprintf '%s' "$4" > '${scriptFile}'\nexit 0\n`);
+  await fs.chmod(sudo, 0o755);
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${tmp}${path.delimiter}${originalPath || ""}`;
+  try {
+    const result = await new CubeSandboxClient({ iptables }).syncHostEgressRules({ id: "no-internet" }, ["192.168.0.60"], { allowInternetAccess: false });
+    const script = await fs.readFile(scriptFile, "utf8");
+    assert.equal(result.applied, true);
+    assert.match(script, /KAKURIZAI-EGRESS[^\n]*-d '1\.0\.0\.0\/8'[^\n]*-j DROP/);
+    assert.match(script, /-d '208\.0\.0\.0\/4'[^\n]*-j DROP/);
+    assert.match(script, /-d 169\.254\.0\.0\/16[^\n]*-j RETURN/);
+    assert.ok(script.indexOf("-j DROP") < script.indexOf("-j REJECT"));
+  } finally {
+    process.env.PATH = originalPath;
+  }
+});
+
 test("cube client builds host inbound firewall rules", async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-ingress-firewall-"));
   const iptables = path.join(tmp, "iptables");
@@ -746,6 +792,28 @@ test("cube client bypasses CubeSandbox datapath when VLAN is enabled", async () 
   assert.equal(result.vlan.enabled, true);
   assert.equal(result.datapath.skipped, true);
   assert.match(result.datapath.reason, /bypasses/);
+});
+
+test("mounted workspace capture copies user content without duplicating internal layers", async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "kakurizai-workspace-capture-"));
+  const workspace = path.join(tmp, "workspace");
+  const target = path.join(tmp, "snapshot");
+  const scriptFile = path.join(tmp, "capture.sh");
+  const cubecli = path.join(tmp, "cubecli");
+  await fs.mkdir(path.join(workspace, ".kakurizai", "upper"), { recursive: true });
+  await fs.mkdir(path.join(workspace, "project"));
+  await fs.writeFile(path.join(workspace, ".kakurizai", "upper", "internal"), "layer data");
+  await fs.writeFile(path.join(workspace, "project", "source.cpp"), "changed source");
+  await fs.writeFile(cubecli, `#!/bin/sh\nfor argument do final=$argument; done\nprintf '%s' "$final" > '${scriptFile}'\n`);
+  await fs.chmod(cubecli, 0o755);
+  const client = new CubeSandboxClient({ cubecli, workspacePath: workspace });
+  const world = { sandbox: { id: "runtime" }, paths: { logs: tmp } };
+  assert.equal((await client.materializeReplicationState(world, { target })).applied, true);
+  const script = await fs.readFile(scriptFile, "utf8");
+  await runCommand("/bin/sh", ["-c", script]);
+  assert.equal(await fs.readFile(path.join(target, "project", "source.cpp"), "utf8"), "changed source");
+  assert.equal(await fs.access(path.join(target, ".kakurizai")).then(() => true, () => false), false);
+  await assert.rejects(client.materializeReplicationState(world, { target: path.join(workspace, "recursive-copy") }), /outside the mounted workspace/);
 });
 
 test("cube client captures runtime snapshots and distributes committed templates", async () => {

@@ -23,7 +23,10 @@ export class CubeSandboxOverlayBackend {
       kubernetes: world.backendConfig?.kubernetes || null,
       mountMode
     };
-    const templateResolution = await this.client.resolveTemplateForResources(cubeConfig);
+    const availability = this.client.provisioningAvailability();
+    const templateResolution = availability.available
+      ? await this.client.resolveTemplateForResources(cubeConfig)
+      : { templateId: cubeConfig.template, changed: false, created: false, unchecked: true };
     if (templateResolution.templateId) {
       cubeConfig.template = templateResolution.templateId;
       world.backendConfig.template = templateResolution.templateId;
@@ -37,8 +40,8 @@ export class CubeSandboxOverlayBackend {
       resources: templateResolution.resources || null
     };
     const request = buildCubeSandboxRequest(world, cubeConfig);
-    const mountSpecs = mountSpecsForWorld(world, cubeConfig);
     world.backendConfig.cubeRequest = request;
+    const mountSpecs = mountSpecsForWorld(world, cubeConfig);
     world.backendConfig.mountMode = mountMode;
     world.backendConfig.mounts = mountSpecs.map((mount) => ({
       id: mount.id,
@@ -48,7 +51,9 @@ export class CubeSandboxOverlayBackend {
       mode: mount.mode
     }));
     world.backendConfig.mountMap = mountMapForMode(world, mountSpecs);
-    const provision = await this.client.createSandbox(world, request);
+    const provision = availability.available
+      ? await this.client.createSandbox(world, request)
+      : { provisioned: false, mode: "planned", reason: availability.reason };
     const overlayPending = provision.provisioned && provision.overlay?.mounted === false;
     const provisionFailed = !provision.provisioned && provision.mode !== "planned";
     world.sandbox = {
